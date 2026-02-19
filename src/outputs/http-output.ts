@@ -223,7 +223,7 @@ export const createHttpOutput = (
     });
 
   // Create HTTP client layer
-  const clientLayer = NodeHttpClient.layerUndici;
+  const clientLayer = NodeHttpClient.layer;
 
   return {
     name: "http-output",
