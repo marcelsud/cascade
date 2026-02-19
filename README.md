@@ -20,23 +20,33 @@ Build type-safe data pipelines with YAML configuration for message processing.
 
 ## Installation
 
-### Download Binary
+> **Platform**: Linux (amd64) only for now.
 
-Download the pre-compiled binary for your platform:
+### Quick Install (Recommended)
 
 ```bash
-# Make executable and move to PATH
+curl -sSL https://raw.githubusercontent.com/marcelsud/cascade/main/install.sh | sh
+```
+
+To install to a custom directory (no `sudo` needed):
+
+```bash
+INSTALL_DIR="$HOME/.local/bin" curl -sSL https://raw.githubusercontent.com/marcelsud/cascade/main/install.sh | sh
+```
+
+### Manual Download
+
+```bash
+curl -sL -o cascade https://github.com/marcelsud/cascade/releases/latest/download/cascade
 chmod +x cascade
 sudo mv cascade /usr/local/bin/
-
-# Verify installation
 cascade --version
 ```
 
 ### Build from Source
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/marcelsud/cascade.git
 cd cascade
 npm install
 npm run build:binary
