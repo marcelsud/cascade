@@ -236,7 +236,7 @@ export const createHttpOutput = (
           HttpClientRequest.setHeaders(headers),
           HttpClientRequest.bodyText(body),
           HttpClientRequest.setHeaders({
-            "User-Agent": "effect-connect/0.1.1",
+            "User-Agent": "cascade/0.1.1",
           }),
         );
 

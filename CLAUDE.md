@@ -1,12 +1,12 @@
-# Effect Connect - Project Guide
+# Cascade - Project Guide
 
 ## Project Overview
 
-**Effect Connect** is a declarative streaming library for building type-safe data pipelines using YAML configuration. It's inspired by Apache Camel and Benthos, but built with TypeScript and Effect.js for full type safety and functional programming.
+**Cascade** is a declarative streaming library for building type-safe data pipelines using YAML configuration. It's inspired by Apache Camel and Benthos, but built with TypeScript and Effect.js for full type safety and functional programming.
 
 - **Tech Stack**: TypeScript, Effect.js, @effect/schema, @effect/platform-node
-- **Distribution**: Published as npm package (`effect-connect`)
-- **Usage**: CLI tool + JavaScript/TypeScript library
+- **Distribution**: Standalone compiled binary (`cascade`)
+- **Usage**: CLI tool (standalone binary)
 
 ### Key Features
 - YAML-based pipeline configuration
@@ -20,7 +20,7 @@
 ## Architecture & Design
 
 ### Core Architecture
-Effect Connect uses a **functional, type-safe architecture** powered by Effect.js:
+Cascade uses a **functional, type-safe architecture** powered by Effect.js:
 
 ```
 Input Stream → Processor₁ → Processor₂ → Output
@@ -69,7 +69,7 @@ npm run format
 ```
 
 ### Testing Strategy
-Effect Connect uses a scalable testing approach that avoids N×N test explosion:
+Cascade uses a scalable testing approach that avoids N×N test explosion:
 
 - **Testing Utilities**: `createGenerateInput`, `createCaptureOutput`, `createAssertProcessor`
 - **Pattern**: Test components in isolation (Input → Assert → Capture)
@@ -79,15 +79,17 @@ Effect Connect uses a scalable testing approach that avoids N×N test explosion:
 **See [docs/TESTING.md](./docs/TESTING.md) for complete testing guide.**
 
 ### CLI Development
-- **Binary**: `dist/cli.js` (has shebang: `#!/usr/bin/env node`)
-- **Test locally**: `npm link` creates global symlink
-- **Entry point**: Defined in `package.json` → `"bin": { "effect-connect": "./dist/cli.js" }`
-- **Debug mode**: Use `--debug` flag to see detailed logs (`effect-connect run config.yaml --debug`)
+- **Binary build**: `npm run build:binary` compiles standalone binary via Bun
+- **Output**: `dist/cascade` (self-contained executable)
+- **Debug mode**: Use `--debug` flag to see detailed logs (`cascade run config.yaml --debug`)
 
-### Publishing
+### Building
 ```bash
-npm publish
-# prepublishOnly hook automatically runs: build + test:unit
+# TypeScript compilation (for type checking and development)
+npm run build
+
+# Standalone binary (for distribution)
+npm run build:binary
 ```
 
 ### Local Testing with Docker

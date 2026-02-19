@@ -84,7 +84,7 @@ output:
     max_retries: 5  # Retry up to 5 times
     headers:
       Content-Type: "application/json"
-      User-Agent: "effect-connect/0.1.1"
+      User-Agent: "cascade/0.1.1"
       X-Environment: "production"
     auth:
       type: bearer

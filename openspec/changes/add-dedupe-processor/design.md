@@ -1,6 +1,6 @@
 ## Context
 
-Effect Connect currently has no built-in way to suppress duplicated messages during processing. Upstream systems (webhooks, queues, retries, at-least-once delivery) can legitimately deliver the same logical event more than once, which can cause repeated side effects in downstream outputs.
+Cascade currently has no built-in way to suppress duplicated messages during processing. Upstream systems (webhooks, queues, retries, at-least-once delivery) can legitimately deliver the same logical event more than once, which can cause repeated side effects in downstream outputs.
 
 The proposed `dedupe` processor adds a pipeline-level guard by computing a dedupe key from a configured message attribute (payload path or metadata field) and dropping repeated keys in a configurable time window. The implementation must fit existing processor patterns (Effect-based processor factories, schema validation, and stream processing).
 

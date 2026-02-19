@@ -1,6 +1,6 @@
 # Component Development Guide
 
-This document outlines the principles and patterns for developing inputs, outputs, and processors in Camel Connect JS. The library is inspired by Benthos/Redpanda Connect and built on Effect.js for robust, type-safe stream processing.
+This document outlines the principles and patterns for developing inputs, outputs, and processors in Cascade. The library is inspired by Benthos/Redpanda Connect and built on Effect.js for robust, type-safe stream processing.
 
 ## Table of Contents
 
@@ -1043,14 +1043,14 @@ if (config.my_component) {
 
 ### Issue: Component works in unit tests but not in YAML
 
-**Symptom:** All unit tests pass, but `effect-connect run config.yaml` fails
+**Symptom:** All unit tests pass, but `cascade run config.yaml` fails
 
 **Cause:** Unit tests import components directly, bypassing YAML configuration path
 
 **Diagnosis:**
 ```bash
 # Run YAML config test
-effect-connect run test-config.yaml
+cascade run test-config.yaml
 
 # If it fails, check registration:
 # 1. Schema in config-loader.ts?
@@ -1123,12 +1123,12 @@ When a component doesn't work:
    EOF
 
    # Run it
-   effect-connect run test.yaml --debug
+   cascade run test.yaml --debug
    ```
 
 5. **Check debug logs:**
    ```bash
-   effect-connect run config.yaml --debug 2>&1 | grep -i "my_component"
+   cascade run config.yaml --debug 2>&1 | grep -i "my_component"
    ```
 
 ### Prevention
@@ -1178,7 +1178,7 @@ This workflow catches registration issues immediately, before writing unit tests
 
 **Version**: 1.1
 **Last Updated**: 2025-01-13
-**Maintainer**: Camel Connect JS Team
+**Maintainer**: Cascade Team
 
 **Changelog**:
 - v1.1 (2025-01-13): Added critical 3-file registration pattern, YAML format guide, and comprehensive troubleshooting section based on E2E testing findings

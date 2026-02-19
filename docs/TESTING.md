@@ -1,6 +1,6 @@
 # Testing Strategy
 
-This document describes the testing strategy for Effect Connect, designed to scale infinitely without N×N test explosion.
+This document describes the testing strategy for Cascade, designed to scale infinitely without N×N test explosion.
 
 ## Table of Contents
 
@@ -87,7 +87,7 @@ Creates test messages from templates with dynamic placeholders.
 
 **Example:**
 ```typescript
-import { createGenerateInput } from "effect-connect"
+import { createGenerateInput } from "cascade"
 
 const input = createGenerateInput({
   count: 10,
@@ -124,7 +124,7 @@ Collects messages in memory for test assertions.
 **Example:**
 ```typescript
 import { Effect } from "effect"
-import { createCaptureOutput } from "effect-connect"
+import { createCaptureOutput } from "cascade"
 
 const output = await Effect.runPromise(createCaptureOutput({
   maxMessages: 1000 // Optional limit (default: 10000)
@@ -156,7 +156,7 @@ Validates message structure and conditions during pipeline execution.
 
 **Example:**
 ```typescript
-import { createAssertProcessor } from "effect-connect"
+import { createAssertProcessor } from "cascade"
 
 // Check required fields
 const assertFields = createAssertProcessor({
@@ -204,8 +204,8 @@ const assertBoth = createAssertProcessor({
 **Template:**
 ```typescript
 import { Effect, Stream } from "effect"
-import { createCaptureOutput, createAssertProcessor } from "effect-connect"
-import { createPipeline, runPipeline } from "effect-connect"
+import { createCaptureOutput, createAssertProcessor } from "cascade"
+import { createPipeline, runPipeline } from "cascade"
 import { createMyInput } from "../src/inputs/my-input.js"
 
 it("should read messages from source", async () => {
@@ -255,8 +255,8 @@ Generate → [Output Under Test] → Verify External State
 **Template:**
 ```typescript
 import { Effect } from "effect"
-import { createGenerateInput } from "effect-connect"
-import { createPipeline, runPipeline } from "effect-connect"
+import { createGenerateInput } from "cascade"
+import { createPipeline, runPipeline } from "cascade"
 import { createMyOutput } from "../src/outputs/my-output.js"
 
 it("should write messages to destination", async () => {
@@ -306,8 +306,8 @@ Generate → [Processor Under Test] → Capture
 **Template:**
 ```typescript
 import { Effect } from "effect"
-import { createGenerateInput, createCaptureOutput } from "effect-connect"
-import { createPipeline, runPipeline } from "effect-connect"
+import { createGenerateInput, createCaptureOutput } from "cascade"
+import { createPipeline, runPipeline } from "cascade"
 import { createMyProcessor } from "../src/processors/my-processor.js"
 
 it("should transform messages correctly", async () => {
@@ -452,7 +452,7 @@ import {
   createAssertProcessor,
   createPipeline,
   runPipeline
-} from "effect-connect"
+} from "cascade"
 import { createMyComponent } from "../src/components/my-component.js"
 
 describe("MyComponent", () => {
@@ -556,8 +556,8 @@ tests/
 ```typescript
 import { describe, it, expect, beforeAll, afterAll } from "vitest"
 import { Effect } from "effect"
-import { createGenerateInput, createCaptureOutput, createPipeline, runPipeline } from "effect-connect"
-import { createHttpOutput } from "effect-connect"
+import { createGenerateInput, createCaptureOutput, createPipeline, runPipeline } from "cascade"
+import { createHttpOutput } from "cascade"
 
 describe("HttpOutput", () => {
   let mockServer: any
@@ -637,8 +637,8 @@ describe("HttpOutput", () => {
 ```typescript
 import { describe, it, expect } from "vitest"
 import { Effect } from "effect"
-import { createGenerateInput, createCaptureOutput, createPipeline, runPipeline } from "effect-connect"
-import { createFilterProcessor } from "effect-connect"
+import { createGenerateInput, createCaptureOutput, createPipeline, runPipeline } from "cascade"
+import { createFilterProcessor } from "cascade"
 
 describe("FilterProcessor", () => {
   it("should pass messages matching condition", async () => {
@@ -802,7 +802,7 @@ it("should handle message timing", async () => {
 
 ## Summary
 
-The testing strategy for Effect Connect is designed for **infinite scalability**:
+The testing strategy for Cascade is designed for **infinite scalability**:
 
 - ✅ **Linear growth**: N components = ~3N tests (not N²)
 - ✅ **Fast execution**: < 10 seconds for 200+ tests
@@ -832,14 +832,14 @@ With this approach, you can add 100 components with only 300 tests instead of 10
 
 ## YAML Testing
 
-Effect Connect now includes a declarative YAML test runner for end-to-end testing of pipelines.
+Cascade now includes a declarative YAML test runner for end-to-end testing of pipelines.
 
 ### Overview
 
 YAML tests allow you to:
 - Test complete pipelines declaratively without writing code
 - Verify processor logic, assertions, and transformations
-- Run tests from the CLI with `effect-connect test`
+- Run tests from the CLI with `cascade test`
 - Get formatted test output with pass/fail status
 
 ### Testing Philosophy
@@ -921,13 +921,13 @@ This separation ensures:
 
 ```bash
 # Run all YAML tests
-effect-connect test "tests/**/*.yaml"
+cascade test "tests/**/*.yaml"
 
 # Run specific test file
-effect-connect test tests/processors/uppercase.test.yaml
+cascade test tests/processors/uppercase.test.yaml
 
 # Run tests with debug output
-effect-connect test "tests/**/*.yaml" --debug
+cascade test "tests/**/*.yaml" --debug
 ```
 
 ### Writing YAML Tests
@@ -1259,4 +1259,4 @@ See `tests/yaml/processors/` for complete examples:
 - See [COMPONENTS.md](./spec/COMPONENTS.md) for component development guide
 - See [examples/](../examples/) for full pipeline examples
 - Run unit tests with `npm test` or `npm run test:unit`
-- Run YAML tests with `effect-connect test "tests/**/*.yaml"`
+- Run YAML tests with `cascade test "tests/**/*.yaml"`

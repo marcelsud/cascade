@@ -162,7 +162,7 @@ Each message includes the following metadata automatically:
 
 ```bash
 # Start the pipeline
-effect-connect run webhook-config.yaml
+cascade run webhook-config.yaml
 
 # In another terminal, send a test request
 curl -X POST http://localhost:8080/webhook \
@@ -277,7 +277,7 @@ input:
 Use the `--debug` flag to see detailed request processing:
 
 ```bash
-effect-connect run config.yaml --debug
+cascade run config.yaml --debug
 ```
 
 Debug output shows:

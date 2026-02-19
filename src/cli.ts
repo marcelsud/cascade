@@ -8,16 +8,8 @@ import { loadConfig } from "./core/config-loader.js";
 import { buildPipeline } from "./core/pipeline-builder.js";
 import { run } from "./core/pipeline.js";
 import { runYamlTests, formatTestResults } from "./testing/yaml-test-runner.js";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import packageJson from "../package.json" with { type: "json" };
 
-// Get package version
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const packageJson = JSON.parse(
-  readFileSync(join(__dirname, "../package.json"), "utf-8"),
-);
 const appVersion = packageJson.version;
 
 /**
@@ -25,12 +17,12 @@ const appVersion = packageJson.version;
  */
 function showHelp() {
   console.log(`
-effect-connect v${appVersion}
+cascade v${appVersion}
 
-Declarative streaming library powered by Effect.js, inspired by Apache Camel and Benthos
+Declarative streaming library inspired by Apache Camel and Benthos
 
 Usage:
-  effect-connect <command> [options]
+  cascade <command> [options]
 
 Commands:
   run <config-file>    Run a pipeline from a YAML configuration file
@@ -42,10 +34,10 @@ Options:
   --debug             Enable debug logging
 
 Examples:
-  effect-connect run configs/example-pipeline.yaml
-  effect-connect run my-pipeline.yaml --debug
-  effect-connect test "tests/**/*.yaml"
-  effect-connect test tests/processors/uppercase.test.yaml
+  cascade run configs/example-pipeline.yaml
+  cascade run my-pipeline.yaml --debug
+  cascade test "tests/**/*.yaml"
+  cascade test tests/processors/uppercase.test.yaml
 `);
 }
 
@@ -63,7 +55,7 @@ const main = Effect.gen(function* () {
 
   // Handle version flag
   if (args.includes("--version") || args.includes("-v")) {
-    console.log(`effect-connect v${appVersion}`);
+    console.log(`cascade v${appVersion}`);
     return;
   }
 
@@ -75,8 +67,8 @@ const main = Effect.gen(function* () {
     const pattern = args.find((arg) => !arg.startsWith("--") && arg !== "test");
     if (!pattern) {
       console.error("Error: Missing test pattern argument");
-      console.error("Usage: effect-connect test <pattern>");
-      console.error('Example: effect-connect test "tests/**/*.yaml"');
+      console.error("Usage: cascade test <pattern>");
+      console.error('Example: cascade test "tests/**/*.yaml"');
       yield* Effect.fail(new Error("Missing test pattern"));
       return;
     }
@@ -101,7 +93,7 @@ const main = Effect.gen(function* () {
   // Check for run command
   if (args[0] !== "run") {
     console.error(`Error: Unknown command '${args[0]}'`);
-    console.error('Run "effect-connect --help" for usage information.');
+    console.error('Run "cascade --help" for usage information.');
     yield* Effect.fail(new Error("Invalid command"));
     return;
   }
@@ -110,7 +102,7 @@ const main = Effect.gen(function* () {
   const configPath = args.find((arg) => !arg.startsWith("--") && arg !== "run");
   if (!configPath) {
     console.error("Error: Missing config file argument");
-    console.error("Usage: effect-connect run <config-file.yaml>");
+    console.error("Usage: cascade run <config-file.yaml>");
     yield* Effect.fail(new Error("Missing config file"));
     return;
   }

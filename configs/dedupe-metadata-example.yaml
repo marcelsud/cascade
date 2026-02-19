@@ -8,7 +8,7 @@
 # This example also shows dedupe combined with other processors in a pipeline.
 #
 # Usage:
-#   effect-connect run configs/dedupe-metadata-example.yaml
+#   cascade run configs/dedupe-metadata-example.yaml
 #
 # Test with:
 #   curl -X POST http://localhost:8080/events \

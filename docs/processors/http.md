@@ -211,7 +211,7 @@ pipeline:
         headers:
           X-API-Key: "your-api-key-here"
           X-Request-ID: "{{ message.correlationId }}"
-          X-Source: "effect-connect"
+          X-Source: "cascade"
         result_key: "api_data"
 ```
 

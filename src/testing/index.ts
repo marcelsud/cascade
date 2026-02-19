@@ -1,5 +1,5 @@
 /**
- * Testing Utilities for Effect Connect
+ * Testing Utilities for Cascade
  *
  * Provides test-only components for validating inputs, processors, and outputs
  * without N×N test explosion.

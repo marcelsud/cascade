@@ -2,7 +2,7 @@
 
 ## Overview
 
-While Effect Connect uses JSONata for transformations (via the `mapping` processor), you can also integrate Benthos Bloblang using its CLI. This is useful for teams migrating from Benthos or those familiar with Bloblang syntax.
+While Cascade uses JSONata for transformations (via the `mapping` processor), you can also integrate Benthos Bloblang using its CLI. This is useful for teams migrating from Benthos or those familiar with Bloblang syntax.
 
 ## When to Use Bloblang
 
@@ -272,7 +272,7 @@ pipeline:
         root.name = this.firstName.uppercase()
 ```
 
-**Camel Connect JS:**
+**Cascade:**
 ```yaml
 pipeline:
   processors:

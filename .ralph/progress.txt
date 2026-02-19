@@ -255,3 +255,439 @@ status_after: done
 2026-02-19T03:32:16.666Z
 Loop stopped because status is done.
 ---
+2026-02-19T11:10:13.428Z
+Loop stopped because status is done.
+---
+2026-02-19T11:10:28.840Z
+Iteration 1/15 started.
+status_before: pending
+mode: spec_flow
+---
+2026-02-19T11:11:00.000Z
+[1.1] done — Renamed package.json `name` field from `effect-connect` to `cascade`. Single-field change, no other modifications.
+---
+2026-02-19T11:11:13.500Z
+Iteration 1/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:11:18.025Z
+Iteration 2/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:12:00.000Z
+[1.2] done — Updated package.json `description` from "Declarative streaming library powered by Effect.js, inspired by Apache Camel and Benthos" to "Declarative streaming library inspired by Apache Camel and Benthos". Removed "powered by Effect.js" per design decision #5.
+---
+2026-02-19T11:12:05.818Z
+Iteration 2/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:12:13.708Z
+Iteration 3/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:13:00.000Z
+[1.3] done — Removed six npm publishing fields from package.json: `main`, `types`, `bin`, `exports`, `keywords`, `files`. Package no longer exposes library entry points or npm distribution metadata. `prepublishOnly` kept (task 1.4).
+---
+2026-02-19T11:13:10.821Z
+Iteration 3/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:13:15.413Z
+Iteration 4/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:14:00.000Z
+[1.4] done — Removed `prepublishOnly` script from package.json. Package no longer runs build+test before npm publish since it is no longer distributed as an npm package.
+---
+2026-02-19T11:14:02.171Z
+Iteration 4/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:14:06.727Z
+Iteration 5/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:15:00.000Z
+[1.5] done — Added `build:binary` script to package.json: `bun build src/cli.ts --compile --outfile dist/cascade`. Placed after existing `build` script for logical grouping.
+---
+2026-02-19T11:14:55.049Z
+Iteration 5/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:15:02.891Z
+Iteration 6/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:16:00.000Z
+[2.1] done — Replaced all 11 occurrences of `effect-connect` with `cascade` in src/cli.ts: program name header (line 28), usage line (line 33), 4 example commands (lines 45-48), version output (line 66), test error messages (lines 78-79), unknown command help (line 104), run error message (line 113). Zero remaining references confirmed via grep.
+---
+2026-02-19T11:15:56.619Z
+Iteration 6/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:16:01.174Z
+Iteration 7/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:17:00.000Z
+[2.2] done — Removed "powered by Effect.js, " from help text description in src/cli.ts line 30. Now reads "Declarative streaming library inspired by Apache Camel and Benthos", matching the updated package.json description.
+---
+2026-02-19T11:16:48.476Z
+Iteration 7/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:16:52.991Z
+Iteration 8/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:17:30.000Z
+[2.3] done — Updated User-Agent header in src/outputs/http-output.ts from "effect-connect/0.1.1" to "cascade/0.1.1". Single-line change at line 239. Zero remaining "effect-connect" references in the file.
+---
+2026-02-19T11:17:39.489Z
+Iteration 8/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:17:47.416Z
+Iteration 9/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:18:00.000Z
+[2.4] done — Updated comment header in src/testing/index.ts from "Testing Utilities for Effect Connect" to "Testing Utilities for Cascade". Single-line change at line 2.
+---
+2026-02-19T11:18:30.376Z
+Iteration 9/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:18:34.881Z
+Iteration 10/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:19:00.000Z
+[3.1] done — Ran `npm run build` (tsc). TypeScript compiled with zero errors. All source code changes from tasks 1.x and 2.x are type-safe.
+---
+2026-02-19T11:19:19.811Z
+Iteration 10/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:19:27.661Z
+Iteration 11/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:19:50.000Z
+[3.2] done — Ran `npm run test:unit` (vitest). All 429 tests pass across 27 test files in 9.10s. Zero failures, zero regressions after source rebrand (tasks 1.x and 2.x).
+---
+2026-02-19T11:20:20.066Z
+Iteration 11/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:20:24.646Z
+Iteration 12/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:21:00.000Z
+[4.1] done — Updated README.md: renamed title to "Cascade", removed npm version badge, replaced all "effect-connect"/"Effect Connect" references with "cascade"/"Cascade" (15+ occurrences), replaced npm install instructions with binary download + build-from-source, removed Programmatic Usage section (library imports), updated comparison table "Best For" row to "Distribution: Standalone binary", renamed project structure directory. Grep confirms zero remaining old-name references.
+---
+2026-02-19T11:22:29.329Z
+Iteration 12/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:22:33.885Z
+Iteration 13/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:23:00.000Z
+[4.2] done — Updated CLAUDE.md: replaced all "effect-connect"/"Effect Connect" references with "cascade"/"Cascade" (5 occurrences). Also updated Distribution line (npm package → standalone binary), Usage line (CLI tool + library → CLI tool standalone binary), CLI Development section (removed npm link/bin entry, added build:binary info), and Publishing section (replaced npm publish with build:binary commands). Grep confirms zero remaining old-name references.
+---
+2026-02-19T11:24:07.185Z
+Iteration 13/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:24:11.739Z
+Iteration 14/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:25:00.000Z
+[4.3] done — Updated docs/README.md: renamed title from "Effect Connect - Component Catalog" to "Cascade - Component Catalog". Single occurrence, only reference in the file. Grep confirms zero remaining old-name references.
+---
+2026-02-19T11:25:04.431Z
+Iteration 14/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:25:08.941Z
+Iteration 15/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:26:00.000Z
+[4.4] done — Updated docs/TESTING.md: replaced all "effect-connect"/"Effect Connect" references with "cascade"/"Cascade" (20+ occurrences across imports, brand names, and CLI commands). Grep confirms zero remaining old-name references.
+---
+2026-02-19T11:26:07.600Z
+Iteration 15/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:28:00.367Z
+Iteration 1/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:28:30.000Z
+[4.5] done — Updated docs/advanced/bloblang.md: replaced 2 old-name references ("Effect Connect" → "Cascade", "Camel Connect JS" → "Cascade"). Grep confirms zero remaining old-name references.
+---
+2026-02-19T11:28:54.799Z
+Iteration 1/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:28:59.330Z
+Iteration 2/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:30:00.000Z
+[4.6] done — Updated docs/inputs/http.md: replaced 2 occurrences of "effect-connect" with "cascade" (CLI run commands on lines 165 and 280). Grep confirms zero remaining old-name references.
+---
+2026-02-19T11:29:51.405Z
+Iteration 2/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:29:55.972Z
+Iteration 3/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:30:30.000Z
+[4.7] done — Updated docs/outputs/http.md: replaced 1 occurrence of "effect-connect" with "cascade" (User-Agent header on line 87). Grep confirms zero remaining old-name references.
+---
+2026-02-19T11:30:46.107Z
+Iteration 3/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:30:50.673Z
+Iteration 4/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:31:30.000Z
+[4.8] done — Updated docs/processors/http.md: replaced 1 occurrence of "effect-connect" with "cascade" (X-Source header on line 214). Grep confirms zero remaining old-name references.
+---
+2026-02-19T11:31:45.567Z
+Iteration 4/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:31:50.109Z
+Iteration 5/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:32:30.000Z
+[4.9] done — Updated docs/processors/dedupe.md: replaced 4 occurrences of "effect-connect"/"Effect Connect" with "cascade"/"Cascade" (lines 126, 141, 202, 251). Grep confirms zero remaining old-name references.
+---
+2026-02-19T11:32:39.583Z
+Iteration 5/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:32:47.426Z
+Iteration 6/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:33:00.000Z
+[4.10] done — Updated docs/spec/COMPONENTS.md: replaced 6 old-name references ("Camel Connect JS" → "Cascade", "Camel Connect JS Team" → "Cascade Team", 4× "effect-connect" → "cascade" in CLI commands). Grep confirms zero remaining old-name references.
+---
+2026-02-19T11:34:07.788Z
+Iteration 6/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:34:12.317Z
+Iteration 7/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:35:00.000Z
+[4.11] done — Updated docs/local-development.md: replaced all "Effect Connect" (2 occurrences) and "effect-connect" (22+ occurrences) with "Cascade"/"cascade" across container names, docker exec commands, docker-compose service references, and prose. Grep confirms zero remaining old-name references.
+---
+2026-02-19T11:35:21.518Z
+Iteration 7/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:35:26.053Z
+Iteration 8/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:36:00.000Z
+[4.12] done — Updated tests/e2e/README.md: replaced 1 occurrence of "Effect Connect" with "Cascade" (line 3). Grep confirms zero remaining old-name references.
+---
+2026-02-19T11:36:23.119Z
+Iteration 8/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:36:27.646Z
+Iteration 9/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:37:00.000Z
+[4.13] done — Updated tests/e2e/run-all-tests.sh: replaced 1 occurrence of "Effect Connect" with "Cascade" (banner line 13). Grep confirms zero remaining old-name references.
+---
+2026-02-19T11:37:20.324Z
+Iteration 9/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:37:24.913Z
+Iteration 10/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:38:00.000Z
+[5.1] done — Updated configs/http-webhook-example.yaml: replaced 3 occurrences of "effect-connect" with "cascade" (CLI command line 5, curl example line 10, X-Source header line 39). Grep confirms zero remaining old-name references.
+---
+---
+2026-02-19T11:38:14.148Z
+Iteration 10/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:38:22.014Z
+Iteration 11/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:39:00.000Z
+[5.2] done — Updated configs/dedupe-example.yaml: replaced 2 occurrences of "effect-connect" with "cascade" (CLI command line 10, X-Source header line 60). Grep confirms zero remaining old-name references.
+---
+2026-02-19T11:39:05.549Z
+Iteration 11/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:39:10.051Z
+Iteration 12/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:40:00.000Z
+[5.3] done — Updated configs/dedupe-metadata-example.yaml: replaced 1 occurrence of "effect-connect" with "cascade" (CLI command line 11). Grep confirms zero remaining old-name references.
+---
+2026-02-19T11:39:53.928Z
+Iteration 12/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:40:01.769Z
+Iteration 13/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:41:00.000Z
+[5.4] done — Updated configs/dedupe-sqs-example.yaml: replaced 1 occurrence of "effect-connect" with "cascade" (CLI command line 12). Grep confirms zero remaining old-name references.
+---
+2026-02-19T11:40:46.649Z
+Iteration 13/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:40:51.165Z
+Iteration 14/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:42:00.000Z
+[6.1] done — Renamed all container_name values in docker-compose.yml (root: 4 occurrences effect-connect-* → cascade-*) and docker/docker-compose.yml (3 occurrences camel-connect-* → cascade-*). Grep confirms zero remaining old-name references across both files.
+---
+2026-02-19T11:41:52.779Z
+Iteration 14/15 completed.
+status_after: in_progress
+---
+2026-02-19T11:41:57.341Z
+Iteration 15/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T11:45:00.000Z
+[7.1] done — Updated openspec/changes/add-dedupe-processor/design.md: replaced 1 occurrence of "Effect Connect" with "Cascade" (line 3). Grep confirms zero remaining old-name references.
+---
+2026-02-19T11:42:56.307Z
+Iteration 15/15 completed.
+status_after: in_progress
+---
+2026-02-19T13:16:18.261Z
+Iteration 1/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T13:17:00.000Z
+[8.1] done — Ran `npm run build` (tsc). TypeScript compiled with zero errors. All rebrand changes are type-safe.
+---
+2026-02-19T13:17:08.870Z
+Iteration 1/15 completed.
+status_after: in_progress
+---
+2026-02-19T13:17:13.421Z
+Iteration 2/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T13:17:30.000Z
+[8.2] done — Ran `npm run test:unit` (vitest). All 429 tests pass across 27 test files in 9.12s. Zero failures, zero regressions after full rebrand.
+---
+2026-02-19T13:18:08.257Z
+Iteration 2/15 completed.
+status_after: in_progress
+---
+2026-02-19T13:18:16.148Z
+Iteration 3/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T13:18:30.000Z
+[8.3] done — Ran `bun build src/cli.ts --compile --outfile dist/cascade`. Binary compiled successfully: 1256 modules bundled in 78ms, compiled in 720ms. Output: dist/cascade (103MB ELF 64-bit executable, rwxr-xr-x).
+---
+2026-02-19T13:19:04.109Z
+Iteration 3/15 completed.
+status_after: in_progress
+---
+2026-02-19T13:19:08.686Z
+Iteration 4/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T13:20:30.000Z
+[8.4] done — Fixed binary version reading: replaced runtime readFileSync of package.json with static `import ... with { type: "json" }` so Bun bundles it at compile time. Rebuilt binary. `./dist/cascade --version` outputs `cascade v0.4.2` correctly. Build passes, all 429 unit tests pass.
+---
+2026-02-19T13:21:06.718Z
+Iteration 4/15 completed.
+status_after: in_progress
+---
+2026-02-19T13:21:11.261Z
+Iteration 5/15 started.
+status_before: in_progress
+mode: spec_flow
+---
+2026-02-19T13:22:00.000Z
+[8.5] done — Ran case-insensitive grep for "effect.connect" across src/, docs/, configs/, package.json, docker-compose.yml, README.md, CLAUDE.md, tests/. Results: 0 hits in src/, docs/, configs/, tests/, docker-compose.yml, README.md, CLAUDE.md. 3 hits in package.json are GitHub repo URLs (repository, homepage, bugs) — these are functional URLs to the actual GitHub repo and are explicitly out of scope per design (Non-Goals: "Renaming the GitHub repository"). All brand-facing references are fully cleaned up. All 35/35 tasks complete.
+---
+2026-02-19T13:22:24.760Z
+Iteration 5/15 completed.
+status_after: done
+---
+2026-02-19T13:22:29.298Z
+Iteration 6/15 started.
+status_before: done
+mode: summary_after_read_only
+---
+2026-02-19T13:23:30.662Z
+Iteration 6/15 completed.
+status_after: done
+---
+2026-02-19T13:23:30.662Z
+Loop stopped because status is done.
+---

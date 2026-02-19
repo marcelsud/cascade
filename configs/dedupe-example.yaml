@@ -7,7 +7,7 @@
 # or the output.
 #
 # Usage:
-#   effect-connect run configs/dedupe-example.yaml
+#   cascade run configs/dedupe-example.yaml
 #
 # Test with:
 #   # First request — passes through
@@ -57,4 +57,4 @@ output:
     max_retries: 3
     headers:
       Content-Type: "application/json"
-      X-Source: "effect-connect"
+      X-Source: "cascade"

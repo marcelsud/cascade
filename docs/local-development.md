@@ -1,10 +1,10 @@
 # Local Development Setup
 
-This guide covers setting up Effect Connect for local development using LocalStack and Redis via Docker Compose.
+This guide covers setting up Cascade for local development using LocalStack and Redis via Docker Compose.
 
 ## Overview
 
-For local development, Effect Connect uses:
+For local development, Cascade uses:
 - **LocalStack** - AWS service emulation (SQS, etc.) on port 4566
 - **Redis** - Message streaming and caching on port 6379
 - **Redis Commander** - Web UI for Redis inspection on port 8081
@@ -53,10 +53,10 @@ npm run docker:ps
 Expected output:
 ```
 NAME                           STATUS
-effect-connect-localstack      Up (healthy)
-effect-connect-redis           Up
-effect-connect-redis-commander Up
-effect-connect-init            Exited (0)
+cascade-localstack      Up (healthy)
+cascade-redis           Up
+cascade-redis-commander Up
+cascade-init            Exited (0)
 ```
 
 ### 4. Run Example Pipeline
@@ -77,7 +77,7 @@ This pipeline:
 #### Option 1: Redis CLI
 
 ```bash
-docker exec -it effect-connect-redis redis-cli XREAD COUNT 10 STREAMS processed-messages 0
+docker exec -it cascade-redis redis-cli XREAD COUNT 10 STREAMS processed-messages 0
 ```
 
 #### Option 2: Redis Commander (Web UI)
@@ -167,14 +167,14 @@ docker-compose restart
 ### List SQS Queues
 
 ```bash
-docker exec -it effect-connect-localstack \
+docker exec -it cascade-localstack \
   aws --endpoint-url=http://localhost:4566 sqs list-queues
 ```
 
 ### Send Test Message
 
 ```bash
-docker exec -it effect-connect-localstack \
+docker exec -it cascade-localstack \
   aws --endpoint-url=http://localhost:4566 sqs send-message \
     --queue-url http://localhost:4566/000000000000/test-queue \
     --message-body '{"test": "message", "timestamp": "2024-01-01T00:00:00Z"}'
@@ -183,7 +183,7 @@ docker exec -it effect-connect-localstack \
 ### Receive Messages
 
 ```bash
-docker exec -it effect-connect-localstack \
+docker exec -it cascade-localstack \
   aws --endpoint-url=http://localhost:4566 sqs receive-message \
     --queue-url http://localhost:4566/000000000000/test-queue \
     --max-number-of-messages 10
@@ -192,7 +192,7 @@ docker exec -it effect-connect-localstack \
 ### Purge Queue
 
 ```bash
-docker exec -it effect-connect-localstack \
+docker exec -it cascade-localstack \
   aws --endpoint-url=http://localhost:4566 sqs purge-queue \
     --queue-url http://localhost:4566/000000000000/test-queue
 ```
@@ -202,27 +202,27 @@ docker exec -it effect-connect-localstack \
 ### View Stream Messages
 
 ```bash
-docker exec -it effect-connect-redis redis-cli \
+docker exec -it cascade-redis redis-cli \
   XREAD COUNT 10 STREAMS processed-messages 0
 ```
 
 ### Stream Info
 
 ```bash
-docker exec -it effect-connect-redis redis-cli \
+docker exec -it cascade-redis redis-cli \
   XINFO STREAM processed-messages
 ```
 
 ### List All Keys
 
 ```bash
-docker exec -it effect-connect-redis redis-cli KEYS '*'
+docker exec -it cascade-redis redis-cli KEYS '*'
 ```
 
 ### Clear Stream
 
 ```bash
-docker exec -it effect-connect-redis redis-cli \
+docker exec -it cascade-redis redis-cli \
   DEL processed-messages
 ```
 
@@ -277,7 +277,7 @@ docker-compose logs -f localstack
 
 Send test messages:
 ```bash
-docker exec -it effect-connect-localstack \
+docker exec -it cascade-localstack \
   aws --endpoint-url=http://localhost:4566 sqs send-message \
     --queue-url http://localhost:4566/000000000000/input-queue \
     --message-body '{"userId": "123", "action": "purchase"}'
@@ -285,7 +285,7 @@ docker exec -it effect-connect-localstack \
 
 Check results:
 ```bash
-docker exec -it effect-connect-redis redis-cli \
+docker exec -it cascade-redis redis-cli \
   XREAD COUNT 1 STREAMS test-output 0
 ```
 
@@ -324,7 +324,7 @@ npm test
 
 ### LocalStack Not Starting
 
-**Issue**: `effect-connect-localstack` container exiting
+**Issue**: `cascade-localstack` container exiting
 
 **Solution**:
 ```bash
@@ -359,7 +359,7 @@ docker-compose restart redis
 docker-compose logs init-queues
 
 # Manually create queues
-docker exec -it effect-connect-localstack \
+docker exec -it cascade-localstack \
   aws --endpoint-url=http://localhost:4566 sqs create-queue \
     --queue-name input-queue
 ```
@@ -467,7 +467,7 @@ AWS_REGION=us-east-1
 ```yaml
 localstack:
   image: localstack/localstack:latest
-  container_name: effect-connect-localstack
+  container_name: cascade-localstack
   ports:
     - "4566:4566"
   environment:
@@ -482,7 +482,7 @@ localstack:
 ```yaml
 redis:
   image: redis:7-alpine
-  container_name: effect-connect-redis
+  container_name: cascade-redis
   command: redis-server --appendonly yes
   ports:
     - "6379:6379"
@@ -495,9 +495,9 @@ redis:
 ```yaml
 redis-commander:
   image: rediscommander/redis-commander:latest
-  container_name: effect-connect-redis-commander
+  container_name: cascade-redis-commander
   environment:
-    - REDIS_HOSTS=local:effect-connect-redis:6379
+    - REDIS_HOSTS=local:cascade-redis:6379
   ports:
     - "8081:8081"
 ```
@@ -507,7 +507,7 @@ redis-commander:
 ```yaml
 init-queues:
   image: amazon/aws-cli
-  container_name: effect-connect-init
+  container_name: cascade-init
   depends_on:
     localstack:
       condition: service_healthy

@@ -1,9 +1,8 @@
-# Effect Connect
+# Cascade
 
-[![npm version](https://img.shields.io/npm/v/effect-connect.svg)](https://www.npmjs.com/package/effect-connect)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Declarative streaming library powered by Effect.js, inspired by Apache Camel and Benthos.
+Declarative streaming library inspired by Apache Camel and Benthos.
 
 Build type-safe data pipelines with YAML configuration for message processing.
 
@@ -21,24 +20,27 @@ Build type-safe data pipelines with YAML configuration for message processing.
 
 ## Installation
 
-### Option 1: Use with npx (No Installation Required)
+### Download Binary
+
+Download the pre-compiled binary for your platform:
 
 ```bash
-npx effect-connect run my-pipeline.yaml
+# Make executable and move to PATH
+chmod +x cascade
+sudo mv cascade /usr/local/bin/
+
+# Verify installation
+cascade --version
 ```
 
-### Option 2: Install Globally
+### Build from Source
 
 ```bash
-npm install -g effect-connect
-effect-connect run my-pipeline.yaml
-```
-
-### Option 3: Install as Project Dependency
-
-```bash
-npm install effect-connect
-npx effect-connect run my-pipeline.yaml
+git clone <repo-url>
+cd cascade
+npm install
+npm run build:binary
+# Binary is at dist/cascade
 ```
 
 ## Quick Start
@@ -91,14 +93,7 @@ output:
 ### 2. Run Your Pipeline
 
 ```bash
-# Using npx (recommended)
-npx effect-connect run my-pipeline.yaml
-
-# Or if installed globally
-effect-connect run my-pipeline.yaml
-
-# Or using npm script in package.json
-npm run pipeline
+cascade run my-pipeline.yaml
 ```
 
 ### 3. Test Your HTTP Pipeline
@@ -107,7 +102,7 @@ For HTTP input pipelines, send test requests:
 
 ```bash
 # Start the pipeline
-effect-connect run my-pipeline.yaml
+cascade run my-pipeline.yaml
 
 # In another terminal, send a test request
 curl -X POST http://localhost:8080/webhook \
@@ -119,16 +114,16 @@ curl -X POST http://localhost:8080/webhook \
 
 ```bash
 # Run a pipeline
-effect-connect run <config-file.yaml>
+cascade run <config-file.yaml>
 
 # Run with debug logging
-effect-connect run <config-file.yaml> --debug
+cascade run <config-file.yaml> --debug
 
 # Show help
-effect-connect --help
+cascade --help
 
 # Show version
-effect-connect --version
+cascade --version
 ```
 
 ### 5. Debug Mode
@@ -137,7 +132,7 @@ Enable detailed debug logging to troubleshoot pipeline configuration and executi
 
 ```bash
 # Enable debug mode
-effect-connect run my-pipeline.yaml --debug
+cascade run my-pipeline.yaml --debug
 ```
 
 Debug mode provides:
@@ -161,33 +156,6 @@ DEBUG MODE ENABLED
 }
 [23:06:11.565] DEBUG (#1): buildPipeline received config: {...}
 [23:06:11.565] DEBUG (#1): buildInput received config: {...}
-```
-
-## Programmatic Usage
-
-You can also use Effect Connect as a library in your TypeScript/JavaScript projects:
-
-```typescript
-import { loadConfig } from "effect-connect"
-import { buildPipeline } from "effect-connect"
-import { run } from "effect-connect"
-import { Effect } from "effect"
-
-const program = Effect.gen(function* () {
-  // Load configuration
-  const config = yield* loadConfig("my-pipeline.yaml")
-
-  // Build pipeline
-  const pipeline = yield* buildPipeline(config)
-
-  // Run pipeline
-  const result = yield* run(pipeline)
-
-  return result
-})
-
-// Execute
-Effect.runPromise(program)
 ```
 
 ### Local Development
@@ -282,7 +250,7 @@ Explore ready-to-use configurations in `configs/`:
 ## Project Structure
 
 ```
-effect-connect/
+cascade/
 ├── src/
 │   ├── core/              # Pipeline orchestration, types, config loader
 │   ├── inputs/            # SQS, Redis Streams
@@ -305,7 +273,7 @@ effect-connect/
 
 ### Testing
 
-Effect Connect uses a scalable testing strategy that avoids N×N test explosion:
+Cascade uses a scalable testing strategy that avoids N×N test explosion:
 
 ```typescript
 import { Effect } from "effect"
@@ -314,7 +282,7 @@ import {
   createCaptureOutput,
   createPipeline,
   runPipeline
-} from "effect-connect"
+} from "cascade"
 
 // Generate test messages
 const input = createGenerateInput({
@@ -383,7 +351,7 @@ tests:
 
 Run YAML tests with:
 ```bash
-effect-connect test "tests/**/*.yaml"
+cascade test "tests/**/*.yaml"
 ```
 
 **See [docs/TESTING.md](./docs/TESTING.md) for complete testing guide.**
@@ -401,7 +369,7 @@ npm run test:unit
 npm run test:e2e
 
 # YAML declarative tests
-effect-connect test "tests/yaml/**/*.yaml"
+cascade test "tests/yaml/**/*.yaml"
 
 # With coverage
 npm run test:coverage
@@ -421,7 +389,7 @@ npm run lint
 
 ## Architecture
 
-Effect Connect uses a functional, type-safe architecture powered by Effect.js:
+Cascade uses a functional, type-safe architecture powered by Effect.js:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -448,7 +416,7 @@ For more details, see [Component Development Guide](docs/COMPONENTS.md).
 
 ## Effect.js Integration
 
-Effect Connect is built on [Effect.js](https://effect.website/), a powerful library for functional programming in TypeScript:
+Cascade is built on [Effect.js](https://effect.website/), a powerful library for functional programming in TypeScript:
 
 - **Error Handling**: Type-safe errors with automatic retry logic
 - **Resource Management**: Automatic cleanup of connections and resources
@@ -488,17 +456,17 @@ This provides:
 - **Integration Patterns** - Connect different systems and protocols
 - **API Gateway Patterns** - Route and transform HTTP requests to backend services
 
-## Why Effect Connect?
+## Why Cascade?
 
-| Feature | Effect Connect | Benthos | Apache Camel |
-|---------|------------------|---------|--------------|
+| Feature | Cascade | Benthos | Apache Camel |
+|---------|---------|---------|--------------|
 | **Language** | TypeScript | Go | Java/Kotlin |
 | **Type Safety** | ✓ (Effect.js) | ✗ | ✓ (with Kotlin) |
 | **Configuration** | YAML | YAML | Java/XML/YAML |
 | **Streaming** | Effect.js Streams | Native | Camel Streams |
 | **Error Handling** | Effect monad | Go errors | Exceptions |
 | **Observability** | Built-in | ✓ | ✓ |
-| **Best For** | Node.js projects | Go projects | JVM projects |
+| **Distribution** | Standalone binary | Standalone binary | JVM runtime |
 
 ## Future Enhancements
 

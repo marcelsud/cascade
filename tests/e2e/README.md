@@ -1,6 +1,6 @@
 # End-to-End Test Suite
 
-This directory contains comprehensive E2E tests for Effect Connect that validate components work correctly via YAML configuration with real infrastructure.
+This directory contains comprehensive E2E tests for Cascade that validate components work correctly via YAML configuration with real infrastructure.
 
 ## Directory Structure
 

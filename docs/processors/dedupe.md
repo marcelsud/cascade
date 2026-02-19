@@ -123,7 +123,7 @@ The processor bounds memory usage through two eviction strategies that run on ev
 
 ## Metrics and Observability
 
-The dedupe processor emits structured metrics following the same pattern as other Effect Connect components:
+The dedupe processor emits structured metrics following the same pattern as other Cascade components:
 
 | Metric | Description |
 |---|---|
@@ -138,7 +138,7 @@ The dedupe processor emits structured metrics following the same pattern as othe
 - **Dedupe miss** (`debug`): Logged when a first-seen key is accepted, includes `keyPath`, `dedupeKey`, and `messageId`.
 - **Key extraction failure** (`warn`): Logged when key extraction yields `undefined`/`null`, includes `keyPath`, `reason`, and `messageId`.
 
-Use `--debug` flag when running Effect Connect to see debug-level dedupe events.
+Use `--debug` flag when running Cascade to see debug-level dedupe events.
 
 ## Scope and Limitations
 
@@ -199,7 +199,7 @@ Dedupe key extraction failed: path "metadata.correlationId" on message msg-abc12
 Run your pipeline with `--debug` to see extraction attempts:
 
 ```bash
-effect-connect run pipeline.yaml --debug
+cascade run pipeline.yaml --debug
 ```
 
 The warning log for a failed extraction includes structured annotations:
@@ -248,7 +248,7 @@ The processor tracks four counters accessible via `getMetrics()`:
 | `extractionFailures` | Total key extraction failures since process start |
 | `activeKeys` | Current number of keys held in dedupe state (point-in-time) |
 
-Metrics are emitted via structured logging following the same pattern as other Effect Connect components:
+Metrics are emitted via structured logging following the same pattern as other Cascade components:
 
 ```json
 {

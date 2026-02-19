@@ -9,7 +9,7 @@
 #   # Start LocalStack first
 #   npm run docker:up
 #
-#   effect-connect run configs/dedupe-sqs-example.yaml
+#   cascade run configs/dedupe-sqs-example.yaml
 
 input:
   aws_sqs:

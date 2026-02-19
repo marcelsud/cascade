@@ -10,7 +10,7 @@ NC='\033[0m'
 
 echo -e "${BLUE}╔════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║                                                        ║${NC}"
-echo -e "${BLUE}║        Effect Connect - E2E Test Suite Runner         ║${NC}"
+echo -e "${BLUE}║           Cascade - E2E Test Suite Runner              ║${NC}"
 echo -e "${BLUE}║                                                        ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════════════════════╝${NC}"
 echo ""

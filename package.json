@@ -1,21 +1,11 @@
 {
-  "name": "effect-connect",
+  "name": "cascade",
   "version": "0.4.2",
-  "description": "Declarative streaming library powered by Effect.js, inspired by Apache Camel and Benthos",
+  "description": "Declarative streaming library inspired by Apache Camel and Benthos",
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "bin": {
-    "effect-connect": "./dist/cli.js"
-  },
-  "exports": {
-    ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
-    }
-  },
   "scripts": {
     "build": "tsc",
+    "build:binary": "bun build src/cli.ts --compile --outfile dist/cascade",
     "dev": "tsx src/index.ts",
     "test": "vitest",
     "test:unit": "vitest run tests/unit",
@@ -40,33 +30,18 @@
     "docker:logs": "docker-compose logs -f",
     "docker:ps": "docker-compose ps",
     "lint": "tsc --noEmit",
-    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
-    "prepublishOnly": "npm run build && npm run test:unit"
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\""
   },
-  "keywords": [
-    "effect",
-    "streaming",
-    "integration",
-    "pipeline",
-    "camel",
-    "benthos",
-    "redpanda-connect"
-  ],
   "author": "Marcelo Santos (@marcelsud)",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/marcelsud/effect-connect.git"
+    "url": "git+https://github.com/marcelsud/cascade.git"
   },
-  "homepage": "https://github.com/marcelsud/effect-connect#readme",
+  "homepage": "https://github.com/marcelsud/cascade#readme",
   "bugs": {
-    "url": "https://github.com/marcelsud/effect-connect/issues"
+    "url": "https://github.com/marcelsud/cascade/issues"
   },
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE"
-  ],
   "dependencies": {
     "@aws-sdk/client-sqs": "^3.705.0",
     "@effect/platform": "^0.93.0",

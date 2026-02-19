@@ -4,7 +4,7 @@ services:
   # LocalStack for AWS services (SQS)
   localstack:
     image: localstack/localstack:latest
-    container_name: camel-connect-localstack
+    container_name: cascade-localstack
     ports:
       - "4566:4566"            # LocalStack gateway
     environment:
@@ -19,7 +19,7 @@ services:
   # Redis for Redis Streams
   redis:
     image: redis:7-alpine
-    container_name: camel-connect-redis
+    container_name: cascade-redis
     ports:
       - "6379:6379"
     command: redis-server --appendonly yes
@@ -34,7 +34,7 @@ services:
   # Redis Commander (GUI for Redis)
   redis-commander:
     image: rediscommander/redis-commander:latest
-    container_name: camel-connect-redis-commander
+    container_name: cascade-redis-commander
     ports:
       - "8081:8081"
     environment:

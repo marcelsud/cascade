@@ -1,7 +1,7 @@
 services:
   localstack:
     image: localstack/localstack:latest
-    container_name: effect-connect-localstack
+    container_name: cascade-localstack
     ports:
       - "4566:4566"
     environment:
@@ -20,7 +20,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: effect-connect-redis
+    container_name: cascade-redis
     ports:
       - "6379:6379"
     command: redis-server --appendonly yes
@@ -35,7 +35,7 @@ services:
   # Redis Commander (GUI for Redis)
   redis-commander:
     image: rediscommander/redis-commander:latest
-    container_name: effect-connect-redis-commander
+    container_name: cascade-redis-commander
     ports:
       - "8081:8081"
     environment:
@@ -48,7 +48,7 @@ services:
   # This ensures all queues are created before your application starts
   init-queues:
     image: amazon/aws-cli:latest
-    container_name: effect-connect-init
+    container_name: cascade-init
     depends_on:
       localstack:
         condition: service_healthy

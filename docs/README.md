@@ -1,4 +1,4 @@
-# Effect Connect - Component Catalog
+# Cascade - Component Catalog
 
 Complete documentation for all inputs, processors, outputs, and advanced features.
 

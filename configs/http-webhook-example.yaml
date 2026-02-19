@@ -2,12 +2,12 @@
 # Receives webhook requests on port 8080 and forwards them to webhook.site
 #
 # Usage:
-#   effect-connect run configs/http-webhook-example.yaml
+#   cascade run configs/http-webhook-example.yaml
 #
 # Test with:
 #   curl -X POST http://localhost:8080/webhook \
 #     -H "Content-Type: application/json" \
-#     -d '{"message": "Hello from effect-connect!"}'
+#     -d '{"message": "Hello from cascade!"}'
 #
 # View results at: https://webhook.site/#!/74ed15d1-ebfe-4c99-be1b-751e821e084a
 
@@ -36,4 +36,4 @@ output:
     max_retries: 3
     headers:
       Content-Type: "application/json"
-      X-Source: "effect-connect"
+      X-Source: "cascade"
