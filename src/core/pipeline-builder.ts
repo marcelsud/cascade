@@ -21,6 +21,7 @@ import { createMappingProcessor } from "../processors/mapping-processor.js";
 import { createHttpProcessor } from "../processors/http-processor.js";
 import { createBranchProcessor } from "../processors/branch-processor.js";
 import { createSwitchProcessor } from "../processors/switch-processor.js";
+import { createDedupeProcessor } from "../processors/dedupe-processor.js";
 import { createRedisStreamsOutput } from "../outputs/redis-streams-output.js";
 import { createRedisPubSubOutput } from "../outputs/redis-pubsub-output.js";
 import { createRedisListOutput } from "../outputs/redis-list-output.js";
@@ -260,6 +261,23 @@ const buildProcessor = (
       );
       return createSwitchProcessor({ cases });
     }) as Effect.Effect<Processor<any>, BuildError>;
+  }
+
+  if (config.dedupe) {
+    if (!config.dedupe.key) {
+      return Effect.fail(
+        new BuildError(
+          "Dedupe processor requires a non-empty 'key' field specifying the deduplication attribute (e.g. 'messageId' or 'metadata.correlationId')",
+        ),
+      );
+    }
+    return Effect.succeed(
+      createDedupeProcessor({
+        key: config.dedupe.key,
+        windowMs: config.dedupe.window_ms,
+        maxKeys: config.dedupe.max_keys,
+      }),
+    );
   }
 
   // Testing utility: assert processor

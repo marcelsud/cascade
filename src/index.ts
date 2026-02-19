@@ -25,6 +25,7 @@ export * from "./processors/uppercase-processor.js";
 export * from "./processors/logging-processor.js";
 export * from "./processors/mapping-processor.js";
 export * from "./processors/http-processor.js";
+export * from "./processors/dedupe-processor.js";
 
 // Outputs
 export * from "./outputs/redis-streams-output.js";

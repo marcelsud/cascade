@@ -1,0 +1,60 @@
+# Dedupe by Metadata Example
+# Demonstrates deduplication using a metadata field as the dedupe key.
+#
+# When the key starts with "metadata.", the processor extracts the dedupe key
+# from message metadata instead of the payload. This is useful when upstream
+# systems set idempotency keys in message headers or metadata attributes.
+#
+# This example also shows dedupe combined with other processors in a pipeline.
+#
+# Usage:
+#   effect-connect run configs/dedupe-metadata-example.yaml
+#
+# Test with:
+#   curl -X POST http://localhost:8080/events \
+#     -H "Content-Type: application/json" \
+#     -H "X-Idempotency-Key: evt-abc-123" \
+#     -d '{"event": "payment.completed", "amount": 49.99}'
+#
+#   # Retry with same idempotency key — suppressed
+#   curl -X POST http://localhost:8080/events \
+#     -H "Content-Type: application/json" \
+#     -H "X-Idempotency-Key: evt-abc-123" \
+#     -d '{"event": "payment.completed", "amount": 49.99}'
+
+input:
+  http:
+    port: 8080
+    host: "0.0.0.0"
+    path: "/events"
+    timeout: 30000
+
+pipeline:
+  processors:
+    - metadata:
+        correlation_id_field: "correlationId"
+        add_timestamp: true
+
+    # Deduplicate by metadata field "idempotencyKey".
+    # The metadata prefix tells the processor to look in message metadata
+    # rather than the payload body.
+    - dedupe:
+        key: "metadata.idempotencyKey"
+        window_ms: 300000    # 5-minute retention window
+        max_keys: 10000
+
+    - uppercase:
+        fields: ["event"]
+
+    - log:
+        level: info
+        include_content: true
+
+output:
+  http:
+    url: "https://webhook.site/YOUR-UUID-HERE"
+    method: POST
+    timeout: 5000
+    max_retries: 3
+    headers:
+      Content-Type: "application/json"

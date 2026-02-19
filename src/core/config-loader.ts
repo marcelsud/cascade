@@ -194,6 +194,37 @@ const HttpProcessorSchema = S.Struct({
 });
 
 /**
+ * Schema for Dedupe Processor (attribute-based deduplication)
+ */
+const DedupeProcessorSchema = S.Struct({
+  key: S.String.pipe(
+    S.minLength(1, {
+      message: () =>
+        "Dedupe processor 'key' must be a non-empty string (e.g. 'messageId' or 'metadata.correlationId')",
+    }),
+  ),
+  window_ms: S.optional(
+    S.Number.pipe(
+      S.positive({
+        message: () =>
+          "Dedupe processor 'window_ms' must be a positive number (milliseconds)",
+      }),
+    ),
+  ),
+  max_keys: S.optional(
+    S.Number.pipe(
+      S.int({
+        message: () => "Dedupe processor 'max_keys' must be an integer",
+      }),
+      S.positive({
+        message: () =>
+          "Dedupe processor 'max_keys' must be a positive integer",
+      }),
+    ),
+  ),
+});
+
+/**
  * Schema for Assert Processor (testing utility)
  */
 const AssertProcessorSchema = S.Struct({
@@ -229,6 +260,7 @@ const ProcessorConfigSchema: ProcessorConfigSchema = S.suspend(
           ),
         }),
       ),
+      dedupe: S.optional(DedupeProcessorSchema),
       // Testing utilities
       assert: S.optional(AssertProcessorSchema),
     }),
@@ -396,6 +428,11 @@ export type ProcessorConfig = {
       readonly check: string;
       readonly processors: readonly ProcessorConfig[];
     }[];
+  };
+  readonly dedupe?: {
+    readonly key: string;
+    readonly window_ms?: number;
+    readonly max_keys?: number;
   };
   // Testing utilities
   readonly assert?: {

@@ -1,0 +1,44 @@
+# SQS Dedupe Pipeline Example
+# Demonstrates deduplication in a queue-based pipeline where upstream retries
+# can deliver the same message more than once (at-least-once delivery).
+#
+# Uses a nested payload path ("event.transactionId") as the dedupe key,
+# showing that dot-path notation traverses into nested objects.
+#
+# Usage:
+#   # Start LocalStack first
+#   npm run docker:up
+#
+#   effect-connect run configs/dedupe-sqs-example.yaml
+
+input:
+  aws_sqs:
+    url: "http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/incoming-events"
+    region: "us-east-1"
+    endpoint: "http://localhost:4566"
+    wait_time_seconds: 10
+    max_number_of_messages: 10
+
+pipeline:
+  processors:
+    - metadata:
+        correlation_id_field: "correlationId"
+        add_timestamp: true
+
+    # Deduplicate by nested payload path "event.transactionId".
+    # Dot notation traverses into nested objects:
+    #   { "event": { "transactionId": "txn-001" } } → key = "txn-001"
+    - dedupe:
+        key: "event.transactionId"
+        window_ms: 60000     # 60-second window (default)
+        max_keys: 10000      # Up to 10k tracked keys (default)
+
+    - log:
+        level: info
+        include_content: true
+
+output:
+  aws_sqs:
+    url: "http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/processed-events"
+    region: "us-east-1"
+    endpoint: "http://localhost:4566"

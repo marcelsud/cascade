@@ -1,0 +1,60 @@
+# Dedupe Processor Example
+# Demonstrates attribute-based message deduplication in a pipeline.
+#
+# The dedupe processor suppresses duplicate messages based on a configured key.
+# Only the first occurrence of each key within the retention window passes through;
+# subsequent duplicates are silently dropped before reaching downstream processors
+# or the output.
+#
+# Usage:
+#   effect-connect run configs/dedupe-example.yaml
+#
+# Test with:
+#   # First request — passes through
+#   curl -X POST http://localhost:8080/webhook \
+#     -H "Content-Type: application/json" \
+#     -d '{"orderId": "ORD-1001", "item": "Widget", "quantity": 3}'
+#
+#   # Duplicate — suppressed (same orderId within window)
+#   curl -X POST http://localhost:8080/webhook \
+#     -H "Content-Type: application/json" \
+#     -d '{"orderId": "ORD-1001", "item": "Widget", "quantity": 3}'
+#
+#   # Different order — passes through
+#   curl -X POST http://localhost:8080/webhook \
+#     -H "Content-Type: application/json" \
+#     -d '{"orderId": "ORD-1002", "item": "Gadget", "quantity": 1}'
+
+input:
+  http:
+    port: 8080
+    host: "0.0.0.0"
+    path: "/webhook"
+    timeout: 30000
+
+pipeline:
+  processors:
+    - metadata:
+        correlation_id_field: "correlationId"
+        add_timestamp: true
+
+    # Deduplicate by payload field "orderId".
+    # Messages with the same orderId within 120 seconds are dropped.
+    - dedupe:
+        key: "orderId"
+        window_ms: 120000
+        max_keys: 5000
+
+    - log:
+        level: info
+        include_content: true
+
+output:
+  http:
+    url: "https://webhook.site/YOUR-UUID-HERE"
+    method: POST
+    timeout: 5000
+    max_retries: 3
+    headers:
+      Content-Type: "application/json"
+      X-Source: "effect-connect"
