@@ -6,8 +6,13 @@ Complete documentation for all inputs, processors, outputs, and advanced feature
 
 Message sources for your pipelines:
 
+- **[HTTP](inputs/http.md)** - Receive webhook POST requests
+- **[File](inputs/file.md)** - Tail or replay newline-delimited local files
+- **[Stdin](inputs/stdin.md)** - Read line-oriented or whole-stream input from standard input
 - **[AWS SQS](inputs/sqs.md)** - Read from AWS SQS queues
 - **[Redis Streams](inputs/redis-streams.md)** - Read from Redis Streams (simple or consumer-group mode)
+- **[Redis Pub/Sub](inputs/redis-pubsub.md)** - Subscribe to Redis channels and patterns
+- **[Redis Lists](inputs/redis-list.md)** - Pop from Redis Lists with blocking reads
 
 ## ⚙️ Processors
 

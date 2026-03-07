@@ -220,6 +220,8 @@ dlq:
 ### 📥 Inputs
 
 - **[HTTP](docs/inputs/http.md)** - Receive webhook POST requests
+- **[File](docs/inputs/file.md)** - Tail or replay newline-delimited local files
+- **[Stdin](docs/inputs/stdin.md)** - Read line-oriented or whole-stream input from standard input
 - **[AWS SQS](docs/inputs/sqs.md)** - Read from AWS SQS queues
 - **[Redis Streams](docs/inputs/redis-streams.md)** - Read from Redis Streams (simple or consumer-group mode)
 - **[Redis Pub/Sub](docs/inputs/redis-pubsub.md)** - Subscribe to Redis Pub/Sub channels/patterns
@@ -481,7 +483,7 @@ This provides:
 ## Future Enhancements
 
 - [x] HTTP input and output
-- [ ] More inputs (Kafka, File, Kinesis, WebSocket)
+- [ ] More inputs (Kafka, Kinesis, WebSocket, NATS)
 - [ ] More processors (Filter, Transform, Enrich, Split/Join)
 - [ ] More outputs (Postgres, S3, Elasticsearch, gRPC)
 - [ ] Circuit breaker pattern

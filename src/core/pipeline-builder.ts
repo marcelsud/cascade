@@ -14,6 +14,8 @@ import { createRedisStreamsInput } from "../inputs/redis-streams-input.js";
 import { createRedisPubSubInput } from "../inputs/redis-pubsub-input.js";
 import { createRedisListInput } from "../inputs/redis-list-input.js";
 import { createHttpInput } from "../inputs/http-input.js";
+import { createFileInput } from "../inputs/file-input.js";
+import { createStdinInput } from "../inputs/stdin-input.js";
 import { createMetadataProcessor } from "../processors/metadata-processor.js";
 import { createUppercaseProcessor } from "../processors/uppercase-processor.js";
 import { createLoggingProcessor } from "../processors/logging-processor.js";
@@ -153,6 +155,27 @@ const buildInputInternal = (
         host: config.http.host,
         path: config.http.path,
         timeout: config.http.timeout,
+      }),
+    );
+  }
+
+  if ((config as any).file) {
+    return Effect.succeed(
+      createFileInput({
+        path: (config as any).file.path,
+        follow: (config as any).file.follow,
+        startAt: (config as any).file.start_at,
+        pollIntervalMs: (config as any).file.poll_interval_ms,
+        encoding: (config as any).file.encoding,
+      }),
+    );
+  }
+
+  if ((config as any).stdin) {
+    return Effect.succeed(
+      createStdinInput({
+        mode: (config as any).stdin.mode,
+        encoding: (config as any).stdin.encoding,
       }),
     );
   }
@@ -417,6 +440,10 @@ export const buildPipeline = (
         ? "redis_streams"
         : config.input.http
           ? "http"
+          : (config.input as any).file
+            ? "file"
+            : (config.input as any).stdin
+              ? "stdin"
           : (config.input as any).generate
             ? "generate"
             : "unknown";
