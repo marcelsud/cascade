@@ -66,6 +66,25 @@ const HttpInputSchema = S.Struct({
 });
 
 /**
+ * Schema for File Input configuration
+ */
+const FileInputSchema = S.Struct({
+  path: S.String,
+  follow: S.optional(S.Boolean),
+  start_at: S.optional(S.Union(S.Literal("end"), S.Literal("beginning"))),
+  poll_interval_ms: S.optional(S.Number),
+  encoding: S.optional(S.String),
+});
+
+/**
+ * Schema for Stdin Input configuration
+ */
+const StdinInputSchema = S.Struct({
+  mode: S.optional(S.Union(S.Literal("lines"), S.Literal("whole"))),
+  encoding: S.optional(S.String),
+});
+
+/**
  * Schema for Redis Pub/Sub Input configuration (Bento style)
  */
 const RedisPubSubInputSchema = S.Struct({
@@ -122,6 +141,8 @@ const InputConfigSchema = S.Struct({
   redis_pubsub: S.optional(RedisPubSubInputSchema),
   redis_list: S.optional(RedisListInputSchema),
   http: S.optional(HttpInputSchema),
+  file: S.optional(FileInputSchema),
+  stdin: S.optional(StdinInputSchema),
   generate: S.optional(GenerateInputSchema),
   // Future inputs can be added here:
   // kafka: S.optional(KafkaInputSchema),

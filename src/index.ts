@@ -18,6 +18,8 @@ export * from "./inputs/redis-streams-input.js";
 export * from "./inputs/redis-pubsub-input.js";
 export * from "./inputs/redis-list-input.js";
 export * from "./inputs/http-input.js";
+export * from "./inputs/file-input.js";
+export * from "./inputs/stdin-input.js";
 
 // Processors
 export * from "./processors/metadata-processor.js";
