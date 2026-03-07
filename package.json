@@ -1,6 +1,6 @@
 {
   "name": "cascade",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Declarative streaming library inspired by Apache Camel and Benthos",
   "type": "module",
   "scripts": {
@@ -50,6 +50,7 @@
     "effect": "^3.19.3",
     "ioredis": "^5.4.2",
     "jsonata": "^2.1.0",
+    "quickjs-emscripten": "^0.32.0",
     "yaml": "^2.6.1"
   },
   "devDependencies": {

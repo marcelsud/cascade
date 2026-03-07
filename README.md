@@ -233,6 +233,7 @@ dlq:
 - **[Uppercase](docs/processors/uppercase.md)** - Transform fields to uppercase
 - **[Mapping](docs/processors/mapping.md)** - JSONata transformations (complex data manipulation)
 - **[HTTP](docs/processors/http.md)** - Call external APIs for enrichment and validation
+- **[JavaScript](docs/processors/javascript.md)** - Sandboxed JS execution (QuickJS/WASM)
 - **[Logging](docs/processors/logging.md)** - Log message flow for debugging
 
 ### 📤 Outputs

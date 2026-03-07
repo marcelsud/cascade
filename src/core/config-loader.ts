@@ -246,6 +246,15 @@ const DedupeProcessorSchema = S.Struct({
 });
 
 /**
+ * Schema for JavaScript Processor (sandboxed QuickJS execution)
+ */
+const JavaScriptProcessorSchema = S.Struct({
+  code: S.String,
+  timeout_ms: S.optional(S.Number),
+  memory_limit_bytes: S.optional(S.Number),
+});
+
+/**
  * Schema for Assert Processor (testing utility)
  */
 const AssertProcessorSchema = S.Struct({
@@ -282,6 +291,7 @@ const ProcessorConfigSchema: ProcessorConfigSchema = S.suspend(
         }),
       ),
       dedupe: S.optional(DedupeProcessorSchema),
+      javascript: S.optional(JavaScriptProcessorSchema),
       // Testing utilities
       assert: S.optional(AssertProcessorSchema),
     }),
@@ -454,6 +464,11 @@ export type ProcessorConfig = {
     readonly key: string;
     readonly window_ms?: number;
     readonly max_keys?: number;
+  };
+  readonly javascript?: {
+    readonly code: string;
+    readonly timeout_ms?: number;
+    readonly memory_limit_bytes?: number;
   };
   // Testing utilities
   readonly assert?: {

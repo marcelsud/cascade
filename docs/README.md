@@ -21,6 +21,7 @@ Transform and enrich messages:
 - **[Metadata](processors/metadata.md)** - Add correlation IDs and timestamps for tracing
 - **[Uppercase](processors/uppercase.md)** - Simple field transformation to uppercase
 - **[Mapping](processors/mapping.md)** - Complex JSONata transformations and data manipulation
+- **[JavaScript](processors/javascript.md)** - Sandboxed JavaScript execution (QuickJS/WASM) for imperative logic
 - **[Logging](processors/logging.md)** - Log messages for debugging and monitoring
 
 ## 📤 Outputs
@@ -52,6 +53,7 @@ Production-ready patterns and integrations:
 
 **Data Transformation:**
 - [Mapping Processor](processors/mapping.md) - JSONata expressions
+- [JavaScript Processor](processors/javascript.md) - Sandboxed imperative JS
 - [Uppercase Processor](processors/uppercase.md) - Simple field transforms
 
 **Production Patterns:**
@@ -77,6 +79,7 @@ Production-ready patterns and integrations:
 
 **Transformations:**
 - [JSONata Mapping](processors/mapping.md)
+- [JavaScript](processors/javascript.md)
 - [Bloblang](advanced/bloblang.md)
 - [Uppercase](processors/uppercase.md)
 

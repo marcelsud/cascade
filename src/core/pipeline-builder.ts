@@ -24,6 +24,7 @@ import { createHttpProcessor } from "../processors/http-processor.js";
 import { createBranchProcessor } from "../processors/branch-processor.js";
 import { createSwitchProcessor } from "../processors/switch-processor.js";
 import { createDedupeProcessor } from "../processors/dedupe-processor.js";
+import { createJavaScriptProcessor } from "../processors/javascript-processor.js";
 import { createRedisStreamsOutput } from "../outputs/redis-streams-output.js";
 import { createRedisPubSubOutput } from "../outputs/redis-pubsub-output.js";
 import { createRedisListOutput } from "../outputs/redis-list-output.js";
@@ -299,6 +300,16 @@ const buildProcessor = (
         key: config.dedupe.key,
         windowMs: config.dedupe.window_ms,
         maxKeys: config.dedupe.max_keys,
+      }),
+    );
+  }
+
+  if (config.javascript) {
+    return Effect.succeed(
+      createJavaScriptProcessor({
+        code: config.javascript.code,
+        timeout_ms: config.javascript.timeout_ms,
+        memory_limit_bytes: config.javascript.memory_limit_bytes,
       }),
     );
   }
