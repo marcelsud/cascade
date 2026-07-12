@@ -405,9 +405,40 @@ export const PipelineConfigSchema = S.Struct({
   pipeline: S.optional(
     S.Struct({
       processors: S.optional(S.Array(ProcessorConfigSchema)),
+      backpressure: S.optional(
+        S.Struct({
+          max_concurrent_messages: S.optional(S.Int.pipe(S.positive())),
+          max_concurrent_outputs: S.optional(S.Int.pipe(S.positive())),
+        }),
+      ),
     }),
   ),
   output: OutputConfigSchema,
+});
+
+/**
+ * Strict validation for the stable configuration envelope.
+ *
+ * Component payloads and processor entries remain opaque here because custom
+ * components may define their own fields. PipelineConfigSchema performs their
+ * normal validation after the envelope has been checked.
+ */
+const PipelineConfigEnvelopeSchema = S.Struct({
+  input: S.Unknown,
+  pipeline: S.optional(
+    S.Struct({
+      processors: S.optional(S.Unknown),
+      backpressure: S.optional(
+        S.Struct({
+          max_concurrent_messages: S.optional(S.Unknown),
+          max_concurrent_outputs: S.optional(S.Unknown),
+        }),
+      ),
+    }),
+  ),
+  output: S.Unknown,
+  // Kept opaque for compatibility with the stacked DLQ configuration work.
+  dlq: S.optional(S.Unknown),
 });
 
 /**
@@ -526,7 +557,20 @@ export const loadConfig = (
     // Interpolate environment variables
     const interpolated = interpolateEnvVars(rawConfig);
 
-    // Validate with schema
+    // Reject structural typos without constraining custom component payloads.
+    yield* pipe(
+      S.decodeUnknown(PipelineConfigEnvelopeSchema, {
+        onExcessProperty: "error",
+      })(interpolated),
+      Effect.mapError(
+        (error) =>
+          new ConfigValidationError(
+            `Schema validation failed: ${String(error)}`,
+          ),
+      ),
+    );
+
+    // Validate component and processor values with the full schema.
     const config = yield* pipe(
       S.decodeUnknown(PipelineConfigSchema)(interpolated),
       Effect.mapError(
