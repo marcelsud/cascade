@@ -419,6 +419,11 @@ const OutputConfigSchema = S.Struct({
   // postgres: S.optional(PostgresOutputSchema),
 }).pipe(S.filter((config) => validateExactlyOneComponent("Output", config)));
 
+const DLQConfigSchema = S.Struct({
+  output: OutputConfigSchema,
+  max_retries: S.optional(S.Int.pipe(S.nonNegative())),
+});
+
 /**
  * Complete pipeline configuration schema (Bento style)
  */
@@ -436,6 +441,7 @@ export const PipelineConfigSchema = S.Struct({
     }),
   ),
   output: OutputConfigSchema,
+  dlq: S.optional(DLQConfigSchema),
 });
 
 /**

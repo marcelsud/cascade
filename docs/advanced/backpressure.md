@@ -365,11 +365,12 @@ pipeline:
 output:
   aws_sqs:
     url: "..."
-    max_retries: 3  # Retry before DLQ
 
 dlq:
-  aws_sqs:
-    url: "..."  # Failed messages after retries
+  max_retries: 3
+  output:
+    aws_sqs:
+      url: "..."  # Failed messages after retries
 ```
 
 ### With Batch Timeout

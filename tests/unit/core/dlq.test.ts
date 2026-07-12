@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Effect } from "effect";
+import { Effect, Schedule } from "effect";
 import { withDLQ, DLQError } from "../../../src/core/dlq.js";
 import { createMessage } from "../../../src/core/types.js";
 import type { Output, Message } from "../../../src/core/types.js";
@@ -150,23 +150,107 @@ describe("Dead Letter Queue (DLQ)", () => {
       expect(dlqOutput.send).toHaveBeenCalledTimes(1);
     });
 
-    it("should handle close method", async () => {
+    it("should perform the configured number of retries", async () => {
+      let attempts = 0;
       const mockOutput: Output<Error> = {
         name: "mock-output",
+        send: vi.fn().mockReturnValue(
+          Effect.suspend(() => {
+            attempts++;
+            return Effect.fail(new Error(`Attempt ${attempts}`));
+          }),
+        ),
+      };
+      const dlqOutput: Output<any> = {
+        name: "dlq-output",
+        send: vi.fn().mockReturnValue(Effect.void),
+      };
+      const wrappedOutput = withDLQ({
+        output: mockOutput,
+        dlq: dlqOutput,
+        maxRetries: 2,
+        retrySchedule: Schedule.spaced(0),
+      });
+
+      await Effect.runPromise(
+        wrappedOutput.send(createMessage({ test: "data" })),
+      );
+
+      expect(attempts).toBe(3);
+      expect(dlqOutput.send).toHaveBeenCalledTimes(1);
+    });
+
+    it("should support immediate DLQ forwarding with zero retries", async () => {
+      let attempts = 0;
+      const mockOutput: Output<Error> = {
+        name: "mock-output",
+        send: vi.fn().mockReturnValue(
+          Effect.suspend(() => {
+            attempts++;
+            return Effect.fail(new Error("Immediate failure"));
+          }),
+        ),
+      };
+      const dlqOutput: Output<any> = {
+        name: "dlq-output",
+        send: vi.fn().mockReturnValue(Effect.void),
+      };
+      const wrappedOutput = withDLQ({
+        output: mockOutput,
+        dlq: dlqOutput,
+        maxRetries: 0,
+        retrySchedule: Schedule.spaced(0),
+      });
+
+      await Effect.runPromise(
+        wrappedOutput.send(createMessage({ test: "data" })),
+      );
+
+      expect(attempts).toBe(1);
+      expect(dlqOutput.send).toHaveBeenCalledTimes(1);
+    });
+
+    it("should close both primary and DLQ outputs", async () => {
+      const mockOutput: Output<Error> = {
+        name: "mock-output",
+        send: vi.fn().mockReturnValue(Effect.void),
+        close: vi.fn().mockReturnValue(Effect.void),
+      };
+      const dlqOutput: Output<any> = {
+        name: "dlq-output",
         send: vi.fn().mockReturnValue(Effect.void),
         close: vi.fn().mockReturnValue(Effect.void),
       };
 
       const wrappedOutput = withDLQ({
         output: mockOutput,
+        dlq: dlqOutput,
       });
 
       expect(wrappedOutput.close).toBeDefined();
+      expect(mockOutput.close).not.toHaveBeenCalled();
+      expect(dlqOutput.close).not.toHaveBeenCalled();
 
       if (wrappedOutput.close) {
         await Effect.runPromise(wrappedOutput.close());
         expect(mockOutput.close).toHaveBeenCalledTimes(1);
+        expect(dlqOutput.close).toHaveBeenCalledTimes(1);
       }
+    });
+
+    it("should expose no close method when neither output needs cleanup", () => {
+      const wrappedOutput = withDLQ({
+        output: {
+          name: "mock-output",
+          send: vi.fn().mockReturnValue(Effect.void),
+        },
+        dlq: {
+          name: "dlq-output",
+          send: vi.fn().mockReturnValue(Effect.void),
+        },
+      });
+
+      expect(wrappedOutput.close).toBeUndefined();
     });
   });
 });

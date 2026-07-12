@@ -28,15 +28,14 @@ output:
     stream: "processed-messages"
     max_length: 1000
 
-    # Retry configuration for output
-    max_retries: 3                      # Retry up to 3 times before DLQ
-
 # Dead Letter Queue for failed messages
 dlq:
-  aws_sqs:
-    url: "http://localhost:4566/000000000000/dlq-queue"
-    region: "us-east-1"
-    endpoint: "http://localhost:4566"
+  max_retries: 3
+  output:
+    aws_sqs:
+      url: "http://localhost:4566/000000000000/dlq-queue"
+      region: "us-east-1"
+      endpoint: "http://localhost:4566"
 
 # Failed messages in the DLQ will include:
 # - dlq: true

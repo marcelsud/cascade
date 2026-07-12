@@ -9,6 +9,7 @@ import type {
   OutputConfig,
 } from "./config-loader.js";
 import type { Pipeline, Input, Processor, Output } from "./types.js";
+import { withDLQ } from "./dlq.js";
 import { createSqsInput } from "../inputs/sqs-input.js";
 import { createRedisStreamsInput } from "../inputs/redis-streams-input.js";
 import { createRedisPubSubInput } from "../inputs/redis-pubsub-input.js";
@@ -442,7 +443,17 @@ export const buildPipeline = (
       concurrency: 1,
     });
 
-    const output = yield* buildOutput(config.output);
+    const primaryOutput = yield* buildOutput(config.output);
+    let output = primaryOutput;
+
+    if (config.dlq) {
+      const dlqOutput = yield* buildOutput(config.dlq.output);
+      output = withDLQ({
+        output: primaryOutput,
+        dlq: dlqOutput,
+        maxRetries: config.dlq.max_retries,
+      });
+    }
 
     // Generate name from input and output types
     const inputType = config.input.aws_sqs

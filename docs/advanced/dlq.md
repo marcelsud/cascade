@@ -8,28 +8,27 @@ Send failed messages to a separate queue after exhausting retries. DLQ support h
 
 ### Required Fields
 
-At least one DLQ output must be configured under the `dlq:` section in your pipeline configuration.
+Exactly one destination must be configured under `dlq.output`.
 
 ### Optional Fields
 
-- `max_retries`: Number of retry attempts before sending to DLQ (configured on output, default: 3)
-- `retry_schedule`: Retry backoff strategy (default: "exponential")
+- `max_retries`: Number of retry attempts before sending to the DLQ (default: 3). Set it to `0` to send to the DLQ immediately after the initial failure.
 
 ## Examples
 
 ### Basic DLQ Configuration
 
 ```yaml
-# Primary output with retries
 output:
   aws_sqs:
     url: "http://localhost:4566/000000000000/primary-queue"
-    max_retries: 3  # Retry up to 3 times before DLQ
 
 # Dead Letter Queue
 dlq:
-  aws_sqs:
-    url: "http://localhost:4566/000000000000/dlq-queue"
+  max_retries: 3
+  output:
+    aws_sqs:
+      url: "http://localhost:4566/000000000000/dlq-queue"
 ```
 
 ### DLQ with Redis Streams
@@ -39,26 +38,27 @@ output:
   redis_streams:
     url: "redis://localhost:6379"
     stream: "processed-messages"
-    max_retries: 3
 
 dlq:
-  redis_streams:
-    url: "redis://localhost:6379"
-    stream: "failed-messages"
+  max_retries: 3
+  output:
+    redis_streams:
+      url: "redis://localhost:6379"
+      stream: "failed-messages"
 ```
 
-### Custom Retry Configuration
+### Custom Retry Count
 
 ```yaml
 output:
   aws_sqs:
     url: "http://localhost:4566/000000000000/primary-queue"
-    max_retries: 5  # More retries for intermittent failures
-    retry_schedule: "exponential"  # Exponential backoff (default)
 
 dlq:
-  aws_sqs:
-    url: "http://localhost:4566/000000000000/dlq-queue"
+  max_retries: 5
+  output:
+    aws_sqs:
+      url: "http://localhost:4566/000000000000/dlq-queue"
 ```
 
 ### Mixed Output Types
@@ -69,12 +69,13 @@ output:
   redis_streams:
     url: "redis://localhost:6379"
     stream: "processed"
-    max_retries: 3
 
 # Send failures to SQS for inspection
 dlq:
-  aws_sqs:
-    url: "http://localhost:4566/000000000000/dlq-queue"
+  max_retries: 3
+  output:
+    aws_sqs:
+      url: "http://localhost:4566/000000000000/dlq-queue"
 ```
 
 ## Features
@@ -207,13 +208,13 @@ output:
 ### DLQ messages not appearing
 
 - Verify DLQ output is configured correctly
-- Check max_retries is set on primary output
+- Check `dlq.max_retries` and `dlq.output`
 - Ensure DLQ output connection is working
 - Review logs for DLQ send errors
 
 ### Too many messages in DLQ
 
-- Increase max_retries if failures are transient
+- Increase `dlq.max_retries` if failures are transient
 - Fix underlying issue causing failures
 - Check downstream system health
 - Review error patterns in `dlqReason`

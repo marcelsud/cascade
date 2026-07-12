@@ -209,10 +209,12 @@ output:
 
 # Optional: Dead Letter Queue for failures
 dlq:
-  aws_sqs:
-    url: "https://sqs.us-east-1.amazonaws.com/123456789012/dlq-queue"
-    region: "us-east-1"
-    # See docs/advanced/dlq.md
+  max_retries: 3
+  output:
+    aws_sqs:
+      url: "https://sqs.us-east-1.amazonaws.com/123456789012/dlq-queue"
+      region: "us-east-1"
+      # See docs/advanced/dlq.md
 ```
 
 ## Components
