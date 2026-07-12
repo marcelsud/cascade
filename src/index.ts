@@ -6,6 +6,7 @@
 export * from "./core/types.js";
 export * from "./core/pipeline.js";
 export * from "./core/config-loader.js";
+export * from "./core/component-registry.js";
 export * from "./core/pipeline-builder.js";
 export * from "./core/dlq.js";
 export * from "./core/errors.js";

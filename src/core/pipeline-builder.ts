@@ -9,6 +9,10 @@ import type {
   OutputConfig,
 } from "./config-loader.js";
 import type { Pipeline, Input, Processor, Output } from "./types.js";
+import type {
+  ComponentBuildContext,
+  ComponentRegistry,
+} from "./component-registry.js";
 import { withDLQ } from "./dlq.js";
 import { createSqsInput } from "../inputs/sqs-input.js";
 import { createRedisStreamsInput } from "../inputs/redis-streams-input.js";
@@ -41,26 +45,38 @@ export class BuildError {
   constructor(readonly message: string) {}
 }
 
+const configuredComponent = (
+  config: object,
+): readonly [string, unknown] | undefined =>
+  Object.entries(config).find(([, value]) => value !== undefined);
+
+const mapCustomBuildError = (name: string, error: unknown): BuildError =>
+  new BuildError(
+    `Failed to build registered component '${name}': ${error instanceof Error ? error.message : String(error)}`,
+  );
+
 /**
  * Build input from configuration (Bento style)
  */
 const buildInput = (
   config: InputConfig,
   debug = false,
+  registry?: ComponentRegistry,
 ): Effect.Effect<Input<any>, BuildError> => {
   if (debug) {
     return Effect.gen(function* () {
       yield* Effect.logDebug(
         `buildInput received config: ${JSON.stringify(config, null, 2)}`,
       );
-      return yield* buildInputInternal(config);
+      return yield* buildInputInternal(config, registry);
     });
   }
-  return buildInputInternal(config);
+  return buildInputInternal(config, registry);
 };
 
 const buildInputInternal = (
   config: InputConfig,
+  registry?: ComponentRegistry,
 ): Effect.Effect<Input<any>, BuildError> => {
   if (config.aws_sqs) {
     return Effect.succeed(
@@ -187,6 +203,24 @@ const buildInputInternal = (
     return Effect.succeed(createGenerateInput((config as any).generate));
   }
 
+  const selected = configuredComponent(config);
+  const registered = selected ? registry?.getInput(selected[0]) : undefined;
+  if (selected && registered) {
+    return registered
+      .build(selected[1], createBuildContext(registry))
+      .pipe(
+        Effect.mapError((error) => mapCustomBuildError(selected[0], error)),
+      );
+  }
+
+  if (selected) {
+    return Effect.fail(
+      new BuildError(
+        `Unknown input component '${selected[0]}' — is the registry passed to buildPipeline?`,
+      ),
+    );
+  }
+
   return Effect.fail(new BuildError("No valid input configuration found"));
 };
 
@@ -195,6 +229,7 @@ const buildInputInternal = (
  */
 const buildProcessor = (
   config: ProcessorConfig,
+  registry?: ComponentRegistry,
 ): Effect.Effect<Processor<any>, BuildError> => {
   if (config.metadata) {
     return Effect.succeed(
@@ -257,7 +292,7 @@ const buildProcessor = (
       // Recursively build nested processors
       const nestedProcessors: Processor<any, any>[] = yield* Effect.forEach(
         [...branchConfig.processors],
-        buildProcessor,
+        (nestedConfig) => buildProcessor(nestedConfig, registry),
         { concurrency: 1 },
       );
       return createBranchProcessor({ processors: nestedProcessors });
@@ -274,7 +309,7 @@ const buildProcessor = (
           Effect.gen(function* () {
             const processors: Processor<any, any>[] = yield* Effect.forEach(
               [...switchCase.processors],
-              buildProcessor,
+              (nestedConfig) => buildProcessor(nestedConfig, registry),
               { concurrency: 1 },
             );
             return {
@@ -320,14 +355,39 @@ const buildProcessor = (
     return Effect.succeed(createAssertProcessor((config as any).assert));
   }
 
+  const selected = configuredComponent(config);
+  const registered = selected ? registry?.getProcessor(selected[0]) : undefined;
+  if (selected && registered) {
+    return registered
+      .build(selected[1], createBuildContext(registry))
+      .pipe(
+        Effect.mapError((error) => mapCustomBuildError(selected[0], error)),
+      );
+  }
+
+  if (selected) {
+    return Effect.fail(
+      new BuildError(
+        `Unknown processor component '${selected[0]}' — is the registry passed to buildPipeline?`,
+      ),
+    );
+  }
+
   return Effect.fail(new BuildError("No valid processor configuration found"));
 };
+
+const createBuildContext = (
+  registry?: ComponentRegistry,
+): ComponentBuildContext => ({
+  buildProcessor: (config) => buildProcessor(config, registry),
+});
 
 /**
  * Build output from configuration (Bento style)
  */
 const buildOutput = (
   config: OutputConfig,
+  registry?: ComponentRegistry,
 ): Effect.Effect<Output<any>, BuildError> => {
   if (config.redis_streams) {
     // Parse redis URL (redis://host:port or redis://localhost:6379)
@@ -419,6 +479,24 @@ const buildOutput = (
     return createCaptureOutput((config as any).capture || {});
   }
 
+  const selected = configuredComponent(config);
+  const registered = selected ? registry?.getOutput(selected[0]) : undefined;
+  if (selected && registered) {
+    return registered
+      .build(selected[1], createBuildContext(registry))
+      .pipe(
+        Effect.mapError((error) => mapCustomBuildError(selected[0], error)),
+      );
+  }
+
+  if (selected) {
+    return Effect.fail(
+      new BuildError(
+        `Unknown output component '${selected[0]}' — is the registry passed to buildPipeline?`,
+      ),
+    );
+  }
+
   return Effect.fail(new BuildError("No valid output configuration found"));
 };
 
@@ -428,6 +506,7 @@ const buildOutput = (
 export const buildPipeline = (
   config: PipelineConfig,
   debug = false,
+  registry?: ComponentRegistry,
 ): Effect.Effect<Pipeline<any>, BuildError> => {
   return Effect.gen(function* () {
     if (debug) {
@@ -436,18 +515,20 @@ export const buildPipeline = (
       );
     }
 
-    const input = yield* buildInput(config.input, debug);
+    const input = yield* buildInput(config.input, debug, registry);
 
     const processorConfigs = config.pipeline?.processors || [];
-    const processors = yield* Effect.forEach(processorConfigs, buildProcessor, {
-      concurrency: 1,
-    });
+    const processors = yield* Effect.forEach(
+      processorConfigs,
+      (processorConfig) => buildProcessor(processorConfig, registry),
+      { concurrency: 1 },
+    );
 
-    const primaryOutput = yield* buildOutput(config.output);
+    const primaryOutput = yield* buildOutput(config.output, registry);
     let output = primaryOutput;
 
     if (config.dlq) {
-      const dlqOutput = yield* buildOutput(config.dlq.output);
+      const dlqOutput = yield* buildOutput(config.dlq.output, registry);
       output = withDLQ({
         output: primaryOutput,
         dlq: dlqOutput,
@@ -455,29 +536,8 @@ export const buildPipeline = (
       });
     }
 
-    // Generate name from input and output types
-    const inputType = config.input.aws_sqs
-      ? "aws_sqs"
-      : config.input.redis_streams
-        ? "redis_streams"
-        : config.input.http
-          ? "http"
-          : (config.input as any).file
-            ? "file"
-            : (config.input as any).stdin
-              ? "stdin"
-          : (config.input as any).generate
-            ? "generate"
-            : "unknown";
-    const outputType = config.output.redis_streams
-      ? "redis_streams"
-      : config.output.aws_sqs
-        ? "aws_sqs"
-        : config.output.http
-          ? "http"
-          : (config.output as any).capture
-            ? "capture"
-            : "unknown";
+    const inputType = configuredComponent(config.input)?.[0] ?? "unknown";
+    const outputType = configuredComponent(config.output)?.[0] ?? "unknown";
 
     const maxConcurrentMessages =
       config.pipeline?.backpressure?.max_concurrent_messages;
