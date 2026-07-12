@@ -12,6 +12,8 @@ export interface Message<A = unknown> {
   readonly content: A;
   readonly metadata: Record<string, unknown>;
   readonly timestamp: number;
+  /** Mark the source message as handled after all downstream sends succeed. */
+  readonly ack?: () => Effect.Effect<void, unknown>;
   readonly correlationId?: string;
   readonly trace?: {
     readonly spanId: string;

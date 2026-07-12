@@ -96,6 +96,10 @@ export const run = <E, R>(
               ),
             ),
 
+            // Acknowledge the original input only after every fan-out send
+            // succeeds. DLQ-wrapped outputs succeed only after DLQ delivery.
+            Effect.flatMap(() => (msg.ack ? msg.ack() : Effect.void)),
+
             // Handle errors per message
             Effect.catchAll((error) =>
               Effect.gen(function* () {
