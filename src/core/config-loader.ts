@@ -39,9 +39,15 @@ const validateExactlyOneComponent = (
     .map(([key]) => key)
     .sort();
 
-  return configuredComponents.length === 1
-    ? true
-    : `${label} must configure exactly one component; found: ${configuredComponents.join(", ") || "none"}`;
+  if (configuredComponents.length === 1) return true;
+
+  const found = configuredComponents.join(", ") || "none";
+  const unknownComponentHint =
+    configuredComponents.length === 0
+      ? " — check for unknown or misspelled component names"
+      : "";
+
+  return `${label} must configure exactly one component; found: ${found}${unknownComponentHint}`;
 };
 
 /**

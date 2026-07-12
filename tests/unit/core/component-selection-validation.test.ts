@@ -1,7 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { Effect, Either } from "effect";
 import * as S from "effect/Schema";
-import { PipelineConfigSchema } from "../../../src/core/config-loader.js";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import * as yaml from "yaml";
+import {
+  loadConfig,
+  PipelineConfigSchema,
+} from "../../../src/core/config-loader.js";
 
 const validInput = {
   generate: {
@@ -11,6 +18,7 @@ const validInput = {
 };
 
 const validOutput = { capture: {} };
+const tempDirs: string[] = [];
 
 const decode = (config: unknown) =>
   Effect.runSync(Effect.either(S.decodeUnknown(PipelineConfigSchema)(config)));
@@ -23,6 +31,20 @@ const expectValidationError = (config: unknown, message: string) => {
     expect(String(result.left)).toContain(message);
   }
 };
+
+const loadYamlConfig = async (config: unknown) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cascade-config-"));
+  tempDirs.push(dir);
+  const configPath = path.join(dir, "config.yaml");
+  await fs.writeFile(configPath, yaml.stringify(config), "utf8");
+  return Effect.runPromise(Effect.either(loadConfig(configPath)));
+};
+
+afterEach(async () => {
+  await Promise.all(
+    tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true })),
+  );
+});
 
 describe("component selection validation", () => {
   it("accepts exactly one input, processor, and output component", () => {
@@ -42,7 +64,23 @@ describe("component selection validation", () => {
     );
   });
 
+  it("hints at unknown component names when loading YAML", async () => {
+    const result = await loadYamlConfig({
+      input: { kafka: { brokers: ["localhost:9092"] } },
+      output: validOutput,
+    });
+
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isLeft(result)) {
+      expect(result.left.message).toContain(
+        "Input must configure exactly one component; found: none — check for unknown or misspelled component names",
+      );
+    }
+  });
+
   it("rejects multiple input components and names them", () => {
+    // If either component payload is invalid, its field error may take
+    // precedence over this selection conflict.
     expectValidationError(
       {
         input: { ...validInput, stdin: {} },
