@@ -10,6 +10,11 @@ succeeds but acknowledgement fails. Use the
 [dedupe processor](../processors/dedupe.md) when consumers require duplicate
 suppression.
 
+Configure an SQS redrive policy with an appropriate `maxReceiveCount` as a
+backstop for poison messages, including messages whose processors fail on every
+delivery. Cascade's pipeline DLQ wraps output failures; it does not replace the
+queue's redrive policy for persistent processor failures.
+
 ## Overview
 
 Reads messages from AWS SQS queues with support for LocalStack. Uses long polling for efficient message retrieval and includes configurable connection settings for production environments.

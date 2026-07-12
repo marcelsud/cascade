@@ -73,7 +73,7 @@ export class SqsInputError extends ComponentError {
 export interface SqsClientLike {
   readonly send: (
     command: ReceiveMessageCommand | DeleteMessageCommand,
-  ) => Promise<any>;
+  ) => Promise<unknown>;
   readonly destroy: () => void;
 }
 
@@ -129,7 +129,15 @@ export const createSqsInput = (
         });
 
         const response = await client.send(command);
-        return response.Messages || [];
+        if (
+          response !== null &&
+          typeof response === "object" &&
+          "Messages" in response &&
+          Array.isArray(response.Messages)
+        ) {
+          return response.Messages as SQSMessage[];
+        }
+        return [];
       },
       catch: (error) =>
         new SqsInputError(
@@ -228,10 +236,8 @@ export const createSqsInput = (
       // Convert messages. Deletion is deferred to the pipeline acknowledgement
       // after all downstream processing and output delivery succeeds.
       const [messages, processDuration] = yield* measureDuration(
-        Effect.forEach(
-          sqsMessages,
-          (sqsMsg) => Effect.succeed(convertMessage(sqsMsg)),
-          { concurrency: 5 },
+        Effect.forEach(sqsMessages, (sqsMsg) =>
+          Effect.succeed(convertMessage(sqsMsg)),
         ),
       );
 

@@ -166,6 +166,42 @@ describe("SQS at-least-once acknowledgement", () => {
     expect(acknowledgements).toBe(1);
   });
 
+  it("acknowledges an intentionally filtered message", async () => {
+    let acknowledgements = 0;
+    let sends = 0;
+    const message = {
+      ...createMessage({ value: 1 }),
+      ack: () =>
+        Effect.sync(() => {
+          acknowledgements += 1;
+        }),
+    };
+
+    const result = await Effect.runPromise(
+      run({
+        name: "filtered-ack-test",
+        input: { name: "one", stream: Stream.make(message) },
+        processors: [
+          {
+            name: "filter",
+            process: () => Effect.succeed([]),
+          },
+        ],
+        output: {
+          name: "unused",
+          send: () =>
+            Effect.sync(() => {
+              sends += 1;
+            }),
+        },
+      }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(sends).toBe(0);
+    expect(acknowledgements).toBe(1);
+  });
+
   it("acknowledges after a failed primary send reaches the DLQ", async () => {
     let acknowledgements = 0;
     const message = {
