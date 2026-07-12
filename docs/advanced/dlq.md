@@ -14,6 +14,12 @@ Exactly one destination must be configured under `dlq.output`.
 
 - `max_retries`: Number of retry attempts before sending to the DLQ (default: 3). Set it to `0` to send to the DLQ immediately after the initial failure.
 
+DLQ retries wrap the primary output's complete `send` operation. Outputs with
+their own retry behavior, such as HTTP and Redis outputs, therefore retry
+internally during each DLQ-level attempt. For an HTTP output configured with
+`X` retries and a DLQ configured with `Y` retries, the destination may receive
+up to `(X + 1) × (Y + 1)` send attempts.
+
 ## Examples
 
 ### Basic DLQ Configuration
@@ -106,7 +112,7 @@ When a message fails and is sent to the DLQ, it includes additional metadata:
 | `dlqReason` | string | Error message that caused the failure |
 | `dlqStack` | string | Full error stack trace for debugging |
 | `dlqTimestamp` | number | Unix timestamp when failure occurred |
-| `dlqAttempts` | number | Total number of retry attempts made |
+| `dlqAttempts` | number | Total send attempts, including the initial attempt and all retries |
 | `originalMessageId` | string | ID of the original message |
 
 ### Example DLQ Message

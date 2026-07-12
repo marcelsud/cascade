@@ -42,5 +42,5 @@ dlq:
 # - dlqReason: "Error message"
 # - dlqStack: "Stack trace"
 # - dlqTimestamp: 1234567890
-# - dlqAttempts: 4
+# - dlqAttempts: 4 (initial send plus 3 retries)
 # - originalMessageId: "original-msg-id"

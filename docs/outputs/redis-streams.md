@@ -54,9 +54,6 @@ output:
     url: "redis://production-redis:6379"
     stream: "events"
     max_length: 10000
-
-    # Connection configuration (inherited from parent config)
-    max_retries: 3
 ```
 
 ## Features

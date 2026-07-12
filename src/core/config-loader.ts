@@ -465,8 +465,12 @@ const PipelineConfigEnvelopeSchema = S.Struct({
     }),
   ),
   output: S.Unknown,
-  // Kept opaque for compatibility with the stacked DLQ configuration work.
-  dlq: S.optional(S.Unknown),
+  dlq: S.optional(
+    S.Struct({
+      output: S.Unknown,
+      max_retries: S.optional(S.Unknown),
+    }),
+  ),
 });
 
 /**

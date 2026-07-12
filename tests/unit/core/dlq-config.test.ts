@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { Effect, Either } from "effect";
 import * as S from "effect/Schema";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import * as yaml from "yaml";
 import {
   PipelineConfigSchema,
   loadConfig,
@@ -17,6 +21,7 @@ const baseConfig = {
   },
   output: { capture: {} },
 };
+const tempDirs: string[] = [];
 
 const decode = (config: unknown) =>
   Effect.runSync(Effect.either(S.decodeUnknown(PipelineConfigSchema)(config)));
@@ -28,6 +33,20 @@ const expectInvalid = (config: unknown, message?: string) => {
     expect(String(result.left)).toContain(message);
   }
 };
+
+const loadYamlConfig = async (config: unknown) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cascade-config-"));
+  tempDirs.push(dir);
+  const configPath = path.join(dir, "config.yaml");
+  await fs.writeFile(configPath, yaml.stringify(config), "utf8");
+  return Effect.runPromise(Effect.either(loadConfig(configPath)));
+};
+
+afterEach(async () => {
+  await Promise.all(
+    tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true })),
+  );
+});
 
 describe("DLQ pipeline configuration", () => {
   it("accepts a DLQ output with the default retry count", () => {
@@ -74,6 +93,22 @@ describe("DLQ pipeline configuration", () => {
 
   it("rejects a DLQ without an output", () => {
     expectInvalid({ ...baseConfig, dlq: { max_retries: 3 } });
+  });
+
+  it("rejects misspelled DLQ fields when loading YAML", async () => {
+    const result = await loadYamlConfig({
+      ...baseConfig,
+      dlq: {
+        max_retrys: 5,
+        output: { capture: {} },
+      },
+    });
+
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isLeft(result)) {
+      expect(result.left.message).toContain("max_retrys");
+      expect(result.left.message).toContain("is unexpected");
+    }
   });
 
   it("rejects an empty DLQ output", () => {
