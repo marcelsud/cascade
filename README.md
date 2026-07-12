@@ -217,6 +217,8 @@ dlq:
 
 ## Components
 
+Each `input`, `output`, and processor list entry must configure exactly one component. The same rule applies to processors nested inside `branch` and `switch`. Empty or ambiguous entries are rejected during configuration loading with an error that names the configured component keys.
+
 ### 📥 Inputs
 
 - **[HTTP](docs/inputs/http.md)** - Receive webhook POST requests

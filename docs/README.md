@@ -2,6 +2,25 @@
 
 Complete documentation for all inputs, processors, outputs, and advanced features.
 
+## Component Selection Rule
+
+An input, output, or processor entry must contain exactly one component key. This validation is recursive, so every processor inside `branch.processors` and `switch.cases[].processors` follows the same rule.
+
+```yaml
+# Valid
+input:
+  http:
+    port: 8080
+
+# Invalid: both http and stdin are configured
+input:
+  http:
+    port: 8080
+  stdin: {}
+```
+
+Empty selections and multiple component keys are rejected before the pipeline is built. Conflict errors list the detected keys to make ambiguous YAML easy to correct.
+
 ## 📥 Inputs
 
 Message sources for your pipelines:
