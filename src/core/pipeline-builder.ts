@@ -468,19 +468,21 @@ export const buildPipeline = (
             ? "capture"
             : "unknown";
 
+    const maxConcurrentMessages =
+      config.pipeline?.backpressure?.max_concurrent_messages;
+    const maxConcurrentOutputs =
+      config.pipeline?.backpressure?.max_concurrent_outputs;
+    const backpressure =
+      maxConcurrentMessages !== undefined || maxConcurrentOutputs !== undefined
+        ? { maxConcurrentMessages, maxConcurrentOutputs }
+        : undefined;
+
     return {
       name: `${inputType}-to-${outputType}`,
       input,
       processors,
       output,
-      backpressure: config.pipeline?.backpressure
-        ? {
-            maxConcurrentMessages:
-              config.pipeline.backpressure.max_concurrent_messages,
-            maxConcurrentOutputs:
-              config.pipeline.backpressure.max_concurrent_outputs,
-          }
-        : undefined,
+      backpressure,
     };
   });
 };

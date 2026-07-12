@@ -9,17 +9,18 @@ input:
     max_number_of_messages: 10
     wait_time_seconds: 20
 
-processors:
-  - metadata:
-      correlation_id_field: "correlationId"
+pipeline:
+  processors:
+    - metadata:
+        correlation_id_field: "correlationId"
 
-  - mapping:
-      expression: |
-        {
-          "id": $message.id,
-          "processedData": $uppercase(name),
-          "timestamp": $message.timestamp
-        }
+    - mapping:
+        expression: |
+          {
+            "id": $message.id,
+            "processedData": $uppercase(name),
+            "timestamp": $message.timestamp
+          }
 
 output:
   redis_streams:

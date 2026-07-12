@@ -40,7 +40,15 @@ output:
 | `max_concurrent_messages` | positive integer | 10 | Maximum messages processed concurrently through pipeline |
 | `max_concurrent_outputs` | positive integer | 5 | Maximum concurrent output send operations |
 
-Both values are optional. When configured, zero, negative, and fractional values are rejected during configuration loading.
+Both values are optional and may be configured independently. An omitted value
+uses its runtime default, and an empty `backpressure: {}` block behaves as if
+backpressure were not configured. When configured, zero, negative, and
+fractional values are rejected during configuration loading.
+
+Unknown keys at the configuration root, under `pipeline`, or inside
+`pipeline.backpressure` are rejected instead of being silently ignored. Custom
+component and processor payloads continue to be validated by their component
+schemas.
 
 ## Examples
 

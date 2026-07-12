@@ -14,12 +14,13 @@ input:
     request_timeout: 30000              # 30 second request timeout
     connection_timeout: 5000            # 5 second connection timeout
 
-processors:
-  - metadata:
-      correlation_id_field: "correlationId"
+pipeline:
+  processors:
+    - metadata:
+        correlation_id_field: "correlationId"
 
-  - logging:
-      level: "info"
+    - log:
+        level: "info"
 
 output:
   redis_streams:
