@@ -8,28 +8,33 @@ Send failed messages to a separate queue after exhausting retries. DLQ support h
 
 ### Required Fields
 
-At least one DLQ output must be configured under the `dlq:` section in your pipeline configuration.
+Exactly one destination must be configured under `dlq.output`.
 
 ### Optional Fields
 
-- `max_retries`: Number of retry attempts before sending to DLQ (configured on output, default: 3)
-- `retry_schedule`: Retry backoff strategy (default: "exponential")
+- `max_retries`: Number of retry attempts before sending to the DLQ (default: 3). Set it to `0` to send to the DLQ immediately after the initial failure.
+
+DLQ retries wrap the primary output's complete `send` operation. Outputs with
+their own retry behavior, such as HTTP and Redis outputs, therefore retry
+internally during each DLQ-level attempt. For an HTTP output configured with
+`X` retries and a DLQ configured with `Y` retries, the destination may receive
+up to `(X + 1) × (Y + 1)` send attempts.
 
 ## Examples
 
 ### Basic DLQ Configuration
 
 ```yaml
-# Primary output with retries
 output:
   aws_sqs:
     url: "http://localhost:4566/000000000000/primary-queue"
-    max_retries: 3  # Retry up to 3 times before DLQ
 
 # Dead Letter Queue
 dlq:
-  aws_sqs:
-    url: "http://localhost:4566/000000000000/dlq-queue"
+  max_retries: 3
+  output:
+    aws_sqs:
+      url: "http://localhost:4566/000000000000/dlq-queue"
 ```
 
 ### DLQ with Redis Streams
@@ -39,26 +44,27 @@ output:
   redis_streams:
     url: "redis://localhost:6379"
     stream: "processed-messages"
-    max_retries: 3
 
 dlq:
-  redis_streams:
-    url: "redis://localhost:6379"
-    stream: "failed-messages"
+  max_retries: 3
+  output:
+    redis_streams:
+      url: "redis://localhost:6379"
+      stream: "failed-messages"
 ```
 
-### Custom Retry Configuration
+### Custom Retry Count
 
 ```yaml
 output:
   aws_sqs:
     url: "http://localhost:4566/000000000000/primary-queue"
-    max_retries: 5  # More retries for intermittent failures
-    retry_schedule: "exponential"  # Exponential backoff (default)
 
 dlq:
-  aws_sqs:
-    url: "http://localhost:4566/000000000000/dlq-queue"
+  max_retries: 5
+  output:
+    aws_sqs:
+      url: "http://localhost:4566/000000000000/dlq-queue"
 ```
 
 ### Mixed Output Types
@@ -69,12 +75,13 @@ output:
   redis_streams:
     url: "redis://localhost:6379"
     stream: "processed"
-    max_retries: 3
 
 # Send failures to SQS for inspection
 dlq:
-  aws_sqs:
-    url: "http://localhost:4566/000000000000/dlq-queue"
+  max_retries: 3
+  output:
+    aws_sqs:
+      url: "http://localhost:4566/000000000000/dlq-queue"
 ```
 
 ## Features
@@ -105,7 +112,7 @@ When a message fails and is sent to the DLQ, it includes additional metadata:
 | `dlqReason` | string | Error message that caused the failure |
 | `dlqStack` | string | Full error stack trace for debugging |
 | `dlqTimestamp` | number | Unix timestamp when failure occurred |
-| `dlqAttempts` | number | Total number of retry attempts made |
+| `dlqAttempts` | number | Total send attempts, including the initial attempt and all retries |
 | `originalMessageId` | string | ID of the original message |
 
 ### Example DLQ Message
@@ -207,13 +214,13 @@ output:
 ### DLQ messages not appearing
 
 - Verify DLQ output is configured correctly
-- Check max_retries is set on primary output
+- Check `dlq.max_retries` and `dlq.output`
 - Ensure DLQ output connection is working
 - Review logs for DLQ send errors
 
 ### Too many messages in DLQ
 
-- Increase max_retries if failures are transient
+- Increase `dlq.max_retries` if failures are transient
 - Fix underlying issue causing failures
 - Check downstream system health
 - Review error patterns in `dlqReason`

@@ -57,6 +57,9 @@ export const withDLQ = <E>(config: DLQConfig<E>): Output<E | DLQError> => {
   const maxRetries = config.maxRetries ?? 3;
   const retrySchedule =
     config.retrySchedule ?? Schedule.exponential("1 second");
+  const closeOutputs = [config.output.close, config.dlq?.close].filter(
+    (close): close is NonNullable<typeof close> => close !== undefined,
+  );
 
   return {
     name: `${config.output.name}-with-dlq`,
@@ -101,7 +104,17 @@ export const withDLQ = <E>(config: DLQConfig<E>): Output<E | DLQError> => {
           ),
         );
       }),
-    close: config.output.close,
+    close:
+      closeOutputs.length > 0
+        ? () =>
+            Effect.all(
+              closeOutputs.map((close) => close()),
+              {
+                concurrency: "unbounded",
+                discard: true,
+              },
+            )
+        : undefined,
   };
 };
 

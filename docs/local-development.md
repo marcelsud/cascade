@@ -114,10 +114,12 @@ output:
 
 ```yaml
 dlq:
-  aws_sqs:
-    url: "http://localhost:4566/000000000000/dlq-queue"
-    region: "us-east-1"
-    endpoint: "http://localhost:4566"
+  max_retries: 3
+  output:
+    aws_sqs:
+      url: "http://localhost:4566/000000000000/dlq-queue"
+      region: "us-east-1"
+      endpoint: "http://localhost:4566"
 ```
 
 ## Docker Commands Reference

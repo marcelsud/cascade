@@ -419,6 +419,11 @@ const OutputConfigSchema = S.Struct({
   // postgres: S.optional(PostgresOutputSchema),
 }).pipe(S.filter((config) => validateExactlyOneComponent("Output", config)));
 
+const DLQConfigSchema = S.Struct({
+  output: OutputConfigSchema,
+  max_retries: S.optional(S.Int.pipe(S.nonNegative())),
+});
+
 /**
  * Complete pipeline configuration schema (Bento style)
  */
@@ -436,6 +441,7 @@ export const PipelineConfigSchema = S.Struct({
     }),
   ),
   output: OutputConfigSchema,
+  dlq: S.optional(DLQConfigSchema),
 });
 
 /**
@@ -459,8 +465,12 @@ const PipelineConfigEnvelopeSchema = S.Struct({
     }),
   ),
   output: S.Unknown,
-  // Kept opaque for compatibility with the stacked DLQ configuration work.
-  dlq: S.optional(S.Unknown),
+  dlq: S.optional(
+    S.Struct({
+      output: S.Unknown,
+      max_retries: S.optional(S.Unknown),
+    }),
+  ),
 });
 
 /**
