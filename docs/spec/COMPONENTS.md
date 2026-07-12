@@ -645,6 +645,10 @@ const withConnection = Effect.acquireRelease(
 
 ## Configuration Schema
 
+### Component Selection Invariant
+
+`InputConfigSchema` and `OutputConfigSchema` require exactly one configured component. Each `ProcessorConfigSchema` entry has the same requirement, including processor entries nested recursively inside branches and switch cases. A configuration with zero or multiple component keys fails schema decoding before the builder runs.
+
 ### Adding to config-loader.ts
 
 ```typescript
