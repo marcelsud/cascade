@@ -1,5 +1,20 @@
 # AWS SQS Input
 
+SQS input uses at-least-once delivery. Cascade deletes a received message only
+after its processors and every downstream output send succeed. A successful
+DLQ send also counts as handled; output or DLQ failure leaves the message in
+flight so SQS can redeliver it after the visibility timeout.
+
+At-least-once delivery can produce duplicates, particularly when processing
+succeeds but acknowledgement fails. Use the
+[dedupe processor](../processors/dedupe.md) when consumers require duplicate
+suppression.
+
+Configure an SQS redrive policy with an appropriate `maxReceiveCount` as a
+backstop for poison messages, including messages whose processors fail on every
+delivery. Cascade's pipeline DLQ wraps output failures; it does not replace the
+queue's redrive policy for persistent processor failures.
+
 ## Overview
 
 Reads messages from AWS SQS queues with support for LocalStack. Uses long polling for efficient message retrieval and includes configurable connection settings for production environments.
@@ -46,8 +61,8 @@ input:
 
     # Production-grade connection configuration
     max_attempts: 5
-    request_timeout: 30000    # 30 seconds
-    connection_timeout: 5000  # 5 seconds
+    request_timeout: 30000 # 30 seconds
+    connection_timeout: 5000 # 5 seconds
 ```
 
 ## Features

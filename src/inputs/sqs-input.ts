@@ -70,11 +70,19 @@ export class SqsInputError extends ComponentError {
   }
 }
 
+export interface SqsClientLike {
+  readonly send: (
+    command: ReceiveMessageCommand | DeleteMessageCommand,
+  ) => Promise<unknown>;
+  readonly destroy: () => void;
+}
+
 /**
  * Create an SQS input source
  */
 export const createSqsInput = (
   config: SqsInputConfig,
+  clientOverride?: SqsClientLike,
 ): Input<SqsInputError> => {
   // Validate configuration synchronously at creation time
   Effect.runSync(
@@ -85,22 +93,24 @@ export const createSqsInput = (
     ),
   );
 
-  const client = new SQSClient({
-    region: config.region || "us-east-1",
-    endpoint: config.endpoint,
-    credentials: config.endpoint
-      ? {
-          accessKeyId: "test",
-          secretAccessKey: "test",
-        }
-      : undefined,
-    maxAttempts: config.maxAttempts ?? 3,
-    requestHandler: new NodeHttpHandler({
-      requestTimeout: config.requestTimeout ?? 0,
-      connectionTimeout: config.connectionTimeout ?? 1000,
-      socketTimeout: config.requestTimeout ?? 0,
-    }),
-  });
+  const client: SqsClientLike =
+    clientOverride ??
+    (new SQSClient({
+      region: config.region || "us-east-1",
+      endpoint: config.endpoint,
+      credentials: config.endpoint
+        ? {
+            accessKeyId: "test",
+            secretAccessKey: "test",
+          }
+        : undefined,
+      maxAttempts: config.maxAttempts ?? 3,
+      requestHandler: new NodeHttpHandler({
+        requestTimeout: config.requestTimeout ?? 0,
+        connectionTimeout: config.connectionTimeout ?? 1000,
+        socketTimeout: config.requestTimeout ?? 0,
+      }),
+    }) as SqsClientLike);
 
   // Metrics tracking
   const metrics = new MetricsAccumulator("sqs-input");
@@ -119,7 +129,15 @@ export const createSqsInput = (
         });
 
         const response = await client.send(command);
-        return response.Messages || [];
+        if (
+          response !== null &&
+          typeof response === "object" &&
+          "Messages" in response &&
+          Array.isArray(response.Messages)
+        ) {
+          return response.Messages as SQSMessage[];
+        }
+        return [];
       },
       catch: (error) =>
         new SqsInputError(
@@ -172,15 +190,28 @@ export const createSqsInput = (
       content = { raw: sqsMsg.Body };
     }
 
-    return createMessage(content, {
-      source: "sqs-input",
-      externalId: sqsMsg.MessageId,
-      receivedAt: new Date().toISOString(),
-      sqsMessageId: sqsMsg.MessageId,
-      receiptHandle: sqsMsg.ReceiptHandle,
-      attributes: sqsMsg.Attributes,
-      messageAttributes: sqsMsg.MessageAttributes,
-    });
+    const receiptHandle = sqsMsg.ReceiptHandle;
+    return {
+      ...createMessage(content, {
+        source: "sqs-input",
+        externalId: sqsMsg.MessageId,
+        receivedAt: new Date().toISOString(),
+        sqsMessageId: sqsMsg.MessageId,
+        receiptHandle,
+        attributes: sqsMsg.Attributes,
+        messageAttributes: sqsMsg.MessageAttributes,
+      }),
+      ack: receiptHandle
+        ? () =>
+            deleteMessage(receiptHandle).pipe(
+              Effect.tapError(() =>
+                Effect.sync(() => {
+                  metrics.recordError();
+                }),
+              ),
+            )
+        : undefined,
+    };
   };
 
   /**
@@ -202,29 +233,11 @@ export const createSqsInput = (
         `Received ${sqsMessages.length} messages from SQS`,
       );
 
-      // Convert and delete messages
+      // Convert messages. Deletion is deferred to the pipeline acknowledgement
+      // after all downstream processing and output delivery succeeds.
       const [messages, processDuration] = yield* measureDuration(
-        Effect.forEach(
-          sqsMessages,
-          (sqsMsg) =>
-            Effect.gen(function* () {
-              const message = convertMessage(sqsMsg);
-
-              // Delete from queue after conversion
-              if (sqsMsg.ReceiptHandle) {
-                yield* deleteMessage(sqsMsg.ReceiptHandle).pipe(
-                  Effect.catchAll((error) => {
-                    metrics.recordError();
-                    return Effect.logError(
-                      `Failed to delete message ${sqsMsg.MessageId}: ${error}`,
-                    );
-                  }),
-                );
-              }
-
-              return message;
-            }),
-          { concurrency: 5 },
+        Effect.forEach(sqsMessages, (sqsMsg) =>
+          Effect.succeed(convertMessage(sqsMsg)),
         ),
       );
 
