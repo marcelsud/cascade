@@ -54,6 +54,15 @@ Use `registerInput` and `registerOutput` with the same definition shape. Input f
 
 Registries are explicit instances rather than global state. Pass the same registry to `loadConfig` and `buildPipeline`. This keeps registrations isolated between applications and tests.
 
+If a registration conflicts with a built-in name, `loadConfig` returns a
+`ConfigValidationError` in its Effect error channel. If a configuration was
+loaded with a registry but that registry is omitted from `buildPipeline`, the
+build fails with the unknown component name and a reminder to pass the registry.
+
+Registry extension is currently a library API. The bundled CLI does not load
+application-defined registrations, so custom components must be run through a
+library entry point that passes the registry explicitly.
+
 Registered schemas participate in the normal configuration rules:
 
 - configuration is validated before pipeline construction;

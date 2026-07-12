@@ -111,10 +111,15 @@ export class ComponentRegistry {
     definitions: Map<string, Component>,
     definition: Component,
   ): void {
-    const name = (definition as { readonly name: string }).name.trim();
-    if (name.length === 0) {
+    const name = (definition as { readonly name: string }).name;
+    if (name.trim().length === 0) {
       throw new ComponentRegistrationError(
         `Cannot register ${kind} component with an empty name`,
+      );
+    }
+    if (name !== name.trim()) {
+      throw new ComponentRegistrationError(
+        `Cannot register ${kind} component '${name}': names must not have leading or trailing whitespace`,
       );
     }
     if (definitions.has(name)) {

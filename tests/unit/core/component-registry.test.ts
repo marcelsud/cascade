@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { Effect, Stream } from "effect";
+import { Effect, Either, Stream } from "effect";
 import * as Schema from "effect/Schema";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -9,6 +9,7 @@ import {
   createComponentRegistry,
 } from "../../../src/core/component-registry.js";
 import {
+  ConfigValidationError,
   createPipelineConfigSchema,
   loadConfig,
 } from "../../../src/core/config-loader.js";
@@ -167,6 +168,79 @@ dlq:
     expect(() => createPipelineConfigSchema(registry)).toThrow(
       "the name is reserved by a built-in component",
     );
+  });
+
+  it("returns registration conflicts through loadConfig's error channel", async () => {
+    const registry = createComponentRegistry().registerOutput({
+      name: "http",
+      schema: Schema.Struct({}),
+      build: () =>
+        Effect.succeed({ name: "custom-http", send: () => Effect.void }),
+    });
+    const directory = await fs.mkdtemp(
+      path.join(os.tmpdir(), "cascade-registry-"),
+    );
+    createdPaths.push(directory);
+    const configPath = path.join(directory, "pipeline.yaml");
+    await fs.writeFile(
+      configPath,
+      "input:\n  generate:\n    count: 1\n    template: {}\noutput:\n  capture: {}\n",
+      "utf8",
+    );
+
+    const result = await Effect.runPromise(
+      Effect.either(loadConfig(configPath, registry)),
+    );
+
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isLeft(result)) {
+      expect(result.left).toBeInstanceOf(ConfigValidationError);
+      expect(result.left.message).toContain(
+        "the name is reserved by a built-in component",
+      );
+    }
+  });
+
+  it("names a custom component when buildPipeline is missing its registry", async () => {
+    const registry = createComponentRegistry().registerInput({
+      name: "values",
+      schema: Schema.Struct({ values: Schema.Array(Schema.String) }),
+      build: (config) =>
+        Effect.succeed({
+          name: "values-input",
+          stream: Stream.fromIterable(config.values.map(createMessage)),
+        }),
+    });
+    const schema = createPipelineConfigSchema(registry);
+    const config = Schema.decodeUnknownSync(schema)({
+      input: { values: { values: ["test"] } },
+      output: { capture: {} },
+    });
+
+    const result = await Effect.runPromise(
+      Effect.either(buildPipeline(config)),
+    );
+
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isLeft(result)) {
+      expect(result.left.message).toBe(
+        "Unknown input component 'values' — is the registry passed to buildPipeline?",
+      );
+    }
+  });
+
+  it("rejects component names with surrounding whitespace", () => {
+    expect(() =>
+      createComponentRegistry().registerProcessor({
+        name: " custom ",
+        schema: Schema.Struct({}),
+        build: () =>
+          Effect.succeed({
+            name: "custom",
+            process: (message) => Effect.succeed(message),
+          }),
+      }),
+    ).toThrow("names must not have leading or trailing whitespace");
   });
 
   it("keeps registries isolated", () => {

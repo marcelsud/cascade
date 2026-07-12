@@ -89,7 +89,10 @@ export const loadConfig = (
       Effect.mapError(validationError),
     );
 
-    const schema = createPipelineConfigSchema(registry);
+    const schema = yield* Effect.try({
+      try: () => createPipelineConfigSchema(registry),
+      catch: (error) => new ConfigValidationError(String(error)),
+    });
     const config = yield* pipe(
       Schema.decodeUnknown(schema)(interpolated),
       Effect.mapError(validationError),

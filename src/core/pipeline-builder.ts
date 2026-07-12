@@ -213,6 +213,14 @@ const buildInputInternal = (
       );
   }
 
+  if (selected) {
+    return Effect.fail(
+      new BuildError(
+        `Unknown input component '${selected[0]}' — is the registry passed to buildPipeline?`,
+      ),
+    );
+  }
+
   return Effect.fail(new BuildError("No valid input configuration found"));
 };
 
@@ -357,6 +365,14 @@ const buildProcessor = (
       );
   }
 
+  if (selected) {
+    return Effect.fail(
+      new BuildError(
+        `Unknown processor component '${selected[0]}' — is the registry passed to buildPipeline?`,
+      ),
+    );
+  }
+
   return Effect.fail(new BuildError("No valid processor configuration found"));
 };
 
@@ -471,6 +487,14 @@ const buildOutput = (
       .pipe(
         Effect.mapError((error) => mapCustomBuildError(selected[0], error)),
       );
+  }
+
+  if (selected) {
+    return Effect.fail(
+      new BuildError(
+        `Unknown output component '${selected[0]}' — is the registry passed to buildPipeline?`,
+      ),
+    );
   }
 
   return Effect.fail(new BuildError("No valid output configuration found"));
