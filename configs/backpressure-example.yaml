@@ -17,12 +17,12 @@ pipeline:
     max_concurrent_messages: 5          # Process max 5 messages concurrently
     max_concurrent_outputs: 2           # Send max 2 outputs concurrently
 
-processors:
-  - uppercase:
-      fields: ["name", "category"]
+  processors:
+    - uppercase:
+        fields: ["name", "category"]
 
-  - metadata:
-      correlation_id_field: "correlationId"
+    - metadata:
+        correlation_id_field: "correlationId"
 
 output:
   aws_sqs:

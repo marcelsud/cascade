@@ -37,8 +37,10 @@ output:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `max_concurrent_messages` | number | 10 | Maximum messages processed concurrently through pipeline |
-| `max_concurrent_outputs` | number | 5 | Maximum concurrent output send operations |
+| `max_concurrent_messages` | positive integer | 10 | Maximum messages processed concurrently through pipeline |
+| `max_concurrent_outputs` | positive integer | 5 | Maximum concurrent output send operations |
+
+Both values are optional. When configured, zero, negative, and fractional values are rejected during configuration loading.
 
 ## Examples
 
