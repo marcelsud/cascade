@@ -405,6 +405,12 @@ export const PipelineConfigSchema = S.Struct({
   pipeline: S.optional(
     S.Struct({
       processors: S.optional(S.Array(ProcessorConfigSchema)),
+      backpressure: S.optional(
+        S.Struct({
+          max_concurrent_messages: S.optional(S.Int.pipe(S.positive())),
+          max_concurrent_outputs: S.optional(S.Int.pipe(S.positive())),
+        }),
+      ),
     }),
   ),
   output: OutputConfigSchema,

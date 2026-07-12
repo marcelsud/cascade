@@ -473,6 +473,14 @@ export const buildPipeline = (
       input,
       processors,
       output,
+      backpressure: config.pipeline?.backpressure
+        ? {
+            maxConcurrentMessages:
+              config.pipeline.backpressure.max_concurrent_messages,
+            maxConcurrentOutputs:
+              config.pipeline.backpressure.max_concurrent_outputs,
+          }
+        : undefined,
     };
   });
 };
