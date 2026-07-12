@@ -30,6 +30,20 @@ export class ConfigValidationError {
   constructor(readonly message: string) {}
 }
 
+const validateExactlyOneComponent = (
+  label: string,
+  config: object,
+): true | string => {
+  const configuredComponents = Object.entries(config)
+    .filter(([, value]) => value !== undefined)
+    .map(([key]) => key)
+    .sort();
+
+  return configuredComponents.length === 1
+    ? true
+    : `${label} must configure exactly one component; found: ${configuredComponents.join(", ") || "none"}`;
+};
+
 /**
  * Schema for AWS SQS Input configuration (Bento style)
  */
@@ -146,7 +160,7 @@ const InputConfigSchema = S.Struct({
   generate: S.optional(GenerateInputSchema),
   // Future inputs can be added here:
   // kafka: S.optional(KafkaInputSchema),
-});
+}).pipe(S.filter((config) => validateExactlyOneComponent("Input", config)));
 
 /**
  * Schema for Metadata Processor (Bento style)
@@ -294,7 +308,9 @@ const ProcessorConfigSchema: ProcessorConfigSchema = S.suspend(
       javascript: S.optional(JavaScriptProcessorSchema),
       // Testing utilities
       assert: S.optional(AssertProcessorSchema),
-    }),
+    }).pipe(
+      S.filter((config) => validateExactlyOneComponent("Processor", config)),
+    ),
 );
 
 /**
@@ -395,7 +411,7 @@ const OutputConfigSchema = S.Struct({
   capture: S.optional(CaptureOutputSchema),
   // Future outputs can be added here:
   // postgres: S.optional(PostgresOutputSchema),
-});
+}).pipe(S.filter((config) => validateExactlyOneComponent("Output", config)));
 
 /**
  * Complete pipeline configuration schema (Bento style)
