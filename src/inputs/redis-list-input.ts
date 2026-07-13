@@ -228,6 +228,7 @@ export const createRedisListInput = (
 
   return {
     name: "redis-list-input",
+    getMetrics: () => metrics.getInputMetrics(),
     stream,
     close: () => Effect.promise(() => client.quit()),
   };

@@ -7,6 +7,7 @@ import * as Schema from "effect/Schema";
 import { randomUUID } from "node:crypto";
 import type { Input } from "../core/types.js";
 import { createMessage } from "../core/types.js";
+import { MetricsAccumulator } from "../core/metrics.js";
 
 export interface GenerateInputConfig {
   readonly count: number;
@@ -71,6 +72,7 @@ const replacePlaceholders = (template: unknown, index: number): unknown => {
 export const createGenerateInput = (config: GenerateInputConfig): Input => {
   const startIndex = config.startIndex ?? 0;
   const interval = config.interval ?? 0;
+  const metrics = new MetricsAccumulator("generate-input");
 
   // Create an array of indices to generate
   const indices = Array.from(
@@ -89,11 +91,13 @@ export const createGenerateInput = (config: GenerateInputConfig): Input => {
         // Generate message from template
         const content = replacePlaceholders(config.template, index);
 
-        return createMessage(content, {
+        const message = createMessage(content, {
           source: "generate-input",
           testIndex: index,
           generatedAt: new Date().toISOString(),
         });
+        metrics.recordProcessed();
+        return message;
       }),
     ),
   );
@@ -101,5 +105,6 @@ export const createGenerateInput = (config: GenerateInputConfig): Input => {
   return {
     name: "generate-input",
     stream,
+    getMetrics: () => metrics.getInputMetrics(),
   };
 };

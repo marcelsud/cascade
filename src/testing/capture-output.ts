@@ -4,6 +4,7 @@
  */
 import { Effect, Ref } from "effect";
 import type { Output, Message } from "../core/types.js";
+import { MetricsAccumulator } from "../core/metrics.js";
 
 export interface CaptureOutputConfig {
   readonly maxMessages?: number; // Limit captured messages (prevent memory issues)
@@ -52,6 +53,7 @@ export const createCaptureOutput = (
   Effect.gen(function* () {
     const maxMessages = config.maxMessages ?? 10000;
     const messagesRef = yield* Ref.make<Message[]>([]);
+    const metrics = new MetricsAccumulator("capture-output");
 
     return {
       name: "capture-output",
@@ -69,6 +71,7 @@ export const createCaptureOutput = (
           }
 
           yield* Ref.update(messagesRef, (msgs) => [...msgs, message]);
+          metrics.recordSent();
           yield* Effect.logDebug(`Captured message: ${message.id}`);
         }),
 
@@ -81,6 +84,8 @@ export const createCaptureOutput = (
         }),
 
       clear: () => Ref.set(messagesRef, []),
+
+      getMetrics: () => metrics.getOutputMetrics(),
 
       close: () =>
         Effect.gen(function* () {

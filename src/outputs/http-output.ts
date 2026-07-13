@@ -227,6 +227,7 @@ export const createHttpOutput = (
 
   return {
     name: "http-output",
+    getMetrics: () => metrics.getOutputMetrics(),
 
     send: (message: Message): Effect.Effect<void, HttpOutputError, never> =>
       Effect.gen(function* () {

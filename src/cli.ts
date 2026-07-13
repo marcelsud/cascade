@@ -188,6 +188,33 @@ const main = Effect.gen(function* () {
       }),
   );
 
+  if (result.metrics) {
+    const rows = [];
+    if (result.metrics.input) {
+      rows.push({
+        component: result.metrics.input.component,
+        type: "input",
+        processed: result.metrics.input.messagesProcessed,
+        dropped: result.metrics.input.messagesDropped,
+        sent: "-",
+        errors: result.metrics.input.errorsEncountered,
+        averageMs: result.metrics.input.averageDuration,
+      });
+    }
+    if (result.metrics.output) {
+      rows.push({
+        component: result.metrics.output.component,
+        type: "output",
+        processed: "-",
+        dropped: "-",
+        sent: result.metrics.output.messagesSent,
+        errors: result.metrics.output.sendErrors,
+        averageMs: result.metrics.output.averageDuration,
+      });
+    }
+    console.table(rows);
+  }
+
   // Display results
   if (result.success) {
     yield* Effect.log("✓ Pipeline completed successfully!");

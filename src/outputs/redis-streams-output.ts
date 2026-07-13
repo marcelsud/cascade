@@ -118,6 +118,7 @@ export const createRedisStreamsOutput = (
 
   return {
     name: "redis-streams-output",
+    getMetrics: () => metrics.getOutputMetrics(),
     send: (msg: Message): Effect.Effect<void, RedisOutputError> => {
       return Effect.gen(function* () {
         // Log connection on first send (INFO level)

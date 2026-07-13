@@ -210,6 +210,7 @@ export const createHttpInput = (
 
   return {
     name: "http-input",
+    getMetrics: () => metrics.getInputMetrics(),
     stream,
 
     close: (): Effect.Effect<void, never> =>

@@ -229,6 +229,7 @@ export const createFileInput = (
 
   return {
     name: "file-input",
+    getMetrics: () => metrics.getInputMetrics(),
     stream: Stream.fromQueue(queue),
     close: () =>
       Effect.gen(function* () {

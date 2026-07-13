@@ -2,6 +2,7 @@
  * Core types and interfaces for the pipeline system
  */
 import { Effect, Stream } from "effect";
+import type { InputMetrics, OutputMetrics } from "./metrics.js";
 
 /**
  * Message flowing through the pipeline
@@ -29,6 +30,7 @@ export interface Input<E = never, R = never> {
   readonly name: string;
   readonly stream: Stream.Stream<Message, E, R>;
   readonly close?: () => Effect.Effect<void, never, never>;
+  readonly getMetrics?: () => InputMetrics;
 }
 
 /**
@@ -48,6 +50,7 @@ export interface Output<E = never, R = never> {
   readonly name: string;
   readonly send: (msg: Message) => Effect.Effect<void, E, R>;
   readonly close?: () => Effect.Effect<void, never, never>;
+  readonly getMetrics?: () => OutputMetrics;
 }
 
 /**
@@ -90,6 +93,10 @@ export interface PipelineResult {
   readonly stats: PipelineStats;
   readonly errors?: ReadonlyArray<unknown>;
   readonly shutdown?: "graceful" | "timed-out" | "forced";
+  readonly metrics?: {
+    readonly input?: InputMetrics;
+    readonly output?: OutputMetrics;
+  };
 }
 
 /**

@@ -136,6 +136,7 @@ export const createSqsOutput = (
 
     return {
       name: "sqs-output",
+      getMetrics: () => metrics.getOutputMetrics(),
       send: (msg: Message): Effect.Effect<void, SqsOutputError> =>
         Effect.gen(function* () {
           const serialized = serializeMessage(msg, config.delaySeconds);
@@ -337,6 +338,7 @@ export const createSqsOutput = (
 
   return {
     name: "sqs-output",
+    getMetrics: () => metrics.getOutputMetrics(),
     send: (msg: Message): Effect.Effect<void, SqsOutputError> =>
       Effect.gen(function* () {
         yield* Effect.logInfo(`Connected to SQS queue: ${config.queueUrl}`);
