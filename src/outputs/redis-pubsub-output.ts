@@ -138,6 +138,7 @@ export const createRedisPubSubOutput = (
 
   return {
     name: "redis-pubsub-output",
+    getMetrics: () => metrics.getOutputMetrics(),
     send: (msg: Message): Effect.Effect<void, RedisPubSubOutputError> => {
       return Effect.gen(function* () {
         // Log connection on first send (INFO level)

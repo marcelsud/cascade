@@ -306,6 +306,7 @@ export const createRedisPubSubInput = (
 
   return {
     name: "redis-pubsub-input",
+    getMetrics: () => metrics.getInputMetrics(),
     stream,
     close: () =>
       Effect.gen(function* () {

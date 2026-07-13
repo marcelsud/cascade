@@ -31,12 +31,30 @@ describe("graceful pipeline shutdown", () => {
               name: "drain-test",
               input: {
                 name: "two-messages",
+                getMetrics: () => ({
+                  component: "shutdown-input",
+                  timestamp: Date.now(),
+                  messagesProcessed: 1,
+                  messagesDropped: 0,
+                  errorsEncountered: 0,
+                  averageDuration: 0,
+                  totalDuration: 0,
+                }),
                 stream: Stream.concat(Stream.make(first), Stream.never),
                 close: () => Effect.sync(() => events.push("input-close")),
               },
               processors: [],
               output: {
                 name: "blocked",
+                getMetrics: () => ({
+                  component: "shutdown-output",
+                  timestamp: Date.now(),
+                  messagesSent: events.includes("send-complete") ? 1 : 0,
+                  batchesSent: 0,
+                  sendErrors: 0,
+                  averageDuration: 0,
+                  totalDuration: 0,
+                }),
                 send: (message) =>
                   Effect.gen(function* () {
                     events.push(`send:${String(message.content)}`);
@@ -62,6 +80,8 @@ describe("graceful pipeline shutdown", () => {
     expect(result.success).toBe(true);
     expect(result.shutdown).toBe("graceful");
     expect(acknowledgements).toBe(1);
+    expect(result.metrics?.input?.messagesProcessed).toBe(1);
+    expect(result.metrics?.output?.messagesSent).toBe(1);
     expect(events).toEqual([
       "send:first",
       "send-complete",

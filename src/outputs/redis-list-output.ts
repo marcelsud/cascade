@@ -146,6 +146,7 @@ export const createRedisListOutput = (
 
   return {
     name: "redis-list-output",
+    getMetrics: () => metrics.getOutputMetrics(),
     send: (msg: Message): Effect.Effect<void, RedisListOutputError> => {
       return Effect.gen(function* () {
         // Log connection on first send (INFO level)

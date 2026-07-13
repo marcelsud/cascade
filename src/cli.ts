@@ -188,12 +188,42 @@ const main = Effect.gen(function* () {
       }),
   );
 
+  const printMetrics = () => {
+    if (!result.metrics) return;
+
+    const rows = [];
+    if (result.metrics.input) {
+      rows.push({
+        component: result.metrics.input.component,
+        type: "input",
+        processed: result.metrics.input.messagesProcessed,
+        dropped: result.metrics.input.messagesDropped,
+        sent: "-",
+        errors: result.metrics.input.errorsEncountered,
+        averageMs: result.metrics.input.averageDuration,
+      });
+    }
+    if (result.metrics.output) {
+      rows.push({
+        component: result.metrics.output.component,
+        type: "output",
+        processed: "-",
+        dropped: "-",
+        sent: result.metrics.output.messagesSent,
+        errors: result.metrics.output.sendErrors,
+        averageMs: result.metrics.output.averageDuration,
+      });
+    }
+    console.table(rows);
+  };
+
   // Display results
   if (result.success) {
     yield* Effect.log("✓ Pipeline completed successfully!");
     yield* Effect.log(`  Processed: ${result.stats.processed} messages`);
     yield* Effect.log(`  Failed: ${result.stats.failed} messages`);
     yield* Effect.log(`  Duration: ${result.stats.duration}ms`);
+    printMetrics();
   } else {
     yield* Effect.logError("✗ Pipeline failed!");
     if (result.errors) {
@@ -202,6 +232,7 @@ const main = Effect.gen(function* () {
         yield* Effect.logError(`    - ${error}`);
       }
     }
+    printMetrics();
     yield* Effect.fail(new Error("Pipeline execution failed"));
   }
 }).pipe(

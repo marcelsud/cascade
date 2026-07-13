@@ -283,6 +283,7 @@ export const createRedisStreamsInput = (
 
     return {
       name: "redis-streams-input",
+      getMetrics: () => metrics.getInputMetrics(),
       stream,
       close: () => Effect.promise(() => client.quit()),
     };
@@ -439,6 +440,7 @@ export const createRedisStreamsInput = (
 
   return {
     name: "redis-streams-input",
+    getMetrics: () => metrics.getInputMetrics(),
     stream,
     close: () => Effect.promise(() => client.quit()),
   };

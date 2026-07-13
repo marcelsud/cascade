@@ -273,6 +273,7 @@ export const createSqsInput = (
 
   return {
     name: "sqs-input",
+    getMetrics: () => metrics.getInputMetrics(),
     stream,
     close: () =>
       Effect.sync(() => {

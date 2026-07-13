@@ -94,6 +94,11 @@ export const run = <E, R>(
       startTime: Date.now(),
     });
     const errorsRef = yield* Ref.make<unknown[]>([]);
+    const snapshotMetrics = () => {
+      const input = pipeline.input.getMetrics?.();
+      const output = pipeline.output.getMetrics?.();
+      return input || output ? { input, output } : undefined;
+    };
     const snapshotStats = (): Effect.Effect<PipelineStats> =>
       Effect.gen(function* () {
         const stats = yield* Ref.get(statsRef);
@@ -117,6 +122,7 @@ export const run = <E, R>(
           stats,
           errors: [error],
           shutdown: shutdownReason,
+          metrics: snapshotMetrics(),
         };
       });
     const maxConcurrentMessages =
@@ -226,6 +232,7 @@ export const run = <E, R>(
           success: finalStats.failed === 0,
           stats: finalStats,
           errors: errors.length > 0 ? errors : undefined,
+          metrics: snapshotMetrics(),
         } satisfies PipelineResult;
       }),
     );

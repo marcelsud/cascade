@@ -178,6 +178,7 @@ export const createStdinInput = (
 
   return {
     name: "stdin-input",
+    getMetrics: () => metrics.getInputMetrics(),
     stream: Stream.fromQueue(queue),
     close: () =>
       Effect.gen(function* () {
