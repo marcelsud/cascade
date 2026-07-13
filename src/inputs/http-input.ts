@@ -64,6 +64,16 @@ export const HttpInputConfigSchema = Schema.Struct({
   overflow: Schema.optional(Schema.Literal("block", "drop_new", "drop_old")),
 });
 
+export const validateHttpInputConfig = (
+  config: HttpInputConfig,
+): Effect.Effect<void, HttpInputError> =>
+  validate(HttpInputConfigSchema, config, "HTTP Input configuration").pipe(
+    Effect.mapError(
+      (error) => new HttpInputError(error.message, error.category, error),
+    ),
+    Effect.asVoid,
+  );
+
 /**
  * Read request body as string
  */
@@ -126,11 +136,7 @@ export const createHttpInput = (
   config: HttpInputConfig,
 ): Input<HttpInputError> => {
   // Validate configuration synchronously
-  Effect.runSync(
-    validate(HttpInputConfigSchema, config, "HTTP Input configuration").pipe(
-      Effect.catchAll((error) => Effect.die(error)),
-    ),
-  );
+  Effect.runSync(validateHttpInputConfig(config));
 
   const host = config.host ?? "0.0.0.0";
   const path = config.path ?? "/webhook";
@@ -193,7 +199,9 @@ export const createHttpInput = (
       metrics.recordError();
       res.writeHead(500, { "Content-Type": "text/plain" });
       res.end("Internal Server Error");
-      Effect.runSync(Effect.logError(`HTTP Input error: ${error}`));
+      await Effect.runPromise(
+        Effect.logError(`HTTP Input error: ${error}`),
+      ).catch(() => undefined);
     }
   };
 

@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Effect } from "effect";
+import { Effect, Either, Stream } from "effect";
+import Redis from "ioredis";
 import { createRedisListInput } from "../../../src/inputs/redis-list-input.js";
+import { RedisListInputError } from "../../../src/inputs/redis-list-input.js";
+import { run } from "../../../src/core/pipeline.js";
 
 // Mock ioredis
 vi.mock("ioredis", () => {
@@ -177,5 +180,46 @@ describe("RedisListInput", () => {
         await Effect.runPromise(input.close());
       }
     });
+  });
+
+  it("fails the stream with a typed error after reconnect exhaustion", async () => {
+    const redisMock = Redis as unknown as {
+      mockImplementationOnce: (factory: () => never) => void;
+    };
+    redisMock.mockImplementationOnce(
+      () =>
+        ({
+          blpop: vi.fn().mockRejectedValue(new Error("offline")),
+          brpop: vi.fn().mockRejectedValue(new Error("offline")),
+          quit: vi.fn().mockResolvedValue("OK"),
+        }) as never,
+    );
+    const input = createRedisListInput({
+      host: "localhost",
+      port: 6379,
+      key: "tasks",
+      maxReconnectAttempts: 0,
+      reconnectBackoffMs: 1,
+    });
+
+    const result = await Effect.runPromise(
+      Effect.either(Stream.runHead(input.stream)),
+    );
+
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isLeft(result)) {
+      expect(result.left).toBeInstanceOf(RedisListInputError);
+    }
+
+    const pipelineResult = await Effect.runPromise(
+      run({
+        name: "redis-exhaustion-test",
+        input,
+        processors: [],
+        output: { name: "unused", send: () => Effect.void },
+      }),
+    );
+    expect(pipelineResult.success).toBe(false);
+    expect(pipelineResult.errors?.[0]).toBeInstanceOf(RedisListInputError);
   });
 });

@@ -23,6 +23,7 @@ import {
   Port,
   PositiveInt,
 } from "../core/validation.js";
+import { withReconnect } from "./redis-reconnect.js";
 
 export interface RedisStreamsInputConfig {
   readonly host: string;
@@ -48,6 +49,8 @@ export interface RedisStreamsInputConfig {
   readonly lazyConnect?: boolean; // Defer connection until first command (default: false)
   readonly maxRetriesPerRequest?: number; // Max retries per request (default: 20)
   readonly enableOfflineQueue?: boolean; // Queue commands when offline (default: true)
+  readonly maxReconnectAttempts?: number;
+  readonly reconnectBackoffMs?: number;
 }
 
 export class RedisStreamsInputError extends ComponentError {
@@ -83,6 +86,8 @@ export const RedisStreamsInputConfigSchema = Schema.Struct({
   lazyConnect: Schema.optional(Schema.Boolean),
   maxRetriesPerRequest: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
   enableOfflineQueue: Schema.optional(Schema.Boolean),
+  maxReconnectAttempts: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
+  reconnectBackoffMs: Schema.optional(PositiveInt),
 });
 
 /**
@@ -199,86 +204,90 @@ export const createRedisStreamsInput = (
     const metrics = new MetricsAccumulator("redis-streams-input");
     let messageCount = 0;
 
-    const stream = Stream.repeatEffect(
-      Effect.gen(function* () {
-        const lastId = yield* Ref.get(lastIdRef);
+    const readOnce = Effect.gen(function* () {
+      const lastId = yield* Ref.get(lastIdRef);
 
-        yield* Effect.logInfo(
-          `Connected to Redis stream: redis://${config.host}:${config.port}/${config.db || 0}`,
-        );
-        yield* Effect.logDebug(
-          `Polling Redis stream ${config.stream} from ${lastId}`,
-        );
+      yield* Effect.logInfo(
+        `Connected to Redis stream: redis://${config.host}:${config.port}/${config.db || 0}`,
+      );
+      yield* Effect.logDebug(
+        `Polling Redis stream ${config.stream} from ${lastId}`,
+      );
 
-        const [results, readDuration] = yield* measureDuration(
-          Effect.tryPromise({
-            try: async () =>
-              await client.xread(
-                "COUNT",
-                count,
-                "BLOCK",
-                blockMs,
-                "STREAMS",
-                config.stream,
-                lastId === "$" ? "$" : lastId,
-              ),
-            catch: (error) =>
-              new RedisStreamsInputError(
-                `Failed to read from Redis stream: ${error instanceof Error ? error.message : String(error)}`,
-                detectCategory(error),
-                error,
-              ),
-          }),
-        );
+      const [results, readDuration] = yield* measureDuration(
+        Effect.tryPromise({
+          try: async () =>
+            await client.xread(
+              "COUNT",
+              count,
+              "BLOCK",
+              blockMs,
+              "STREAMS",
+              config.stream,
+              lastId === "$" ? "$" : lastId,
+            ),
+          catch: (error) =>
+            new RedisStreamsInputError(
+              `Failed to read from Redis stream: ${error instanceof Error ? error.message : String(error)}`,
+              detectCategory(error),
+              error,
+            ),
+        }),
+      );
 
-        // No new messages
-        if (!results || results.length === 0) {
-          return [];
-        }
+      // No new messages
+      if (!results || results.length === 0) {
+        return [];
+      }
 
-        // Process results
-        const [streamName, entries] = results[0];
-        const messages = yield* Effect.forEach(
-          entries as [string, string[]][],
-          (entry) =>
-            Effect.gen(function* () {
-              const [entryId] = entry;
-              // Update last ID for next poll (immutably)
-              yield* Ref.set(lastIdRef, entryId);
-              return yield* convertRedisEntry(streamName, entry);
-            }),
-          { concurrency: 5 },
-        );
-
-        // Record metrics
-        messages.forEach(() => {
-          metrics.recordProcessed(readDuration / messages.length);
-          messageCount++;
-        });
-
-        // Emit metrics every 100 messages
-        if (messageCount >= 100) {
-          yield* emitInputMetrics(metrics.getInputMetrics());
-          messageCount = 0;
-        }
-
-        yield* Effect.logDebug(
-          `Read ${messages.length} messages from Redis stream`,
-        );
-        return messages;
-      }),
-    ).pipe(
-      Stream.flatMap(Stream.fromIterable),
-      Stream.catchAll((error) =>
-        Stream.fromEffect(
+      // Process results
+      const [streamName, entries] = results[0];
+      const messages = yield* Effect.forEach(
+        entries as [string, string[]][],
+        (entry) =>
           Effect.gen(function* () {
-            metrics.recordError();
-            yield* Effect.logError(`Redis stream error: ${error.message}`);
-            yield* Effect.sleep("5 seconds");
-            return [] as Message[];
+            const [entryId] = entry;
+            // Update last ID for next poll (immutably)
+            yield* Ref.set(lastIdRef, entryId);
+            return yield* convertRedisEntry(streamName, entry);
           }),
-        ).pipe(Stream.flatMap(Stream.fromIterable)),
-      ),
+        { concurrency: 5 },
+      );
+
+      // Record metrics
+      messages.forEach(() => {
+        metrics.recordProcessed(readDuration / messages.length);
+        messageCount++;
+      });
+
+      // Emit metrics every 100 messages
+      if (messageCount >= 100) {
+        yield* emitInputMetrics(metrics.getInputMetrics());
+        messageCount = 0;
+      }
+
+      yield* Effect.logDebug(
+        `Read ${messages.length} messages from Redis stream`,
+      );
+      return messages;
+    });
+    const resilientRead = withReconnect(
+      readOnce,
+      {
+        maxReconnectAttempts: config.maxReconnectAttempts,
+        reconnectBackoffMs: config.reconnectBackoffMs,
+      },
+      (error, attempt, delayMs) =>
+        Effect.sync(() => metrics.recordError()).pipe(
+          Effect.zipRight(
+            Effect.logWarning(
+              `Redis stream reconnect ${attempt} in ${delayMs}ms: ${error.message}`,
+            ),
+          ),
+        ),
+    );
+    const stream = Stream.repeatEffect(resilientRead).pipe(
+      Stream.flatMap(Stream.fromIterable),
     );
 
     return {
@@ -342,100 +351,101 @@ export const createRedisStreamsInput = (
         ),
     });
 
-  const stream = Stream.repeatEffect(
-    Effect.gen(function* () {
-      // Ensure consumer group exists
-      yield* initConsumerGroup;
+  const readGroupOnce = Effect.gen(function* () {
+    // Ensure consumer group exists
+    yield* initConsumerGroup;
 
-      yield* Effect.logInfo(
-        `Connected to Redis stream: redis://${config.host}:${config.port}/${config.db || 0}`,
-      );
-      yield* Effect.logDebug(
-        `Polling Redis stream ${config.stream} as ${consumerGroup}/${consumerName}`,
-      );
+    yield* Effect.logInfo(
+      `Connected to Redis stream: redis://${config.host}:${config.port}/${config.db || 0}`,
+    );
+    yield* Effect.logDebug(
+      `Polling Redis stream ${config.stream} as ${consumerGroup}/${consumerName}`,
+    );
 
-      const [results, readDuration] = yield* measureDuration(
-        Effect.tryPromise({
-          try: async () =>
-            await client.xreadgroup(
-              "GROUP",
-              consumerGroup,
-              consumerName,
-              "COUNT",
-              count,
-              "BLOCK",
-              blockMs,
-              "STREAMS",
-              config.stream,
-              ">", // Only new messages
-            ),
-          catch: (error) =>
-            new RedisStreamsInputError(
-              `Failed to read from consumer group: ${error instanceof Error ? error.message : String(error)}`,
-              detectCategory(error),
-              error,
-            ),
-        }),
-      );
+    const [results, readDuration] = yield* measureDuration(
+      Effect.tryPromise({
+        try: async () =>
+          await client.xreadgroup(
+            "GROUP",
+            consumerGroup,
+            consumerName,
+            "COUNT",
+            count,
+            "BLOCK",
+            blockMs,
+            "STREAMS",
+            config.stream,
+            ">", // Only new messages
+          ),
+        catch: (error) =>
+          new RedisStreamsInputError(
+            `Failed to read from consumer group: ${error instanceof Error ? error.message : String(error)}`,
+            detectCategory(error),
+            error,
+          ),
+      }),
+    );
 
-      // No new messages
-      if (!results || results.length === 0) {
-        return [];
-      }
+    // No new messages
+    if (!results || results.length === 0) {
+      return [];
+    }
 
-      // Process and ACK messages
-      const [streamName, entries] = results[0] as [
-        string,
-        [string, string[]][],
-      ];
-      const messages = yield* Effect.forEach(
-        entries as [string, string[]][],
-        (entry) =>
-          Effect.gen(function* () {
-            const [entryId] = entry;
-            const msg = yield* convertRedisEntry(streamName, entry);
-            yield* ackMessage(entryId).pipe(
-              Effect.catchAll((error) => {
-                metrics.recordError();
-                return Effect.logError(
-                  `Failed to ACK ${entryId}: ${error.message}`,
-                );
-              }),
-            );
-            return msg;
-          }),
-        { concurrency: 5 },
-      );
-
-      // Record metrics
-      messages.forEach(() => {
-        metrics.recordProcessed(readDuration / messages.length);
-        messageCount++;
-      });
-
-      // Emit metrics every 100 messages
-      if (messageCount >= 100) {
-        yield* emitInputMetrics(metrics.getInputMetrics());
-        messageCount = 0;
-      }
-
-      yield* Effect.logDebug(
-        `Read and ACKed ${messages.length} messages from Redis stream`,
-      );
-      return messages;
-    }),
-  ).pipe(
-    Stream.flatMap(Stream.fromIterable),
-    Stream.catchAll((error) =>
-      Stream.fromEffect(
+    // Process and ACK messages
+    const [streamName, entries] = results[0] as [string, [string, string[]][]];
+    const messages = yield* Effect.forEach(
+      entries as [string, string[]][],
+      (entry) =>
         Effect.gen(function* () {
-          metrics.recordError();
-          yield* Effect.logError(`Redis stream error: ${error.message}`);
-          yield* Effect.sleep("5 seconds");
-          return [] as Message[];
+          const [entryId] = entry;
+          const msg = yield* convertRedisEntry(streamName, entry);
+          yield* ackMessage(entryId).pipe(
+            Effect.catchAll((error) => {
+              metrics.recordError();
+              return Effect.logError(
+                `Failed to ACK ${entryId}: ${error.message}`,
+              );
+            }),
+          );
+          return msg;
         }),
-      ).pipe(Stream.flatMap(Stream.fromIterable)),
-    ),
+      { concurrency: 5 },
+    );
+
+    // Record metrics
+    messages.forEach(() => {
+      metrics.recordProcessed(readDuration / messages.length);
+      messageCount++;
+    });
+
+    // Emit metrics every 100 messages
+    if (messageCount >= 100) {
+      yield* emitInputMetrics(metrics.getInputMetrics());
+      messageCount = 0;
+    }
+
+    yield* Effect.logDebug(
+      `Read and ACKed ${messages.length} messages from Redis stream`,
+    );
+    return messages;
+  });
+  const resilientGroupRead = withReconnect(
+    readGroupOnce,
+    {
+      maxReconnectAttempts: config.maxReconnectAttempts,
+      reconnectBackoffMs: config.reconnectBackoffMs,
+    },
+    (error, attempt, delayMs) =>
+      Effect.sync(() => metrics.recordError()).pipe(
+        Effect.zipRight(
+          Effect.logWarning(
+            `Redis stream reconnect ${attempt} in ${delayMs}ms: ${error.message}`,
+          ),
+        ),
+      ),
+  );
+  const stream = Stream.repeatEffect(resilientGroupRead).pipe(
+    Stream.flatMap(Stream.fromIterable),
   );
 
   return {

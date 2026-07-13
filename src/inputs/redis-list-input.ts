@@ -23,6 +23,7 @@ import {
   Port,
   PositiveInt,
 } from "../core/validation.js";
+import { withReconnect } from "./redis-reconnect.js";
 
 export interface RedisListInputConfig {
   readonly host: string;
@@ -42,6 +43,8 @@ export interface RedisListInputConfig {
   readonly lazyConnect?: boolean; // Defer connection until first command (default: false)
   readonly maxRetriesPerRequest?: number; // Max retries per request (default: 20)
   readonly enableOfflineQueue?: boolean; // Queue commands when offline (default: true)
+  readonly maxReconnectAttempts?: number;
+  readonly reconnectBackoffMs?: number;
 }
 
 export class RedisListInputError extends ComponentError {
@@ -76,6 +79,8 @@ export const RedisListInputConfigSchema = Schema.Struct({
   lazyConnect: Schema.optional(Schema.Boolean),
   maxRetriesPerRequest: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
   enableOfflineQueue: Schema.optional(Schema.Boolean),
+  maxReconnectAttempts: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
+  reconnectBackoffMs: Schema.optional(PositiveInt),
 });
 
 /**
@@ -211,19 +216,24 @@ export const createRedisListInput = (
     return msg;
   });
 
-  const stream = Stream.repeatEffect(blockingPop).pipe(
-    Stream.filterMap((msg) => (msg ? Option.some(msg) : Option.none())), // Filter out nulls from timeout
-    Stream.catchAll((error) =>
-      Stream.fromEffect(
-        Effect.gen(function* () {
-          metrics.recordError();
-          yield* Effect.logError(`Redis list error: ${error.message}`);
-          yield* Effect.sleep("5 seconds");
-          // Return undefined to continue stream
-          return undefined as never;
-        }),
+  const resilientPop = withReconnect(
+    blockingPop,
+    {
+      maxReconnectAttempts: config.maxReconnectAttempts,
+      reconnectBackoffMs: config.reconnectBackoffMs,
+    },
+    (error, attempt, delayMs) =>
+      Effect.sync(() => metrics.recordError()).pipe(
+        Effect.zipRight(
+          Effect.logWarning(
+            `Redis list reconnect ${attempt} in ${delayMs}ms: ${error.message}`,
+          ),
+        ),
       ),
-    ),
+  );
+
+  const stream = Stream.repeatEffect(resilientPop).pipe(
+    Stream.filterMap((msg) => (msg ? Option.some(msg) : Option.none())), // Filter out nulls from timeout
   );
 
   return {
