@@ -6,7 +6,7 @@ import { Effect, Logger, LogLevel } from "effect";
 import { NodeRuntime } from "@effect/platform-node";
 import { loadConfig } from "./core/config-loader.js";
 import { buildPipeline } from "./core/pipeline-builder.js";
-import { run } from "./core/pipeline.js";
+import { makeShutdownController, run } from "./core/pipeline.js";
 import { runYamlTests, formatTestResults } from "./testing/yaml-test-runner.js";
 import packageJson from "../package.json" with { type: "json" };
 
@@ -125,9 +125,40 @@ const main = Effect.gen(function* () {
     `Pipeline built successfully with ${pipeline.processors.length} processors`,
   );
 
-  // Run the pipeline
+  // Run the pipeline. Signal handlers only complete Effect shutdown signals;
+  // draining, timeouts, and resource closure stay in the pipeline runtime.
   yield* Effect.log("Starting pipeline execution...");
-  const result = yield* run(pipeline);
+  const shutdown = yield* makeShutdownController();
+  const result = yield* Effect.acquireUseRelease(
+    Effect.sync(() => {
+      let signalCount = 0;
+      const handleSignal = (signal: NodeJS.Signals) => {
+        signalCount += 1;
+        if (signalCount === 1) {
+          Effect.runFork(
+            Effect.log(`Received ${signal}; draining pipeline...`).pipe(
+              Effect.zipRight(shutdown.request),
+            ),
+          );
+        } else {
+          Effect.runFork(
+            Effect.logError(`Received ${signal} again; forcing shutdown`).pipe(
+              Effect.zipRight(shutdown.requestForce),
+            ),
+          );
+        }
+      };
+      process.on("SIGINT", handleSignal);
+      process.on("SIGTERM", handleSignal);
+      return handleSignal;
+    }),
+    () => run(pipeline, { shutdown }),
+    (handleSignal) =>
+      Effect.sync(() => {
+        process.off("SIGINT", handleSignal);
+        process.off("SIGTERM", handleSignal);
+      }),
+  );
 
   // Display results
   if (result.success) {
@@ -203,7 +234,7 @@ const main = Effect.gen(function* () {
       }
 
       yield* Effect.logError(`Fatal error: ${errorMessage}`);
-      process.exit(1);
+      return yield* Effect.fail(error);
     }),
   ),
 );

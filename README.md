@@ -254,6 +254,7 @@ Custom components can provide their own Effect Schema configuration and factory 
 
 - **[Dead Letter Queue (DLQ)](docs/advanced/dlq.md)** - Handle failures with automatic retries and error enrichment
 - **[Backpressure Control](docs/advanced/backpressure.md)** - Control message throughput and concurrency
+- **[Graceful Shutdown](docs/advanced/graceful-shutdown.md)** - Drain in-flight messages and close resources safely
 - **[Bloblang Integration](docs/advanced/bloblang.md)** - Use Benthos Bloblang syntax (for migrations)
 
 ## Example Configurations
