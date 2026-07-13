@@ -143,6 +143,7 @@ const buildInputInternal = (
         password: config.redis_pubsub.password,
         db: config.redis_pubsub.db,
         queueSize: config.redis_pubsub.queue_size,
+        overflow: config.redis_pubsub.overflow,
       }),
     );
   }
@@ -173,6 +174,8 @@ const buildInputInternal = (
         host: config.http.host,
         path: config.http.path,
         timeout: config.http.timeout,
+        queueSize: config.http.queue_size,
+        overflow: config.http.overflow,
       }),
     );
   }
@@ -185,6 +188,8 @@ const buildInputInternal = (
         startAt: (config as any).file.start_at,
         pollIntervalMs: (config as any).file.poll_interval_ms,
         encoding: (config as any).file.encoding,
+        queueSize: (config as any).file.queue_size,
+        overflow: (config as any).file.overflow,
       }),
     );
   }
@@ -194,6 +199,8 @@ const buildInputInternal = (
       createStdinInput({
         mode: (config as any).stdin.mode,
         encoding: (config as any).stdin.encoding,
+        queueSize: (config as any).stdin.queue_size,
+        overflow: (config as any).stdin.overflow,
       }),
     );
   }

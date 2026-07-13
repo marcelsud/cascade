@@ -1,7 +1,7 @@
 /**
  * HTTP Input - Webhook server that receives HTTP POST requests
  */
-import { Effect, Stream, Queue } from "effect";
+import { Effect, Stream } from "effect";
 import * as Schema from "effect/Schema";
 import {
   createServer,
@@ -23,12 +23,20 @@ import {
   Port,
   TimeoutMs,
 } from "../core/validation.js";
+import {
+  createInputQueue,
+  offerInputQueue,
+  recordQueueDrop,
+  type OverflowPolicy,
+} from "./input-queue.js";
 
 export interface HttpInputConfig {
   readonly port: number;
   readonly host?: string;
   readonly path?: string; // Webhook path (default: "/webhook")
   readonly timeout?: number; // Request timeout in milliseconds
+  readonly queueSize?: number;
+  readonly overflow?: OverflowPolicy;
 }
 
 export class HttpInputError extends ComponentError {
@@ -51,6 +59,8 @@ export const HttpInputConfigSchema = Schema.Struct({
   host: Schema.optional(NonEmptyString),
   path: Schema.optional(NonEmptyString),
   timeout: Schema.optional(TimeoutMs),
+  queueSize: Schema.optional(Schema.Int.pipe(Schema.positive())),
+  overflow: Schema.optional(Schema.Literal("block", "drop_new", "drop_old")),
 });
 
 /**
@@ -123,12 +133,17 @@ export const createHttpInput = (
 
   const host = config.host ?? "0.0.0.0";
   const path = config.path ?? "/webhook";
+  const queueSize = config.queueSize ?? 1_000;
+  const overflow = config.overflow ?? "block";
 
   // Setup metrics
   const metrics = new MetricsAccumulator("http-input");
 
   // Create message queue for incoming requests
-  const messageQueue = Effect.runSync(Queue.unbounded<Message>());
+  const messageQueue = Effect.runSync(
+    createInputQueue<Message>(queueSize, overflow),
+  );
+  const dropLogState = { lastLogAt: 0, suppressed: 0 };
 
   // Create HTTP server
   let server: Server | null = null;
@@ -153,7 +168,12 @@ export const createHttpInput = (
       const [message, duration] = result;
 
       // Add to queue
-      await Effect.runPromise(Queue.offer(messageQueue, message));
+      const offer = await Effect.runPromise(
+        offerInputQueue(messageQueue, message, overflow, queueSize),
+      );
+      if (offer.dropped > 0) {
+        await Effect.runPromise(recordQueueDrop(metrics, dropLogState, "HTTP"));
+      }
 
       metrics.recordProcessed(duration);
 

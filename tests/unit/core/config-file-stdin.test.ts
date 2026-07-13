@@ -16,9 +16,9 @@ const createTempDir = async (): Promise<string> => {
 
 afterEach(async () => {
   await Promise.all(
-    createdPaths.splice(0).map((target) =>
-      fs.rm(target, { recursive: true, force: true }),
-    ),
+    createdPaths
+      .splice(0)
+      .map((target) => fs.rm(target, { recursive: true, force: true })),
   );
 });
 
@@ -36,6 +36,8 @@ describe("config-loader file/stdin registration", () => {
     path: "${inputPath.replace(/\\/g, "/")}"
     follow: false
     start_at: beginning
+    queue_size: 25
+    overflow: drop_old
 output:
   capture: {}
 `,
@@ -46,6 +48,10 @@ output:
     const pipeline = await Effect.runPromise(buildPipeline(config));
 
     expect(pipeline.input.name).toBe("file-input");
+    expect((config.input.file as { queue_size?: number }).queue_size).toBe(25);
+    expect((config.input.file as { overflow?: string }).overflow).toBe(
+      "drop_old",
+    );
 
     if (pipeline.input.close) {
       await Effect.runPromise(pipeline.input.close());

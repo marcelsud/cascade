@@ -72,6 +72,8 @@ const HttpInputSchema = S.Struct({
   host: S.optional(S.String),
   path: S.optional(S.String),
   timeout: S.optional(S.Number),
+  queue_size: S.optional(S.Int.pipe(S.positive())),
+  overflow: S.optional(S.Literal("block", "drop_new", "drop_old")),
 });
 
 /**
@@ -83,6 +85,8 @@ const FileInputSchema = S.Struct({
   start_at: S.optional(S.Union(S.Literal("end"), S.Literal("beginning"))),
   poll_interval_ms: S.optional(S.Number),
   encoding: S.optional(S.String),
+  queue_size: S.optional(S.Int.pipe(S.positive())),
+  overflow: S.optional(S.Literal("block", "drop_new", "drop_old")),
 });
 
 /**
@@ -91,6 +95,8 @@ const FileInputSchema = S.Struct({
 const StdinInputSchema = S.Struct({
   mode: S.optional(S.Union(S.Literal("lines"), S.Literal("whole"))),
   encoding: S.optional(S.String),
+  queue_size: S.optional(S.Int.pipe(S.positive())),
+  overflow: S.optional(S.Literal("block", "drop_new", "drop_old")),
 });
 
 /**
@@ -103,7 +109,8 @@ const RedisPubSubInputSchema = S.Struct({
   db: S.optional(S.Number),
   channels: S.optional(S.Array(S.String)),
   patterns: S.optional(S.Array(S.String)),
-  queue_size: S.optional(S.Number),
+  queue_size: S.optional(S.Int.pipe(S.positive())),
+  overflow: S.optional(S.Literal("block", "drop_new", "drop_old")),
   connect_timeout: S.optional(S.Number),
   command_timeout: S.optional(S.Number),
   keep_alive: S.optional(S.Number),

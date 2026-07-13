@@ -15,6 +15,12 @@ Receives HTTP POST requests as a webhook server. Each incoming request is conver
 - `host`: Host address to bind to (default: "0.0.0.0")
 - `path`: URL path to listen on (default: "/webhook")
 - `timeout`: Request timeout in milliseconds (default: 30000)
+- `queue_size`: Maximum messages buffered in memory (default: `1000`)
+- `overflow`: `block`, `drop_new`, or `drop_old` (default: `block`)
+
+`block` keeps the request open until queue capacity is available and provides
+backpressure to webhook senders. The two drop policies respond normally but
+increment `messagesDropped`; overflow warnings are rate-limited.
 
 ## Examples
 

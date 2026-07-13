@@ -11,6 +11,12 @@ import { ComponentError, type ErrorCategory } from "../core/errors.js";
 import { MetricsAccumulator, emitInputMetrics } from "../core/metrics.js";
 import { validate, NonEmptyString, PositiveInt } from "../core/validation.js";
 import { createTextMessage, splitCompleteLines } from "./text-input-utils.js";
+import {
+  createInputQueue,
+  offerInputQueue,
+  recordQueueDrop,
+  type OverflowPolicy,
+} from "./input-queue.js";
 
 export interface FileInputConfig {
   readonly path: string;
@@ -18,6 +24,8 @@ export interface FileInputConfig {
   readonly startAt?: "end" | "beginning";
   readonly pollIntervalMs?: number;
   readonly encoding?: string;
+  readonly queueSize?: number;
+  readonly overflow?: OverflowPolicy;
 }
 
 export class FileInputError extends ComponentError {
@@ -38,6 +46,8 @@ export const FileInputConfigSchema = Schema.Struct({
   startAt: Schema.optional(Schema.Literal("end", "beginning")),
   pollIntervalMs: Schema.optional(PositiveInt),
   encoding: Schema.optional(NonEmptyString),
+  queueSize: Schema.optional(PositiveInt),
+  overflow: Schema.optional(Schema.Literal("block", "drop_new", "drop_old")),
 });
 
 const readRange = async (
@@ -90,8 +100,11 @@ export const createFileInput = (
   const startAt = config.startAt ?? "end";
   const pollIntervalMs = config.pollIntervalMs ?? 500;
   const encoding = (config.encoding ?? "utf8") as BufferEncoding;
-  const queue = Effect.runSync(Queue.unbounded<Message>());
+  const queueSize = config.queueSize ?? 1_000;
+  const overflow = config.overflow ?? "block";
+  const queue = Effect.runSync(createInputQueue<Message>(queueSize, overflow));
   const metrics = new MetricsAccumulator("file-input");
+  const dropLogState = { lastLogAt: 0, suppressed: 0 };
 
   let closed = false;
   let queueClosed = false;
@@ -120,7 +133,12 @@ export const createFileInput = (
         lineNumber: ++lineNumber,
         readAt: new Date().toISOString(),
       });
-      await Effect.runPromise(Queue.offer(queue, message));
+      const offer = await Effect.runPromise(
+        offerInputQueue(queue, message, overflow, queueSize),
+      );
+      if (offer.dropped > 0) {
+        await Effect.runPromise(recordQueueDrop(metrics, dropLogState, "File"));
+      }
       metrics.recordProcessed(Date.now() - startedAt);
       messageCount++;
 
