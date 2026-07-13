@@ -2,7 +2,7 @@
  * Dead Letter Queue (DLQ) support for outputs
  * Handles retry logic and sends failed messages to DLQ after max retries
  */
-import { Effect, Schedule } from "effect";
+import { Duration, Effect, Schedule } from "effect";
 import type { Output, Message } from "./types.js";
 import { ComponentError, type ErrorCategory } from "./errors.js";
 
@@ -22,8 +22,25 @@ export interface DLQConfig<E> {
   readonly output: Output<E>; // Primary output
   readonly dlq?: Output<any>; // Dead letter queue output
   readonly maxRetries?: number; // Max retries before DLQ (default: 3)
-  readonly retrySchedule?: Schedule.Schedule<number>; // Custom retry schedule
+  readonly retrySchedule?: Schedule.Schedule<unknown>; // Custom retry schedule
 }
+
+export type DLQRetrySchedule = "exponential" | "fixed" | "linear";
+
+export const createDLQRetrySchedule = (
+  type: DLQRetrySchedule = "exponential",
+  intervalMs = 1_000,
+): Schedule.Schedule<unknown> => {
+  const interval = Duration.millis(intervalMs);
+  switch (type) {
+    case "fixed":
+      return Schedule.spaced(interval);
+    case "linear":
+      return Schedule.linear(interval);
+    case "exponential":
+      return Schedule.exponential(interval);
+  }
+};
 
 /**
  * Create a DLQ message with failure information
@@ -55,8 +72,7 @@ const createDLQMessage = (
  */
 export const withDLQ = <E>(config: DLQConfig<E>): Output<E | DLQError> => {
   const maxRetries = config.maxRetries ?? 3;
-  const retrySchedule =
-    config.retrySchedule ?? Schedule.exponential("1 second");
+  const retrySchedule = config.retrySchedule ?? createDLQRetrySchedule();
   const closeOutputs = [config.output.close, config.dlq?.close].filter(
     (close): close is NonNullable<typeof close> => close !== undefined,
   );

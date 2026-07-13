@@ -475,6 +475,8 @@ export const createPipelineConfigSchema = (registry?: ComponentRegistry) => {
       S.Struct({
         output,
         max_retries: S.optional(S.Int.pipe(S.nonNegative())),
+        retry_schedule: S.optional(S.Literal("exponential", "fixed", "linear")),
+        retry_interval_ms: S.optional(S.Int.pipe(S.positive())),
       }),
     ),
   });
@@ -503,6 +505,8 @@ export const PipelineConfigEnvelopeSchema = S.Struct({
     S.Struct({
       output: S.Unknown,
       max_retries: S.optional(S.Unknown),
+      retry_schedule: S.optional(S.Unknown),
+      retry_interval_ms: S.optional(S.Unknown),
     }),
   ),
 });
