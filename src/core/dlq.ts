@@ -132,6 +132,7 @@ export const withDLQ = <E>(config: DLQConfig<E>): Output<E | DLQError> => {
             )
         : undefined,
     getMetrics: config.output.getMetrics,
+    getDLQMetrics: config.dlq?.getMetrics,
   };
 };
 
@@ -160,5 +161,6 @@ export const withBackpressure = <E>(
       }),
     close: config.output.close,
     getMetrics: config.output.getMetrics,
+    getDLQMetrics: config.output.getDLQMetrics,
   };
 };
