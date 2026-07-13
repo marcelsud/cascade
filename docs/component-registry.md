@@ -59,9 +59,29 @@ If a registration conflicts with a built-in name, `loadConfig` returns a
 loaded with a registry but that registry is omitted from `buildPipeline`, the
 build fails with the unknown component name and a reminder to pass the registry.
 
-Registry extension is currently a library API. The bundled CLI does not load
-application-defined registrations, so custom components must be run through a
-library entry point that passes the registry explicitly.
+## CLI registry modules
+
+The CLI can load application-defined registrations with `--registry`. The
+module must default-export a `ComponentRegistry` instance:
+
+```javascript
+import { createComponentRegistry } from "cascade"
+import { redactDefinition } from "./redact-component.js"
+
+export default createComponentRegistry().registerProcessor(redactDefinition)
+```
+
+Pass the same module to either pipeline command:
+
+```bash
+cascade validate pipeline.yaml --registry ./registry.js
+cascade run pipeline.yaml --registry ./registry.js
+```
+
+`validate` loads and schema-checks the YAML, builds every configured component,
+prints the selected input, processors, output, and DLQ status, then closes the
+built components without consuming the input stream. It exits non-zero for
+configuration, registry-loading, or component-building errors.
 
 Registered schemas participate in the normal configuration rules:
 

@@ -4,9 +4,12 @@
  */
 import { Effect, Logger, LogLevel } from "effect";
 import { NodeRuntime } from "@effect/platform-node";
-import { loadConfig } from "./core/config-loader.js";
-import { buildPipeline } from "./core/pipeline-builder.js";
 import { makeShutdownController, run } from "./core/pipeline.js";
+import {
+  loadAndBuildPipeline,
+  loadRegistry,
+  validateConfig,
+} from "./cli-config.js";
 import { runYamlTests, formatTestResults } from "./testing/yaml-test-runner.js";
 import packageJson from "../package.json" with { type: "json" };
 
@@ -26,16 +29,19 @@ Usage:
 
 Commands:
   run <config-file>    Run a pipeline from a YAML configuration file
+  validate <config>    Validate and build a pipeline without running it
   test <pattern>       Run YAML tests matching the glob pattern
 
 Options:
   -h, --help          Show this help message
   -v, --version       Show version information
   --debug             Enable debug logging
+  --registry <module> Load custom components from a registry module
 
 Examples:
   cascade run configs/example-pipeline.yaml
   cascade run my-pipeline.yaml --debug
+  cascade validate my-pipeline.yaml --registry ./registry.js
   cascade test "tests/**/*.yaml"
   cascade test tests/processors/uppercase.test.yaml
 `);
@@ -61,6 +67,13 @@ const main = Effect.gen(function* () {
 
   // Check for debug flag
   const debugMode = args.includes("--debug");
+  const registryFlagIndex = args.indexOf("--registry");
+  const registryPath =
+    registryFlagIndex >= 0 ? args[registryFlagIndex + 1] : undefined;
+  if (registryFlagIndex >= 0 && !registryPath) {
+    yield* Effect.fail(new Error("Missing module path after --registry"));
+  }
+  const registry = registryPath ? yield* loadRegistry(registryPath) : undefined;
 
   // Handle test command
   if (args[0] === "test") {
@@ -90,8 +103,8 @@ const main = Effect.gen(function* () {
     return;
   }
 
-  // Check for run command
-  if (args[0] !== "run") {
+  // Check for pipeline commands
+  if (args[0] !== "run" && args[0] !== "validate") {
     console.error(`Error: Unknown command '${args[0]}'`);
     console.error('Run "cascade --help" for usage information.');
     yield* Effect.fail(new Error("Invalid command"));
@@ -99,27 +112,40 @@ const main = Effect.gen(function* () {
   }
 
   // Get config file path (filter out flags)
-  const configPath = args.find((arg) => !arg.startsWith("--") && arg !== "run");
+  const configPath = args[1];
   if (!configPath) {
     console.error("Error: Missing config file argument");
-    console.error("Usage: cascade run <config-file.yaml>");
+    console.error(`Usage: cascade ${args[0]} <config-file.yaml>`);
     yield* Effect.fail(new Error("Missing config file"));
     return;
   }
 
   yield* Effect.log(`Loading configuration from: ${configPath}`);
 
-  // Load and validate config
-  const config = yield* loadConfig(configPath);
+  if (args[0] === "validate") {
+    const summary = yield* validateConfig(configPath, registry);
+    console.log("Configuration is valid");
+    console.log(`  Input: ${summary.input}`);
+    console.log(
+      `  Processors (${summary.processors.length}): ${summary.processors.join(", ") || "none"}`,
+    );
+    console.log(`  Output: ${summary.output}`);
+    console.log(`  DLQ: ${summary.dlq ? "yes" : "no"}`);
+    return;
+  }
+
+  // Load, validate, and build config with the same registry instance.
+  const { config, pipeline } = yield* loadAndBuildPipeline(
+    configPath,
+    debugMode,
+    registry,
+  );
 
   yield* Effect.log(`Configuration loaded successfully`);
 
   if (debugMode) {
     yield* Effect.logDebug(`Loaded config: ${JSON.stringify(config, null, 2)}`);
   }
-
-  // Build pipeline from config
-  const pipeline = yield* buildPipeline(config, debugMode);
 
   yield* Effect.log(
     `Pipeline built successfully with ${pipeline.processors.length} processors`,

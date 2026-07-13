@@ -63,7 +63,7 @@ Production-ready patterns and integrations:
 
 - **[Local Development Setup](local-development.md)** - Set up LocalStack and Docker Compose for local testing
 - **[Component Development Guide](COMPONENTS.md)** - Build custom inputs, processors, and outputs
-- **[Component Registry](component-registry.md)** - Register component schemas and factories without changing Cascade core
+- **[Component Registry](component-registry.md)** - Load custom component schemas and factories from libraries or the CLI
 
 ## Quick Links
 
