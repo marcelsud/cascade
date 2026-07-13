@@ -188,7 +188,9 @@ const main = Effect.gen(function* () {
       }),
   );
 
-  if (result.metrics) {
+  const printMetrics = () => {
+    if (!result.metrics) return;
+
     const rows = [];
     if (result.metrics.input) {
       rows.push({
@@ -213,7 +215,7 @@ const main = Effect.gen(function* () {
       });
     }
     console.table(rows);
-  }
+  };
 
   // Display results
   if (result.success) {
@@ -221,6 +223,7 @@ const main = Effect.gen(function* () {
     yield* Effect.log(`  Processed: ${result.stats.processed} messages`);
     yield* Effect.log(`  Failed: ${result.stats.failed} messages`);
     yield* Effect.log(`  Duration: ${result.stats.duration}ms`);
+    printMetrics();
   } else {
     yield* Effect.logError("✗ Pipeline failed!");
     if (result.errors) {
@@ -229,6 +232,7 @@ const main = Effect.gen(function* () {
         yield* Effect.logError(`    - ${error}`);
       }
     }
+    printMetrics();
     yield* Effect.fail(new Error("Pipeline execution failed"));
   }
 }).pipe(
