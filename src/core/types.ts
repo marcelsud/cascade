@@ -51,6 +51,8 @@ export interface Output<E = never, R = never> {
   readonly send: (msg: Message) => Effect.Effect<void, E, R>;
   readonly close?: () => Effect.Effect<void, never, never>;
   readonly getMetrics?: () => OutputMetrics;
+  /** Metrics for a distinct DLQ destination wrapped around this output. */
+  readonly getDLQMetrics?: () => OutputMetrics;
 }
 
 /**
@@ -96,6 +98,7 @@ export interface PipelineResult {
   readonly metrics?: {
     readonly input?: InputMetrics;
     readonly output?: OutputMetrics;
+    readonly dlq?: OutputMetrics;
   };
 }
 

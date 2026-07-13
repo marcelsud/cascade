@@ -214,6 +214,17 @@ const main = Effect.gen(function* () {
         averageMs: result.metrics.output.averageDuration,
       });
     }
+    if (result.metrics.dlq) {
+      rows.push({
+        component: result.metrics.dlq.component,
+        type: "dlq",
+        processed: "-",
+        dropped: "-",
+        sent: result.metrics.dlq.messagesSent,
+        errors: result.metrics.dlq.sendErrors,
+        averageMs: result.metrics.dlq.averageDuration,
+      });
+    }
     console.table(rows);
   };
 
