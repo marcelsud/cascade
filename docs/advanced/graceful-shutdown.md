@@ -21,4 +21,6 @@ and also exits non-zero; in-progress delivery may then be retried by the input.
 
 Library users can create a controller with `makeShutdownController()`, pass it
 to `run`, and execute `controller.request` or `controller.requestForce` from
-their host application's lifecycle hooks.
+their host application's lifecycle hooks. A force request also requests that
+input consumption stop, so `requestForce` is safe to call without a preceding
+`request`.

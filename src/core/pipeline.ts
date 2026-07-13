@@ -50,7 +50,10 @@ export const makeShutdownController =
         stop,
         force,
         request: Deferred.succeed(stop, undefined).pipe(Effect.asVoid),
-        requestForce: Deferred.succeed(force, undefined).pipe(Effect.asVoid),
+        requestForce: Deferred.succeed(force, undefined).pipe(
+          Effect.zipRight(Deferred.succeed(stop, undefined)),
+          Effect.asVoid,
+        ),
       };
     });
 
@@ -91,6 +94,31 @@ export const run = <E, R>(
       startTime: Date.now(),
     });
     const errorsRef = yield* Ref.make<unknown[]>([]);
+    const snapshotStats = (): Effect.Effect<PipelineStats> =>
+      Effect.gen(function* () {
+        const stats = yield* Ref.get(statsRef);
+        const now = Date.now();
+        return {
+          processed: stats.processed,
+          failed: stats.failed,
+          duration: now - stats.startTime,
+          startTime: stats.startTime,
+          endTime: now,
+        };
+      });
+    const failedResult = (
+      error: unknown,
+      shutdownReason?: "timed-out" | "forced",
+    ): Effect.Effect<PipelineResult> =>
+      Effect.gen(function* () {
+        const stats = yield* snapshotStats();
+        return {
+          success: false,
+          stats,
+          errors: [error],
+          shutdown: shutdownReason,
+        };
+      });
     const maxConcurrentMessages =
       pipeline.backpressure?.maxConcurrentMessages ?? 10;
     const maxConcurrentOutputs =
@@ -208,19 +236,7 @@ export const run = <E, R>(
     ): Effect.Effect<PipelineResult> =>
       Effect.gen(function* () {
         yield* Effect.forkDaemon(Fiber.interrupt(executionFiber));
-        const now = Date.now();
-        return {
-          success: false,
-          stats: {
-            processed: 0,
-            failed: 0,
-            duration: 0,
-            startTime: now,
-            endTime: now,
-          },
-          errors: [new PipelineShutdownError(reason)],
-          shutdown: reason,
-        };
+        return yield* failedResult(new PipelineShutdownError(reason), reason);
       });
 
     const result: PipelineResult = yield* Effect.raceFirst(
@@ -245,29 +261,19 @@ export const run = <E, R>(
           ),
         ),
       ),
+    ).pipe(
+      Effect.catchAll((error: unknown) =>
+        failedResult(
+          error,
+          error instanceof PipelineShutdownError ? error.shutdown : undefined,
+        ),
+      ),
     );
     const shutdownRequested = yield* Deferred.isDone(shutdown.stop);
     return shutdownRequested && result.shutdown === undefined
       ? { ...result, shutdown: "graceful" as const }
       : result;
-  }).pipe(
-    Effect.catchAll((error) => {
-      const now = Date.now();
-      return Effect.succeed({
-        success: false,
-        stats: {
-          processed: 0,
-          failed: 0,
-          duration: 0,
-          startTime: now,
-          endTime: now,
-        },
-        errors: [error],
-        shutdown:
-          error instanceof PipelineShutdownError ? error.shutdown : undefined,
-      });
-    }),
-  );
+  });
 
 /** Create a pipeline from configuration. */
 export const create = <E, R>(config: {

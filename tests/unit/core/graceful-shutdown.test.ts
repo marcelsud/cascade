@@ -92,6 +92,32 @@ describe("graceful pipeline shutdown", () => {
     expect(result.shutdown).toBe("timed-out");
   });
 
+  it("preserves processed stats when close exceeds its timeout", async () => {
+    const result = await Effect.runPromise(
+      run(
+        {
+          name: "close-timeout-stats-test",
+          input: {
+            name: "three",
+            stream: Stream.make(
+              createMessage(1),
+              createMessage(2),
+              createMessage(3),
+            ),
+            close: () => Effect.never,
+          },
+          processors: [],
+          output: { name: "success", send: () => Effect.void },
+        },
+        { shutdownTimeoutMs: 10 },
+      ),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.shutdown).toBe("timed-out");
+    expect(result.stats.processed).toBe(3);
+  });
+
   it("forces an in-progress drain after a second shutdown request", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -117,6 +143,39 @@ describe("graceful pipeline shutdown", () => {
 
         yield* Deferred.await(outputStarted);
         yield* shutdown.request;
+        yield* shutdown.requestForce;
+        return yield* Fiber.join(fiber);
+      }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.shutdown).toBe("forced");
+  });
+
+  it("allows a force-only shutdown request", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const outputStarted = yield* Deferred.make<void>();
+        const shutdown = yield* makeShutdownController();
+        const fiber = yield* Effect.fork(
+          run(
+            {
+              name: "force-only-test",
+              input: { name: "one", stream: Stream.make(createMessage(1)) },
+              processors: [],
+              output: {
+                name: "blocked",
+                send: () =>
+                  Deferred.succeed(outputStarted, undefined).pipe(
+                    Effect.zipRight(Effect.never),
+                  ),
+              },
+            },
+            { shutdown, shutdownTimeoutMs: 60_000 },
+          ),
+        );
+
+        yield* Deferred.await(outputStarted);
         yield* shutdown.requestForce;
         return yield* Fiber.join(fiber);
       }),
