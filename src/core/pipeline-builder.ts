@@ -554,6 +554,7 @@ export const buildPipeline = (
       processors,
       output,
       backpressure,
+      shutdownTimeoutMs: config.shutdown_timeout_ms,
     };
   });
 };

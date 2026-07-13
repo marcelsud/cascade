@@ -451,6 +451,7 @@ export const createPipelineConfigSchema = (registry?: ComponentRegistry) => {
 
   return S.Struct({
     input,
+    shutdown_timeout_ms: S.optional(S.Int.pipe(S.positive())),
     pipeline: S.optional(
       S.Struct({
         processors: S.optional(S.Array(processor)),
@@ -478,6 +479,7 @@ export const createPipelineConfigSchema = (registry?: ComponentRegistry) => {
  */
 export const PipelineConfigEnvelopeSchema = S.Struct({
   input: S.Unknown,
+  shutdown_timeout_ms: S.optional(S.Unknown),
   pipeline: S.optional(
     S.Struct({
       processors: S.optional(S.Unknown),

@@ -56,6 +56,7 @@ Production-ready patterns and integrations:
 
 - **[Dead Letter Queue (DLQ)](advanced/dlq.md)** - Handle failures with automatic retries and error enrichment
 - **[Backpressure Control](advanced/backpressure.md)** - Control message throughput and concurrency limits
+- **[Graceful Shutdown](advanced/graceful-shutdown.md)** - Drain in-flight messages and close resources safely
 - **[Bloblang Integration](advanced/bloblang.md)** - Use Benthos Bloblang syntax for migrations
 
 ## 🛠️ Development

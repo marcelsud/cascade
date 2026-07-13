@@ -67,6 +67,8 @@ export interface Pipeline<E = never, R = never> {
   readonly processors: ReadonlyArray<Processor<E, R>>;
   readonly output: Output<E, R>;
   readonly backpressure?: BackpressureConfig;
+  /** Maximum time allowed for a graceful drain and resource close. */
+  readonly shutdownTimeoutMs?: number;
 }
 
 /**
@@ -87,6 +89,7 @@ export interface PipelineResult {
   readonly success: boolean;
   readonly stats: PipelineStats;
   readonly errors?: ReadonlyArray<unknown>;
+  readonly shutdown?: "graceful" | "timed-out" | "forced";
 }
 
 /**
