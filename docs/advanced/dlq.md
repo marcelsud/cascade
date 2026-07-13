@@ -13,6 +13,12 @@ Exactly one destination must be configured under `dlq.output`.
 ### Optional Fields
 
 - `max_retries`: Number of retry attempts before sending to the DLQ (default: 3). Set it to `0` to send to the DLQ immediately after the initial failure.
+- `retry_schedule`: `exponential`, `fixed`, or `linear` (default: `exponential`)
+- `retry_interval_ms`: Positive base interval in milliseconds (default: `1000`)
+
+An exponential schedule waits `1×`, `2×`, `4×`, and so on. A linear schedule
+waits `1×`, `2×`, `3×`, and so on. A fixed schedule waits the configured
+interval between every retry.
 
 DLQ retries wrap the primary output's complete `send` operation. Outputs with
 their own retry behavior, such as HTTP and Redis outputs, therefore retry
@@ -62,6 +68,8 @@ output:
 
 dlq:
   max_retries: 5
+  retry_schedule: linear
+  retry_interval_ms: 500
   output:
     aws_sqs:
       url: "http://localhost:4566/000000000000/dlq-queue"
@@ -86,7 +94,7 @@ dlq:
 
 ## Features
 
-- **Automatic Retry**: Exponential backoff with configurable attempts
+- **Automatic Retry**: Exponential, fixed, or linear backoff with configurable attempts and interval
 - **Comprehensive Error Details**: Full error information preserved in metadata
 - **Data Loss Prevention**: Ensures no messages are lost due to transient failures
 - **Manual Inspection**: Failed messages can be reviewed and debugged
@@ -97,7 +105,7 @@ dlq:
 
 1. **Initial Send**: Message is sent to primary output
 2. **Failure**: If send fails, retry logic kicks in
-3. **Exponential Backoff**: Retries with increasing delays (1s, 2s, 4s, 8s, ...)
+3. **Configured Backoff**: Retries using the selected schedule and interval
 4. **Max Retries Reached**: After exhausting retries, message goes to DLQ
 5. **DLQ Enrichment**: Message metadata enhanced with failure details
 6. **DLQ Send**: Message sent to DLQ output

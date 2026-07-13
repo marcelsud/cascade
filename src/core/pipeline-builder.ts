@@ -13,7 +13,7 @@ import type {
   ComponentBuildContext,
   ComponentRegistry,
 } from "./component-registry.js";
-import { withDLQ } from "./dlq.js";
+import { createDLQRetrySchedule, withDLQ } from "./dlq.js";
 import { createSqsInput } from "../inputs/sqs-input.js";
 import { createRedisStreamsInput } from "../inputs/redis-streams-input.js";
 import { createRedisPubSubInput } from "../inputs/redis-pubsub-input.js";
@@ -540,6 +540,10 @@ export const buildPipeline = (
         output: primaryOutput,
         dlq: dlqOutput,
         maxRetries: config.dlq.max_retries,
+        retrySchedule: createDLQRetrySchedule(
+          config.dlq.retry_schedule,
+          config.dlq.retry_interval_ms,
+        ),
       });
     }
 

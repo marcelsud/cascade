@@ -1,12 +1,37 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Effect, Schedule } from "effect";
-import { withDLQ, DLQError } from "../../../src/core/dlq.js";
+import { Chunk, Duration, Effect, Schedule } from "effect";
+import {
+  createDLQRetrySchedule,
+  withDLQ,
+  DLQError,
+} from "../../../src/core/dlq.js";
 import { createMessage } from "../../../src/core/types.js";
 import type { Output, Message } from "../../../src/core/types.js";
 
 describe("Dead Letter Queue (DLQ)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it.each([
+    ["exponential", [1000, 2000, 4000, 8000]],
+    ["linear", [1000, 2000, 3000, 4000]],
+  ] as const)("builds the %s retry schedule", async (type, expected) => {
+    const outputs = await Effect.runPromise(
+      Schedule.run(createDLQRetrySchedule(type, 1_000), 0, [1, 2, 3, 4]),
+    );
+    expect(
+      Chunk.toReadonlyArray(outputs).map((value) =>
+        Duration.toMillis(value as Duration.Duration),
+      ),
+    ).toEqual(expected);
+  });
+
+  it("builds a fixed retry schedule", async () => {
+    const outputs = await Effect.runPromise(
+      Schedule.run(createDLQRetrySchedule("fixed", 1_000), 0, [1, 2, 3, 4]),
+    );
+    expect(Chunk.toReadonlyArray(outputs)).toEqual([0, 1, 2, 3]);
   });
 
   describe("withDLQ", () => {

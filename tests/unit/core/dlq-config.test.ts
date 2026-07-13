@@ -91,6 +91,37 @@ describe("DLQ pipeline configuration", () => {
     });
   });
 
+  it.each(["exponential", "fixed", "linear"] as const)(
+    "accepts retry_schedule=%s",
+    (retrySchedule) => {
+      const result = decode({
+        ...baseConfig,
+        dlq: {
+          output: { capture: {} },
+          retry_schedule: retrySchedule,
+          retry_interval_ms: 25,
+        },
+      });
+      expect(Either.isRight(result)).toBe(true);
+      if (Either.isRight(result)) {
+        expect(result.right.dlq?.retry_schedule).toBe(retrySchedule);
+        expect(result.right.dlq?.retry_interval_ms).toBe(25);
+      }
+    },
+  );
+
+  it.each([
+    ["unknown schedule", { retry_schedule: "random" }],
+    ["zero interval", { retry_interval_ms: 0 }],
+    ["negative interval", { retry_interval_ms: -1 }],
+    ["fractional interval", { retry_interval_ms: 1.5 }],
+  ])("rejects %s", (_, retryConfig) => {
+    expectInvalid({
+      ...baseConfig,
+      dlq: { output: { capture: {} }, ...retryConfig },
+    });
+  });
+
   it("rejects a DLQ without an output", () => {
     expectInvalid({ ...baseConfig, dlq: { max_retries: 3 } });
   });
@@ -107,6 +138,22 @@ describe("DLQ pipeline configuration", () => {
     expect(Either.isLeft(result)).toBe(true);
     if (Either.isLeft(result)) {
       expect(result.left.message).toContain("max_retrys");
+      expect(result.left.message).toContain("is unexpected");
+    }
+  });
+
+  it("rejects a misspelled retry schedule in the YAML envelope", async () => {
+    const result = await loadYamlConfig({
+      ...baseConfig,
+      dlq: {
+        retry_shedule: "fixed",
+        output: { capture: {} },
+      },
+    });
+
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isLeft(result)) {
+      expect(result.left.message).toContain("retry_shedule");
       expect(result.left.message).toContain("is unexpected");
     }
   });
@@ -148,6 +195,8 @@ describe("DLQ pipeline configuration", () => {
         ...baseConfig,
         dlq: {
           max_retries: 0,
+          retry_schedule: "fixed",
+          retry_interval_ms: 1,
           output: { capture: {} },
         },
       }),
