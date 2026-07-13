@@ -74,4 +74,27 @@ describe("bounded input queue policies", () => {
     await Effect.runPromise(recordQueueDrop(metrics, state, "Test"));
     expect(metrics.getInputMetrics().messagesDropped).toBe(2);
   });
+
+  it("keeps accepted and dropped message metrics disjoint", async () => {
+    const metrics = new MetricsAccumulator("queue-metrics-test");
+    const state = { lastLogAt: 0, suppressed: 0 };
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const queue = yield* createInputQueue<number>(1, "drop_new");
+        for (const value of [1, 2]) {
+          const offer = yield* offerInputQueue(queue, value, "drop_new", 1);
+          if (offer.accepted) metrics.recordProcessed();
+          if (offer.dropped > 0) {
+            yield* recordQueueDrop(metrics, state, "Test");
+          }
+        }
+      }),
+    );
+
+    const snapshot = metrics.getInputMetrics();
+    expect(snapshot.messagesProcessed).toBe(1);
+    expect(snapshot.messagesDropped).toBe(1);
+    expect(snapshot.messagesProcessed + snapshot.messagesDropped).toBe(2);
+  });
 });

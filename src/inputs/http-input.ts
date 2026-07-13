@@ -21,6 +21,7 @@ import {
   validate,
   NonEmptyString,
   Port,
+  PositiveInt,
   TimeoutMs,
 } from "../core/validation.js";
 import {
@@ -59,7 +60,7 @@ export const HttpInputConfigSchema = Schema.Struct({
   host: Schema.optional(NonEmptyString),
   path: Schema.optional(NonEmptyString),
   timeout: Schema.optional(TimeoutMs),
-  queueSize: Schema.optional(Schema.Int.pipe(Schema.positive())),
+  queueSize: Schema.optional(PositiveInt),
   overflow: Schema.optional(Schema.Literal("block", "drop_new", "drop_old")),
 });
 
@@ -175,12 +176,14 @@ export const createHttpInput = (
         await Effect.runPromise(recordQueueDrop(metrics, dropLogState, "HTTP"));
       }
 
-      metrics.recordProcessed(duration);
+      if (offer.accepted) {
+        metrics.recordProcessed(duration);
 
-      // Emit metrics every 100 messages
-      const metricsSnapshot = metrics.getInputMetrics();
-      if (metricsSnapshot.messagesProcessed % 100 === 0) {
-        await Effect.runPromise(emitInputMetrics(metricsSnapshot));
+        // Emit metrics every 100 accepted messages
+        const metricsSnapshot = metrics.getInputMetrics();
+        if (metricsSnapshot.messagesProcessed % 100 === 0) {
+          await Effect.runPromise(emitInputMetrics(metricsSnapshot));
+        }
       }
 
       // Return 200 OK

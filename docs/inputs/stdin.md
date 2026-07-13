@@ -17,6 +17,11 @@ With `block`, stdin processing waits for queue capacity. `drop_new` preserves
 older buffered records, while `drop_old` preserves the newest records. Drops
 are counted in input metrics and warnings are rate-limited.
 
+`block` bounds Cascade's decoded-message queue, but stdin is a push-based Node
+stream: raw chunks can still accumulate upstream while a queue offer is waiting.
+For sustained producers that cannot be slowed, use a drop policy or rate-limit
+the process writing to stdin.
+
 ## Examples
 
 ### One Line Per Message

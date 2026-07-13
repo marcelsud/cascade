@@ -7,7 +7,7 @@ import type { Readable } from "node:stream";
 import type { Input, Message } from "../core/types.js";
 import { ComponentError, type ErrorCategory } from "../core/errors.js";
 import { MetricsAccumulator, emitInputMetrics } from "../core/metrics.js";
-import { validate, NonEmptyString } from "../core/validation.js";
+import { validate, NonEmptyString, PositiveInt } from "../core/validation.js";
 import { createTextMessage, splitCompleteLines } from "./text-input-utils.js";
 import {
   createInputQueue,
@@ -38,7 +38,7 @@ export class StdinInputError extends ComponentError {
 export const StdinInputConfigSchema = Schema.Struct({
   mode: Schema.optional(Schema.Literal("lines", "whole")),
   encoding: Schema.optional(NonEmptyString),
-  queueSize: Schema.optional(Schema.Int.pipe(Schema.positive())),
+  queueSize: Schema.optional(PositiveInt),
   overflow: Schema.optional(Schema.Literal("block", "drop_new", "drop_old")),
 });
 
@@ -99,11 +99,13 @@ export const createStdinInput = (
     if (offer.dropped > 0) {
       await Effect.runPromise(recordQueueDrop(metrics, dropLogState, "Stdin"));
     }
-    metrics.recordProcessed(Date.now() - startedAt);
-    messageCount++;
+    if (offer.accepted) {
+      metrics.recordProcessed(Date.now() - startedAt);
+      messageCount++;
 
-    if (messageCount % 100 === 0) {
-      await Effect.runPromise(emitInputMetrics(metrics.getInputMetrics()));
+      if (messageCount % 100 === 0) {
+        await Effect.runPromise(emitInputMetrics(metrics.getInputMetrics()));
+      }
     }
   };
 

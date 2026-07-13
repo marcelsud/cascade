@@ -139,11 +139,13 @@ export const createFileInput = (
       if (offer.dropped > 0) {
         await Effect.runPromise(recordQueueDrop(metrics, dropLogState, "File"));
       }
-      metrics.recordProcessed(Date.now() - startedAt);
-      messageCount++;
+      if (offer.accepted) {
+        metrics.recordProcessed(Date.now() - startedAt);
+        messageCount++;
 
-      if (messageCount % 100 === 0) {
-        await Effect.runPromise(emitInputMetrics(metrics.getInputMetrics()));
+        if (messageCount % 100 === 0) {
+          await Effect.runPromise(emitInputMetrics(metrics.getInputMetrics()));
+        }
       }
     }
   };

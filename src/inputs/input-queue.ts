@@ -30,6 +30,9 @@ export const offerInputQueue = <A>(
   capacity: number,
 ): Effect.Effect<QueueOfferResult> =>
   Effect.gen(function* () {
+    // Queue.size and Queue.offer are separate operations. With concurrent
+    // drop_old producers this makes the drop count observational/approximate,
+    // while the sliding queue's actual eviction behavior remains atomic.
     const wasFull =
       overflow === "drop_old" && (yield* Queue.size(queue)) >= capacity;
     const accepted = yield* Queue.offer(queue, value);

@@ -24,6 +24,11 @@ Subscribes to Redis Pub/Sub channels or patterns and consumes published messages
 newest messages. Explicit drops increment `messagesDropped` and emit
 rate-limited warnings.
 
+Redis Pub/Sub has no consumer flow control. `block` bounds Cascade's message
+queue, but sustained publishing can still accumulate pending handler work while
+queue offers wait. Prefer `drop_new` or `drop_old` when publishers can outpace
+the pipeline for extended periods.
+
 ### Connection Configuration Fields
 
 - `connect_timeout`: Connection timeout in ms (default: 10000)
