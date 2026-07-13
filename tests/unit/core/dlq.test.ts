@@ -34,6 +34,35 @@ describe("Dead Letter Queue (DLQ)", () => {
     expect(Chunk.toReadonlyArray(outputs)).toEqual([0, 1, 2, 3]);
   });
 
+  it("waits the fixed interval after a slow attempt completes", async () => {
+    const attemptStarts: number[] = [];
+    const slowFailure = Effect.suspend(() => {
+      attemptStarts.push(Date.now());
+      return Effect.sleep("60 millis").pipe(
+        Effect.zipRight(Effect.fail(new Error("retry"))),
+      );
+    });
+
+    await Effect.runPromise(
+      Effect.either(
+        slowFailure.pipe(
+          Effect.retry({
+            times: 2,
+            schedule: createDLQRetrySchedule("fixed", 40),
+          }),
+        ),
+      ),
+    );
+
+    expect(attemptStarts).toHaveLength(3);
+    const gaps = attemptStarts.slice(1).map((start, index) => {
+      const previous = attemptStarts[index];
+      if (previous === undefined) throw new Error("Missing attempt timestamp");
+      return start - previous;
+    });
+    expect(gaps.every((gap) => gap > 75)).toBe(true);
+  });
+
   describe("withDLQ", () => {
     it("should send message successfully when output succeeds", async () => {
       const mockOutput: Output<Error> = {

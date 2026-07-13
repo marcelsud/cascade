@@ -16,9 +16,10 @@ Exactly one destination must be configured under `dlq.output`.
 - `retry_schedule`: `exponential`, `fixed`, or `linear` (default: `exponential`)
 - `retry_interval_ms`: Positive base interval in milliseconds (default: `1000`)
 
-An exponential schedule waits `1×`, `2×`, `4×`, and so on. A linear schedule
-waits `1×`, `2×`, `3×`, and so on. A fixed schedule waits the configured
-interval between every retry.
+After the previous attempt completes, an exponential schedule delays the next
+retry by `1×`, `2×`, `4×`, and so on. A linear schedule delays by `1×`, `2×`,
+`3×`, and so on. A fixed schedule waits the configured interval after each
+attempt completes.
 
 DLQ retries wrap the primary output's complete `send` operation. Outputs with
 their own retry behavior, such as HTTP and Redis outputs, therefore retry

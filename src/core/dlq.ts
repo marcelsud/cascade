@@ -34,7 +34,7 @@ export const createDLQRetrySchedule = (
   const interval = Duration.millis(intervalMs);
   switch (type) {
     case "fixed":
-      return Schedule.fixed(interval);
+      return Schedule.spaced(interval);
     case "linear":
       return Schedule.linear(interval);
     case "exponential":
