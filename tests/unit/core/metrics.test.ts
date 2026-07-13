@@ -23,6 +23,7 @@ describe("Metrics Collection", () => {
 
         expect(metrics.component).toBe("test-component");
         expect(metrics.messagesProcessed).toBe(0);
+        expect(metrics.messagesDropped).toBe(0);
         expect(metrics.errorsEncountered).toBe(0);
         expect(metrics.averageDuration).toBe(0);
         expect(metrics.totalDuration).toBe(0);
@@ -48,6 +49,12 @@ describe("Metrics Collection", () => {
         const metrics = accumulator.getInputMetrics();
 
         expect(metrics.errorsEncountered).toBe(2);
+      });
+
+      it("should record dropped input messages", () => {
+        accumulator.recordDropped();
+        accumulator.recordDropped();
+        expect(accumulator.getInputMetrics().messagesDropped).toBe(2);
       });
 
       it("should calculate average duration correctly", () => {
@@ -134,6 +141,7 @@ describe("Metrics Collection", () => {
         accumulator.recordSent(5, 50);
         accumulator.recordBatch(10, 200);
         accumulator.recordError();
+        accumulator.recordDropped();
         accumulator.recordSendError();
 
         accumulator.reset();
@@ -142,6 +150,7 @@ describe("Metrics Collection", () => {
         const outputMetrics = accumulator.getOutputMetrics();
 
         expect(inputMetrics.messagesProcessed).toBe(0);
+        expect(inputMetrics.messagesDropped).toBe(0);
         expect(inputMetrics.errorsEncountered).toBe(0);
         expect(inputMetrics.totalDuration).toBe(0);
 
@@ -159,6 +168,7 @@ describe("Metrics Collection", () => {
         component: "test-input",
         timestamp: Date.now(),
         messagesProcessed: 127,
+        messagesDropped: 4,
         errorsEncountered: 3,
         averageDuration: 145,
         totalDuration: 1000,

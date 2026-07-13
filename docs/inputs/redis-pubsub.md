@@ -16,7 +16,18 @@ Subscribes to Redis Pub/Sub channels or patterns and consumes published messages
 
 ### Optional Fields
 
-- `queue_size`: Maximum messages buffered in memory (default: 100)
+- `queue_size`: Maximum messages buffered in memory (default: 1000)
+- `overflow`: `block`, `drop_new`, or `drop_old` (default: `block`)
+
+`block` waits for queue capacity instead of silently discarding messages.
+`drop_new` preserves older buffered messages, while `drop_old` preserves the
+newest messages. Explicit drops increment `messagesDropped` and emit
+rate-limited warnings.
+
+Redis Pub/Sub has no consumer flow control. `block` bounds Cascade's message
+queue, but sustained publishing can still accumulate pending handler work while
+queue offers wait. Prefer `drop_new` or `drop_old` when publishers can outpace
+the pipeline for extended periods.
 
 ### Connection Configuration Fields
 

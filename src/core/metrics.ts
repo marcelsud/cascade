@@ -17,6 +17,7 @@ export interface ComponentMetrics {
  */
 export interface InputMetrics extends ComponentMetrics {
   readonly messagesProcessed: number;
+  readonly messagesDropped: number;
   readonly errorsEncountered: number;
   readonly averageDuration: number; // milliseconds
   readonly totalDuration: number; // milliseconds
@@ -38,6 +39,7 @@ export interface OutputMetrics extends ComponentMetrics {
  */
 export class MetricsAccumulator {
   private messagesProcessed = 0;
+  private messagesDropped = 0;
   private messagesSent = 0;
   private batchesSent = 0;
   private errorsEncountered = 0;
@@ -54,6 +56,11 @@ export class MetricsAccumulator {
     this.messagesProcessed++;
     this.totalDuration += durationMs;
     this.operationCount++;
+  }
+
+  /** Record a message discarded by an explicitly configured overflow policy. */
+  recordDropped(): void {
+    this.messagesDropped++;
   }
 
   /**
@@ -97,6 +104,7 @@ export class MetricsAccumulator {
       component: this.componentName,
       timestamp: Date.now(),
       messagesProcessed: this.messagesProcessed,
+      messagesDropped: this.messagesDropped,
       errorsEncountered: this.errorsEncountered,
       averageDuration:
         this.operationCount > 0
@@ -129,6 +137,7 @@ export class MetricsAccumulator {
    */
   reset(): void {
     this.messagesProcessed = 0;
+    this.messagesDropped = 0;
     this.messagesSent = 0;
     this.batchesSent = 0;
     this.errorsEncountered = 0;
@@ -148,6 +157,7 @@ export const emitInputMetrics = (
     component: metrics.component,
     type: "input",
     messagesProcessed: metrics.messagesProcessed,
+    messagesDropped: metrics.messagesDropped,
     errorsEncountered: metrics.errorsEncountered,
     averageDuration: metrics.averageDuration,
     totalDuration: metrics.totalDuration,

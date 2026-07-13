@@ -16,6 +16,12 @@ Reads newline-delimited records from a local file. By default it behaves like `t
 - `start_at`: Where to begin reading, `end` or `beginning` (default: `end`)
 - `poll_interval_ms`: Poll interval while following (default: `500`)
 - `encoding`: Text encoding passed to Node.js (default: `utf8`)
+- `queue_size`: Maximum messages buffered in memory (default: `1000`)
+- `overflow`: `block`, `drop_new`, or `drop_old` (default: `block`)
+
+With `block`, file polling waits for queue capacity. `drop_new` preserves older
+buffered lines, while `drop_old` preserves the newest lines. Drops are counted
+in input metrics and warnings are rate-limited.
 
 ## Examples
 

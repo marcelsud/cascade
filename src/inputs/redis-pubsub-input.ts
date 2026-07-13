@@ -1,7 +1,7 @@
 /**
  * Redis Pub/Sub Input - Consumes messages from Redis Pub/Sub channels
  */
-import { Effect, Stream, Queue } from "effect";
+import { Effect, Stream } from "effect";
 import * as Schema from "effect/Schema";
 import Redis from "ioredis";
 import type { Input, Message } from "../core/types.js";
@@ -19,6 +19,12 @@ import {
   Port,
   PositiveInt,
 } from "../core/validation.js";
+import {
+  createInputQueue,
+  offerInputQueue,
+  recordQueueDrop,
+  type OverflowPolicy,
+} from "./input-queue.js";
 
 export interface RedisPubSubInputConfig {
   readonly host: string;
@@ -39,7 +45,8 @@ export interface RedisPubSubInputConfig {
   readonly enableOfflineQueue?: boolean; // Queue commands when offline (default: true)
 
   // Message queue configuration
-  readonly queueSize?: number; // Max messages in memory queue (default: 100)
+  readonly queueSize?: number; // Max messages in memory queue (default: 1000)
+  readonly overflow?: OverflowPolicy;
 }
 
 export class RedisPubSubInputError extends ComponentError {
@@ -75,6 +82,7 @@ export const RedisPubSubInputConfigSchema = Schema.Struct({
   maxRetriesPerRequest: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
   enableOfflineQueue: Schema.optional(Schema.Boolean),
   queueSize: Schema.optional(PositiveInt),
+  overflow: Schema.optional(Schema.Literal("block", "drop_new", "drop_old")),
 });
 
 /**
@@ -164,15 +172,16 @@ export const createRedisPubSubInput = (
     },
   });
 
-  const queueSize = config.queueSize ?? 100;
+  const queueSize = config.queueSize ?? 1_000;
+  const overflow = config.overflow ?? "block";
   const metrics = new MetricsAccumulator("redis-pubsub-input");
+  const dropLogState = { lastLogAt: 0, suppressed: 0 };
   let messageCount = 0;
 
   // Create the stream using Queue for message buffering
   const stream = Stream.unwrap(
     Effect.gen(function* () {
-      // Create bounded queue for messages
-      const queue = yield* Queue.bounded<Message>(queueSize);
+      const queue = yield* createInputQueue<Message>(queueSize, overflow);
 
       // Set up message handler
       subscriber.on("message", (channel: string, message: string) => {
@@ -181,9 +190,8 @@ export const createRedisPubSubInput = (
           const msg = yield* convertPubSubMessage(channel, message);
           const duration = Date.now() - startTime;
 
-          // Try to offer to queue (non-blocking)
-          const offered = yield* Queue.offer(queue, msg);
-          if (offered) {
+          const offer = yield* offerInputQueue(queue, msg, overflow, queueSize);
+          if (offer.accepted) {
             metrics.recordProcessed(duration);
             messageCount++;
 
@@ -192,12 +200,9 @@ export const createRedisPubSubInput = (
               yield* emitInputMetrics(metrics.getInputMetrics());
               messageCount = 0;
             }
-          } else {
-            // Queue is full - drop message and record error
-            metrics.recordError();
-            yield* Effect.logWarning(
-              `Message queue full, dropping message from channel ${channel}`,
-            );
+          }
+          if (offer.dropped > 0) {
+            yield* recordQueueDrop(metrics, dropLogState, "Redis Pub/Sub");
           }
         });
 
@@ -215,8 +220,13 @@ export const createRedisPubSubInput = (
             const msg = yield* convertPubSubMessage(channel, message, pattern);
             const duration = Date.now() - startTime;
 
-            const offered = yield* Queue.offer(queue, msg);
-            if (offered) {
+            const offer = yield* offerInputQueue(
+              queue,
+              msg,
+              overflow,
+              queueSize,
+            );
+            if (offer.accepted) {
               metrics.recordProcessed(duration);
               messageCount++;
 
@@ -224,11 +234,9 @@ export const createRedisPubSubInput = (
                 yield* emitInputMetrics(metrics.getInputMetrics());
                 messageCount = 0;
               }
-            } else {
-              metrics.recordError();
-              yield* Effect.logWarning(
-                `Message queue full, dropping message from channel ${channel} (pattern ${pattern})`,
-              );
+            }
+            if (offer.dropped > 0) {
+              yield* recordQueueDrop(metrics, dropLogState, "Redis Pub/Sub");
             }
           });
 

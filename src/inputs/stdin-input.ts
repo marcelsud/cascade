@@ -7,12 +7,20 @@ import type { Readable } from "node:stream";
 import type { Input, Message } from "../core/types.js";
 import { ComponentError, type ErrorCategory } from "../core/errors.js";
 import { MetricsAccumulator, emitInputMetrics } from "../core/metrics.js";
-import { validate, NonEmptyString } from "../core/validation.js";
+import { validate, NonEmptyString, PositiveInt } from "../core/validation.js";
 import { createTextMessage, splitCompleteLines } from "./text-input-utils.js";
+import {
+  createInputQueue,
+  offerInputQueue,
+  recordQueueDrop,
+  type OverflowPolicy,
+} from "./input-queue.js";
 
 export interface StdinInputConfig {
   readonly mode?: "lines" | "whole";
   readonly encoding?: string;
+  readonly queueSize?: number;
+  readonly overflow?: OverflowPolicy;
 }
 
 export class StdinInputError extends ComponentError {
@@ -30,6 +38,8 @@ export class StdinInputError extends ComponentError {
 export const StdinInputConfigSchema = Schema.Struct({
   mode: Schema.optional(Schema.Literal("lines", "whole")),
   encoding: Schema.optional(NonEmptyString),
+  queueSize: Schema.optional(PositiveInt),
+  overflow: Schema.optional(Schema.Literal("block", "drop_new", "drop_old")),
 });
 
 export const createStdinInput = (
@@ -46,8 +56,11 @@ export const createStdinInput = (
 
   const mode = config.mode ?? "lines";
   const encoding = (config.encoding ?? "utf8") as BufferEncoding;
-  const queue = Effect.runSync(Queue.unbounded<Message>());
+  const queueSize = config.queueSize ?? 1_000;
+  const overflow = config.overflow ?? "block";
+  const queue = Effect.runSync(createInputQueue<Message>(queueSize, overflow));
   const metrics = new MetricsAccumulator("stdin-input");
+  const dropLogState = { lastLogAt: 0, suppressed: 0 };
 
   let queueClosed = false;
   let lineNumber = 0;
@@ -75,19 +88,32 @@ export const createStdinInput = (
       metadata.lineNumber = line;
     }
 
-    await Effect.runPromise(Queue.offer(queue, createTextMessage(value, metadata)));
-    metrics.recordProcessed(Date.now() - startedAt);
-    messageCount++;
+    const offer = await Effect.runPromise(
+      offerInputQueue(
+        queue,
+        createTextMessage(value, metadata),
+        overflow,
+        queueSize,
+      ),
+    );
+    if (offer.dropped > 0) {
+      await Effect.runPromise(recordQueueDrop(metrics, dropLogState, "Stdin"));
+    }
+    if (offer.accepted) {
+      metrics.recordProcessed(Date.now() - startedAt);
+      messageCount++;
 
-    if (messageCount % 100 === 0) {
-      await Effect.runPromise(emitInputMetrics(metrics.getInputMetrics()));
+      if (messageCount % 100 === 0) {
+        await Effect.runPromise(emitInputMetrics(metrics.getInputMetrics()));
+      }
     }
   };
 
   const onData = (chunk: string | Buffer) => {
     work = work
       .then(async () => {
-        const text = typeof chunk === "string" ? chunk : chunk.toString(encoding);
+        const text =
+          typeof chunk === "string" ? chunk : chunk.toString(encoding);
 
         if (mode === "whole") {
           wholeText += text;
