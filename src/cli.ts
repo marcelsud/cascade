@@ -4,9 +4,13 @@
  */
 import { Effect, Logger, LogLevel } from "effect";
 import { NodeRuntime } from "@effect/platform-node";
-import { loadConfig } from "./core/config-loader.js";
-import { buildPipeline } from "./core/pipeline-builder.js";
 import { makeShutdownController, run } from "./core/pipeline.js";
+import {
+  loadAndBuildPipeline,
+  loadRegistry,
+  validateConfig,
+} from "./cli-config.js";
+import { parseCliArgs } from "./cli-args.js";
 import { runYamlTests, formatTestResults } from "./testing/yaml-test-runner.js";
 import packageJson from "../package.json" with { type: "json" };
 
@@ -26,18 +30,25 @@ Usage:
 
 Commands:
   run <config-file>    Run a pipeline from a YAML configuration file
+  validate <config>    Validate and build a pipeline without running it
   test <pattern>       Run YAML tests matching the glob pattern
 
 Options:
   -h, --help          Show this help message
   -v, --version       Show version information
   --debug             Enable debug logging
+  --registry <module> Load custom components from a registry module
 
 Examples:
   cascade run configs/example-pipeline.yaml
   cascade run my-pipeline.yaml --debug
+  cascade validate my-pipeline.yaml --registry ./registry.js
   cascade test "tests/**/*.yaml"
   cascade test tests/processors/uppercase.test.yaml
+
+Note:
+  validate constructs real components. It may briefly bind configured ports or
+  open broker connections; use free ports and reachable brokers (or lazy_connect).
 `);
 }
 
@@ -59,12 +70,17 @@ const main = Effect.gen(function* () {
     return;
   }
 
-  // Check for debug flag
-  const debugMode = args.includes("--debug");
+  const parsed = yield* Effect.try({
+    try: () => parseCliArgs(args),
+    catch: (error) =>
+      error instanceof Error ? error : new Error(String(error)),
+  });
+  const { command, configPath, debug: debugMode, registryPath } = parsed;
+  const registry = registryPath ? yield* loadRegistry(registryPath) : undefined;
 
   // Handle test command
-  if (args[0] === "test") {
-    const pattern = args.find((arg) => !arg.startsWith("--") && arg !== "test");
+  if (command === "test") {
+    const pattern = configPath;
     if (!pattern) {
       console.error("Error: Missing test pattern argument");
       console.error("Usage: cascade test <pattern>");
@@ -90,36 +106,48 @@ const main = Effect.gen(function* () {
     return;
   }
 
-  // Check for run command
-  if (args[0] !== "run") {
-    console.error(`Error: Unknown command '${args[0]}'`);
+  // Check for pipeline commands
+  if (command !== "run" && command !== "validate") {
+    console.error(`Error: Unknown command '${command}'`);
     console.error('Run "cascade --help" for usage information.');
     yield* Effect.fail(new Error("Invalid command"));
     return;
   }
 
   // Get config file path (filter out flags)
-  const configPath = args.find((arg) => !arg.startsWith("--") && arg !== "run");
   if (!configPath) {
     console.error("Error: Missing config file argument");
-    console.error("Usage: cascade run <config-file.yaml>");
+    console.error(`Usage: cascade ${command} <config-file.yaml>`);
     yield* Effect.fail(new Error("Missing config file"));
     return;
   }
 
   yield* Effect.log(`Loading configuration from: ${configPath}`);
 
-  // Load and validate config
-  const config = yield* loadConfig(configPath);
+  if (command === "validate") {
+    const summary = yield* validateConfig(configPath, registry);
+    console.log("Configuration is valid");
+    console.log(`  Input: ${summary.input}`);
+    console.log(
+      `  Processors (${summary.processors.length}): ${summary.processors.join(", ") || "none"}`,
+    );
+    console.log(`  Output: ${summary.output}`);
+    console.log(`  DLQ: ${summary.dlq ? "yes" : "no"}`);
+    return;
+  }
+
+  // Load, validate, and build config with the same registry instance.
+  const { config, pipeline } = yield* loadAndBuildPipeline(
+    configPath,
+    debugMode,
+    registry,
+  );
 
   yield* Effect.log(`Configuration loaded successfully`);
 
   if (debugMode) {
     yield* Effect.logDebug(`Loaded config: ${JSON.stringify(config, null, 2)}`);
   }
-
-  // Build pipeline from config
-  const pipeline = yield* buildPipeline(config, debugMode);
 
   yield* Effect.log(
     `Pipeline built successfully with ${pipeline.processors.length} processors`,
