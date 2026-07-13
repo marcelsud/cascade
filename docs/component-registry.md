@@ -83,6 +83,11 @@ prints the selected input, processors, output, and DLQ status, then closes the
 built components without consuming the input stream. It exits non-zero for
 configuration, registry-loading, or component-building errors.
 
+Validation is not side-effect-free because it constructs the real components.
+It may briefly bind configured HTTP ports and open broker connections. Run it
+with free ports and reachable brokers, or set `lazy_connect: true` for Redis
+components when a connection is not required during construction.
+
 Registered schemas participate in the normal configuration rules:
 
 - configuration is validated before pipeline construction;

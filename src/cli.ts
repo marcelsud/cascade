@@ -10,6 +10,7 @@ import {
   loadRegistry,
   validateConfig,
 } from "./cli-config.js";
+import { parseCliArgs } from "./cli-args.js";
 import { runYamlTests, formatTestResults } from "./testing/yaml-test-runner.js";
 import packageJson from "../package.json" with { type: "json" };
 
@@ -44,6 +45,10 @@ Examples:
   cascade validate my-pipeline.yaml --registry ./registry.js
   cascade test "tests/**/*.yaml"
   cascade test tests/processors/uppercase.test.yaml
+
+Note:
+  validate constructs real components. It may briefly bind configured ports or
+  open broker connections; use free ports and reachable brokers (or lazy_connect).
 `);
 }
 
@@ -65,19 +70,17 @@ const main = Effect.gen(function* () {
     return;
   }
 
-  // Check for debug flag
-  const debugMode = args.includes("--debug");
-  const registryFlagIndex = args.indexOf("--registry");
-  const registryPath =
-    registryFlagIndex >= 0 ? args[registryFlagIndex + 1] : undefined;
-  if (registryFlagIndex >= 0 && !registryPath) {
-    yield* Effect.fail(new Error("Missing module path after --registry"));
-  }
+  const parsed = yield* Effect.try({
+    try: () => parseCliArgs(args),
+    catch: (error) =>
+      error instanceof Error ? error : new Error(String(error)),
+  });
+  const { command, configPath, debug: debugMode, registryPath } = parsed;
   const registry = registryPath ? yield* loadRegistry(registryPath) : undefined;
 
   // Handle test command
-  if (args[0] === "test") {
-    const pattern = args.find((arg) => !arg.startsWith("--") && arg !== "test");
+  if (command === "test") {
+    const pattern = configPath;
     if (!pattern) {
       console.error("Error: Missing test pattern argument");
       console.error("Usage: cascade test <pattern>");
@@ -104,25 +107,24 @@ const main = Effect.gen(function* () {
   }
 
   // Check for pipeline commands
-  if (args[0] !== "run" && args[0] !== "validate") {
-    console.error(`Error: Unknown command '${args[0]}'`);
+  if (command !== "run" && command !== "validate") {
+    console.error(`Error: Unknown command '${command}'`);
     console.error('Run "cascade --help" for usage information.');
     yield* Effect.fail(new Error("Invalid command"));
     return;
   }
 
   // Get config file path (filter out flags)
-  const configPath = args[1];
   if (!configPath) {
     console.error("Error: Missing config file argument");
-    console.error(`Usage: cascade ${args[0]} <config-file.yaml>`);
+    console.error(`Usage: cascade ${command} <config-file.yaml>`);
     yield* Effect.fail(new Error("Missing config file"));
     return;
   }
 
   yield* Effect.log(`Loading configuration from: ${configPath}`);
 
-  if (args[0] === "validate") {
+  if (command === "validate") {
     const summary = yield* validateConfig(configPath, registry);
     console.log("Configuration is valid");
     console.log(`  Input: ${summary.input}`);
