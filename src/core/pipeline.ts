@@ -191,9 +191,14 @@ export const run = <E, R>(
         yield* Effect.log(`Starting pipeline: ${pipeline.name}`);
         const workers = yield* FiberSet.make<void, never>();
         const permits = yield* Effect.makeSemaphore(maxConcurrentMessages);
+        const stoppedInput =
+          pipeline.input.shutdownMode === "finish-current"
+            ? pipeline.input.stream.pipe(Stream.haltWhenDeferred(shutdown.stop))
+            : pipeline.input.stream.pipe(
+                Stream.interruptWhenDeferred(shutdown.stop),
+              );
 
-        yield* pipeline.input.stream.pipe(
-          Stream.interruptWhenDeferred(shutdown.stop),
+        yield* stoppedInput.pipe(
           Stream.runForEach((message) =>
             Effect.gen(function* () {
               yield* permits.take(1);
