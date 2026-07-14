@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   localstack:
-    image: localstack/localstack:latest
+    image: localstack/localstack:4.14.0
     container_name: e2e-localstack
     ports:
       - "4566:4566"
