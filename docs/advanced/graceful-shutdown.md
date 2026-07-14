@@ -25,5 +25,9 @@ their host application's lifecycle hooks. A force request also requests that
 input consumption stop, so `requestForce` is safe to call without a preceding
 `request`.
 
+`requestForce` interrupts an active pull immediately and can therefore lose a
+message from a destructive-pull input; this is the intentional force-shutdown
+tradeoff.
+
 The Docker-backed end-to-end suite interrupts a slow Redis-list pipeline and
 verifies that admitted work drains while untouched list items remain available.

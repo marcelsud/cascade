@@ -29,6 +29,7 @@ describe("RedisStreamsInput", () => {
       });
 
       expect(input.name).toBe("redis-streams-input");
+      expect(input.shutdownMode).toBe("finish-current");
       expect(input.stream).toBeDefined();
       expect(input.close).toBeDefined();
     });
@@ -43,7 +44,7 @@ describe("RedisStreamsInput", () => {
         consumerName: "consumer-1",
       });
 
-      expect(input).toBeDefined();
+      expect(input.shutdownMode).toBe("finish-current");
     });
 
     it("should auto-detect consumer group mode from config", () => {

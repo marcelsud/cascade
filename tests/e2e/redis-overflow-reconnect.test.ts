@@ -10,12 +10,15 @@ import {
 } from "../../src/testing/capture-output.js";
 import {
   E2EResources,
+  requireE2EInfrastructure,
   type RunningPipeline,
   runPipeline,
   startPipeline,
   uniqueResourceName,
   waitFor,
 } from "./helpers/index.js";
+
+requireE2EInfrastructure();
 
 describe("Redis overflow and reconnect behavior", () => {
   let resources: E2EResources;
@@ -124,7 +127,7 @@ describe("Redis overflow and reconnect behavior", () => {
           error._tag === "RedisListInputError",
       ),
     ).toBe(true);
-    expect(elapsed).toBeGreaterThanOrEqual(125);
+    expect(elapsed).toBeGreaterThanOrEqual(150);
     expect(elapsed).toBeLessThan(2_000);
   }, 10_000);
 });
