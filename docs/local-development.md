@@ -11,6 +11,9 @@ For local development, Cascade uses:
 
 All services are automatically initialized via Docker Compose - no manual setup required.
 
+The Compose files pin LocalStack Community `4.14.0`, the final unauthenticated
+community release. Newer unified LocalStack images require an auth token.
+
 ## Prerequisites
 
 - Docker and Docker Compose installed
@@ -303,18 +306,24 @@ Unit tests run without Docker dependencies.
 
 ### E2E Tests
 
-E2E tests require LocalStack and Redis:
+E2E tests require the root Docker Compose LocalStack and Redis services. The
+suite probes both services before collecting tests and fails with an actionable
+error when either is unavailable; tests are never silently skipped.
 
 ```bash
 # 1. Start infrastructure
-docker-compose up -d
+docker compose up -d
 
-# 2. Wait for services to be healthy
-sleep 10
+# 2. Check service health
+docker compose ps
 
 # 3. Run E2E tests
-npm run test:e2e
+bun run test:e2e
 ```
+
+Each test creates uniquely named SQS queues and Redis keys and removes them in
+cleanup hooks. To point the harness at non-default services, set
+`CASCADE_E2E_SQS_ENDPOINT` and `CASCADE_E2E_REDIS_URL`.
 
 ### All Tests
 

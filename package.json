@@ -9,7 +9,7 @@
     "dev": "tsx src/index.ts",
     "test": "vitest",
     "test:unit": "vitest run tests/unit",
-    "test:e2e": "vitest run tests/e2e",
+    "test:e2e": "bun tests/e2e/run.ts",
     "test:coverage": "vitest run --coverage",
     "e2e:all": "./tests/e2e/run-all-tests.sh",
     "e2e:redis-pubsub": "./tests/e2e/scripts/test-redis-pubsub.sh",
