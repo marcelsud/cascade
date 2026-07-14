@@ -23,6 +23,10 @@ import {
   PositiveInt,
   RetryCount,
 } from "../core/validation.js";
+import {
+  closeRedisOutputClient,
+  observeRedisOutputErrors,
+} from "./redis-output-client.js";
 
 export interface RedisStreamsOutputConfig {
   readonly host: string;
@@ -108,7 +112,7 @@ export const createRedisStreamsOutput = (
       return delay;
     },
   });
-  client.on?.("error", () => undefined);
+  observeRedisOutputErrors(client, "Redis Streams output");
 
   // Log connection info
   const connectionInfo = `redis://${config.host}:${config.port}/${config.db || 0}`;
@@ -203,8 +207,7 @@ export const createRedisStreamsOutput = (
         }
         yield* Effect.tryPromise({
           try: async () => {
-            if (client.status === "ready") await client.quit();
-            else client.disconnect();
+            await closeRedisOutputClient(client);
           },
           catch: (error) => {
             // Log but don't fail on close (best effort cleanup)
