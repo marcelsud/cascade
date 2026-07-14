@@ -4,6 +4,9 @@
  * These tests exercise the full pipeline path: Input → Dedupe Processor → Output,
  * verifying that duplicate messages (same key) are suppressed before reaching the
  * capture output, while unique messages flow through correctly.
+ *
+ * This file is intentionally exempt from the infrastructure guard: it is an
+ * in-memory pipeline integration test and does not use Redis or LocalStack.
  */
 import { describe, it, expect } from "vitest";
 import { Effect, Stream } from "effect";
