@@ -14,6 +14,11 @@ Sends messages to Redis Streams with optional stream length management. Efficien
 ### Optional Fields
 
 - `max_length`: Maximum number of entries in the stream (optional, enables MAXLEN trimming)
+- `enable_offline_queue`: Queue commands while disconnected (default: `false`)
+
+Redis outputs fail fast by default while disconnected, allowing Cascade retry
+and DLQ policies to handle the message. Set `enable_offline_queue: true` only
+when replaying commands queued during an outage is explicitly acceptable.
 
 ## Examples
 
