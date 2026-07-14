@@ -1,16 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Effect, Stream } from "effect";
+import Redis from "ioredis";
 import { createRedisStreamsInput } from "../../../src/inputs/redis-streams-input.js";
 
 // Mock ioredis
 vi.mock("ioredis", () => {
   return {
     default: vi.fn(() => ({
+      status: "ready",
       xread: vi.fn().mockResolvedValue(null),
       xreadgroup: vi.fn().mockResolvedValue(null),
       xgroup: vi.fn().mockResolvedValue("OK"),
       xack: vi.fn().mockResolvedValue(1),
       quit: vi.fn().mockResolvedValue("OK"),
+      disconnect: vi.fn(),
+      on: vi.fn(),
     })),
   };
 });
@@ -343,6 +347,37 @@ describe("RedisStreamsInput", () => {
       }
 
       // Close method exists and can be called (actual quit would be called internally)
+    });
+
+    it("disconnects an unready client without waiting for quit", async () => {
+      const disconnect = vi.fn();
+      const quit = vi.fn().mockResolvedValue("OK");
+      const redisMock = Redis as unknown as {
+        mockImplementationOnce: (factory: () => never) => void;
+      };
+      redisMock.mockImplementationOnce(
+        () =>
+          ({
+            status: "wait",
+            xread: vi.fn().mockResolvedValue(null),
+            xreadgroup: vi.fn().mockResolvedValue(null),
+            xgroup: vi.fn().mockResolvedValue("OK"),
+            xack: vi.fn().mockResolvedValue(1),
+            quit,
+            disconnect,
+            on: vi.fn(),
+          }) as never,
+      );
+      const input = createRedisStreamsInput({
+        host: "localhost",
+        port: 6379,
+        stream: "test-stream",
+      });
+
+      await Effect.runPromise(input.close!());
+
+      expect(disconnect).toHaveBeenCalledOnce();
+      expect(quit).not.toHaveBeenCalled();
     });
   });
 });
