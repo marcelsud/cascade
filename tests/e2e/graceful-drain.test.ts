@@ -9,10 +9,13 @@ import {
 } from "../../src/testing/capture-output.js";
 import {
   E2EResources,
+  requireE2EInfrastructure,
   type RunningPipeline,
   startPipeline,
   waitFor,
 } from "./helpers/index.js";
+
+requireE2EInfrastructure();
 
 describe("graceful drain", () => {
   let resources: E2EResources;
