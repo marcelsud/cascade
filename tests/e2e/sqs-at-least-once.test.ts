@@ -122,7 +122,12 @@ describe("SQS at-least-once delivery", () => {
     );
     activeRun = healthyRun;
     await waitFor(
-      async () => (await Effect.runPromise(capture.getCount())) >= count,
+      async () =>
+        new Set(
+          (await Effect.runPromise(capture.getMessages())).map(
+            (message) => message.content.id,
+          ),
+        ).size >= count,
       `${count} successful redeliveries`,
     );
     await Effect.runPromise(healthyRun.shutdown.request);
@@ -138,5 +143,5 @@ describe("SQS at-least-once delivery", () => {
       const counts = await queueCounts(queue.url);
       return counts.visible === 0 && counts.inFlight === 0;
     }, "successfully delivered SQS messages to be deleted");
-  }, 30_000);
+  }, 45_000);
 });

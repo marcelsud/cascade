@@ -1,10 +1,19 @@
+import { GetQueueAttributesCommand } from "@aws-sdk/client-sqs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { withDLQ } from "../../src/core/dlq.js";
 import { create } from "../../src/core/pipeline.js";
 import { createRedisStreamsOutput } from "../../src/outputs/redis-streams-output.js";
 import { createSqsOutput } from "../../src/outputs/sqs-output.js";
 import { createGenerateInput } from "../../src/testing/generate-input.js";
-import { E2EResources, runPipeline, SQS_ENDPOINT } from "./helpers/index.js";
+import {
+  E2EResources,
+  requireE2EInfrastructure,
+  runPipeline,
+  SQS_ENDPOINT,
+  waitFor,
+} from "./helpers/index.js";
+
+requireE2EInfrastructure();
 
 describe("DLQ delivery under primary-output failure", () => {
   let resources: E2EResources;
@@ -46,6 +55,17 @@ describe("DLQ delivery under primary-output failure", () => {
         output: withDLQ({ output: primary, dlq, maxRetries: 0 }),
       }),
     );
+    await waitFor(async () => {
+      const response = await resources.sqs.send(
+        new GetQueueAttributesCommand({
+          QueueUrl: queue.url,
+          AttributeNames: ["ApproximateNumberOfMessages"],
+        }),
+      );
+      return (
+        Number(response.Attributes?.ApproximateNumberOfMessages ?? 0) >= count
+      );
+    }, `${count} messages to reach the SQS DLQ`);
     const messages = await resources.drainQueue(queue.url, count);
     const metadata = messages.map((message) =>
       JSON.parse(message.MessageAttributes?.metadata?.StringValue ?? "{}"),
@@ -61,5 +81,6 @@ describe("DLQ delivery under primary-output failure", () => {
         value.dlqReason.includes("Failed to send message to Redis stream"),
       ),
     ).toBe(true);
+    expect(metadata.every((value) => value.dlqAttempts === 1)).toBe(true);
   }, 20_000);
 });
