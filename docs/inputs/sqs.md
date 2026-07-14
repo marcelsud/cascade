@@ -10,6 +10,9 @@ succeeds but acknowledgement fails. Use the
 [dedupe processor](../processors/dedupe.md) when consumers require duplicate
 suppression.
 
+The Docker-backed end-to-end suite verifies both failure redelivery and
+successful acknowledgement against LocalStack (`bun run test:e2e`).
+
 Configure an SQS redrive policy with an appropriate `maxReceiveCount` as a
 backstop for poison messages, including messages whose processors fail on every
 delivery. Cascade's pipeline DLQ wraps output failures; it does not replace the

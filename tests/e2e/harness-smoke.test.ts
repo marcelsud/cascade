@@ -2,7 +2,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { create } from "../../src/core/pipeline.js";
 import { createSqsOutput } from "../../src/outputs/sqs-output.js";
 import { createGenerateInput } from "../../src/testing/generate-input.js";
-import { E2EResources, runPipeline, SQS_ENDPOINT } from "./helpers/index.js";
+import {
+  E2EResources,
+  requireE2EInfrastructure,
+  runPipeline,
+  SQS_ENDPOINT,
+} from "./helpers/index.js";
+
+requireE2EInfrastructure();
 
 describe("E2E harness", () => {
   let resources: E2EResources;
