@@ -65,6 +65,7 @@ export class E2EResources {
         new ReceiveMessageCommand({
           QueueUrl: queueUrl,
           MaxNumberOfMessages: 10,
+          MessageAttributeNames: ["All"],
           WaitTimeSeconds: messages.length >= expectedCount ? 0 : 1,
         }),
       );

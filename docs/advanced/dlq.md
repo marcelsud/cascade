@@ -1,5 +1,8 @@
 # Dead Letter Queue (DLQ)
 
+The Docker-backed end-to-end suite verifies that a failed Redis Streams
+destination is rerouted to SQS with failure metadata and separate DLQ metrics.
+
 ## Overview
 
 Send failed messages to a separate queue after exhausting retries. DLQ support helps handle failures gracefully, prevents data loss, and allows for manual intervention or reprocessing of problematic messages.

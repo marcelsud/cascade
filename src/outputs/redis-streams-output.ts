@@ -108,6 +108,7 @@ export const createRedisStreamsOutput = (
       return delay;
     },
   });
+  client.on?.("error", () => undefined);
 
   // Log connection info
   const connectionInfo = `redis://${config.host}:${config.port}/${config.db || 0}`;
@@ -202,7 +203,8 @@ export const createRedisStreamsOutput = (
         }
         yield* Effect.tryPromise({
           try: async () => {
-            await client.quit();
+            if (client.status === "ready") await client.quit();
+            else client.disconnect();
           },
           catch: (error) => {
             // Log but don't fail on close (best effort cleanup)
