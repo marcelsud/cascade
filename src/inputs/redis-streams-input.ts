@@ -292,6 +292,7 @@ export const createRedisStreamsInput = (
 
     return {
       name: "redis-streams-input",
+      shutdownMode: "finish-current",
       getMetrics: () => metrics.getInputMetrics(),
       stream,
       close: () => Effect.promise(() => client.quit()),
@@ -450,6 +451,7 @@ export const createRedisStreamsInput = (
 
   return {
     name: "redis-streams-input",
+    shutdownMode: "finish-current",
     getMetrics: () => metrics.getInputMetrics(),
     stream,
     close: () => Effect.promise(() => client.quit()),

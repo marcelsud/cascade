@@ -151,6 +151,7 @@ export const createRedisListInput = (
       return delay;
     },
   });
+  client.on?.("error", () => undefined);
 
   const direction = config.direction ?? "left";
   const timeout = config.timeout ?? 5;
@@ -241,6 +242,10 @@ export const createRedisListInput = (
     shutdownMode: "finish-current",
     getMetrics: () => metrics.getInputMetrics(),
     stream,
-    close: () => Effect.promise(() => client.quit()),
+    close: () =>
+      Effect.promise(async () => {
+        if (!client.status || client.status === "ready") await client.quit();
+        else client.disconnect();
+      }),
   };
 };
