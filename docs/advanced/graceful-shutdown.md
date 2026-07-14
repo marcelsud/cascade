@@ -24,3 +24,6 @@ to `run`, and execute `controller.request` or `controller.requestForce` from
 their host application's lifecycle hooks. A force request also requests that
 input consumption stop, so `requestForce` is safe to call without a preceding
 `request`.
+
+The Docker-backed end-to-end suite interrupts a slow Redis-list pipeline and
+verifies that admitted work drains while untouched list items remain available.
