@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Effect } from "effect";
 import { run } from "../../../src/core/pipeline.js";
 import { withDLQ } from "../../../src/core/dlq.js";
+import { createHttpOutput } from "../../../src/outputs/http-output.js";
 import { createGenerateInput } from "../../../src/testing/generate-input.js";
 import { createCaptureOutput } from "../../../src/testing/capture-output.js";
 
@@ -34,7 +35,7 @@ describe("PipelineResult metrics", () => {
     });
   });
 
-  it("surfaces DLQ destination metrics separately from the primary output", async () => {
+  it("surfaces failed HTTP sends and DLQ metrics separately", async () => {
     const dlq = await Effect.runPromise(createCaptureOutput());
     const result = await Effect.runPromise(
       run({
@@ -45,10 +46,11 @@ describe("PipelineResult metrics", () => {
         }),
         processors: [],
         output: withDLQ({
-          output: {
-            name: "failing-output",
-            send: () => Effect.fail("primary failed"),
-          },
+          output: createHttpOutput({
+            url: "http://127.0.0.1:1/dead",
+            timeout: 100,
+            maxRetries: 0,
+          }),
           dlq,
           maxRetries: 0,
         }),
@@ -56,7 +58,11 @@ describe("PipelineResult metrics", () => {
     );
 
     expect(result.success).toBe(true);
-    expect(result.metrics?.output).toBeUndefined();
+    expect(result.metrics?.output).toMatchObject({
+      component: "http-output",
+      messagesSent: 0,
+      sendErrors: 2,
+    });
     expect(result.metrics?.dlq).toMatchObject({
       component: "capture-output",
       messagesSent: 2,

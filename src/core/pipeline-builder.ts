@@ -125,6 +125,8 @@ const buildInputInternal = (
         blockMs: config.redis_streams.block_ms,
         count: config.redis_streams.count,
         startId: config.redis_streams.start_id,
+        maxReconnectAttempts: config.redis_streams.max_reconnect_attempts,
+        reconnectBackoffMs: config.redis_streams.reconnect_backoff_ms,
       }),
     );
   }
@@ -163,6 +165,8 @@ const buildInputInternal = (
         timeout: config.redis_list.timeout,
         password: config.redis_list.password,
         db: config.redis_list.db,
+        maxReconnectAttempts: config.redis_list.max_reconnect_attempts,
+        reconnectBackoffMs: config.redis_list.reconnect_backoff_ms,
       }),
     );
   }

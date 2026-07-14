@@ -21,11 +21,17 @@ Consumes messages from Redis Lists using blocking pop operations (BLPOP/BRPOP). 
 ### Connection Configuration Fields
 
 - `connect_timeout`: Connection timeout in ms (default: 10000)
+- `max_reconnect_attempts`: Retry limit after a failed Redis operation (default: unlimited)
+- `reconnect_backoff_ms`: Initial reconnect delay in ms (default: 1000)
 - `command_timeout`: Command timeout in ms (optional)
 - `keep_alive`: TCP keep-alive in ms (default: 30000)
 - `lazy_connect`: Defer connection until first command (default: false)
 - `max_retries_per_request`: Max retries per request (default: 20)
 - `enable_offline_queue`: Queue commands when offline (default: true)
+
+Reconnect delays double after each failure and are capped at 30 seconds. When
+`max_reconnect_attempts` is exhausted, the input stream fails with a typed error
+and the pipeline exits non-zero. Omit it to preserve unlimited reconnects.
 
 ## Examples
 

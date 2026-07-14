@@ -208,6 +208,10 @@ export const run = <E, R>(
           Effect.catchAll((error) =>
             Effect.gen(function* () {
               yield* Effect.logError(`Pipeline stream error: ${error}`);
+              yield* Ref.update(statsRef, (stats) => ({
+                ...stats,
+                failed: stats.failed + 1,
+              }));
               yield* Ref.update(errorsRef, (errors) => [...errors, error]);
             }),
           ),
