@@ -28,6 +28,11 @@ export interface FileInputConfig {
   readonly overflow?: OverflowPolicy;
 }
 
+/** @internal Test seam for coordinating filesystem races. */
+export interface FileInputDependencies {
+  readonly beforeRead?: () => Promise<void>;
+}
+
 export class FileInputError extends ComponentError {
   readonly _tag = "FileInputError";
 
@@ -51,24 +56,20 @@ export const FileInputConfigSchema = Schema.Struct({
 });
 
 const readRange = async (
-  path: string,
+  handle: fsp.FileHandle,
   position: number,
   length: number,
 ): Promise<Buffer> => {
-  const handle = await fsp.open(path, "r");
-  try {
-    const buffer = Buffer.alloc(length);
-    const { bytesRead } = await handle.read(buffer, 0, length, position);
-    return buffer.subarray(0, bytesRead);
-  } finally {
-    await handle.close();
-  }
+  const buffer = Buffer.alloc(length);
+  const { bytesRead } = await handle.read(buffer, 0, length, position);
+  return buffer.subarray(0, bytesRead);
 };
 
 const getIdentity = (stats: fs.Stats): string => `${stats.dev}:${stats.ino}`;
 
 export const createFileInput = (
   config: FileInputConfig,
+  dependencies: FileInputDependencies = {},
 ): Input<FileInputError> => {
   Effect.runSync(
     validate(FileInputConfigSchema, config, "File Input configuration").pipe(
@@ -152,29 +153,35 @@ export const createFileInput = (
 
   const pollFile = async (): Promise<boolean> => {
     try {
-      const stats = await fsp.stat(config.path);
-      const nextIdentity = getIdentity(stats);
+      const handle = await fsp.open(config.path, "r");
+      try {
+        const stats = await handle.stat();
+        const nextIdentity = getIdentity(stats);
 
-      if (nextIdentity !== currentIdentity || stats.size < currentPosition) {
-        currentIdentity = nextIdentity;
-        currentPosition = 0;
-        bufferedText = "";
-        decoder = new StringDecoder(encoding);
-      }
+        if (nextIdentity !== currentIdentity || stats.size < currentPosition) {
+          currentIdentity = nextIdentity;
+          currentPosition = 0;
+          bufferedText = "";
+          decoder = new StringDecoder(encoding);
+        }
 
-      if (stats.size > currentPosition) {
-        const chunk = await readRange(
-          config.path,
-          currentPosition,
-          stats.size - currentPosition,
-        );
-        currentPosition += chunk.length;
+        if (stats.size > currentPosition) {
+          await dependencies.beforeRead?.();
+          const chunk = await readRange(
+            handle,
+            currentPosition,
+            stats.size - currentPosition,
+          );
+          currentPosition += chunk.length;
 
-        const [lines, remainder] = splitCompleteLines(
-          bufferedText + decoder.write(chunk),
-        );
-        bufferedText = remainder;
-        await emitLineMessages(lines);
+          const [lines, remainder] = splitCompleteLines(
+            bufferedText + decoder.write(chunk),
+          );
+          bufferedText = remainder;
+          await emitLineMessages(lines);
+        }
+      } finally {
+        await handle.close();
       }
 
       if (!follow) {

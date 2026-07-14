@@ -176,4 +176,36 @@ describe("FileInput", () => {
       await Effect.runPromise(input.close());
     }
   });
+
+  it("follows rotation that happens between stat and read", async () => {
+    const filePath = await createTempFile("before-rotation\n");
+    const rotatedPath = `${filePath}.1`;
+    let rotated = false;
+    const input = createFileInput(
+      {
+        path: filePath,
+        follow: true,
+        startAt: "beginning",
+        pollIntervalMs: 25,
+      },
+      {
+        beforeRead: async () => {
+          if (rotated) return;
+          rotated = true;
+          await fs.rename(filePath, rotatedPath);
+          await fs.writeFile(filePath, "after-rotation\n", "utf8");
+        },
+      },
+    );
+
+    const messages = await collectChunk(
+      input.stream.pipe(Stream.take(2), Stream.runCollect),
+    );
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0].content).toEqual({ raw: "before-rotation" });
+    expect(messages[1].content).toEqual({ raw: "after-rotation" });
+
+    if (input.close) await Effect.runPromise(input.close());
+  });
 });
