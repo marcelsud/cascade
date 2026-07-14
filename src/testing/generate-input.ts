@@ -89,6 +89,7 @@ export const createGenerateInput = (config: GenerateInputConfig): Input => {
         }
 
         // Generate message from template
+        const startedAt = performance.now();
         const content = replacePlaceholders(config.template, index);
 
         const message = createMessage(content, {
@@ -96,7 +97,7 @@ export const createGenerateInput = (config: GenerateInputConfig): Input => {
           testIndex: index,
           generatedAt: new Date().toISOString(),
         });
-        metrics.recordProcessed();
+        metrics.recordProcessed(performance.now() - startedAt);
         return message;
       }),
     ),

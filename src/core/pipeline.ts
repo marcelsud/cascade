@@ -97,7 +97,8 @@ export const run = <E, R>(
     const snapshotMetrics = () => {
       const input = pipeline.input.getMetrics?.();
       const output = pipeline.output.getMetrics?.();
-      return input || output ? { input, output } : undefined;
+      const dlq = pipeline.output.getDLQMetrics?.();
+      return input || output || dlq ? { input, output, dlq } : undefined;
     };
     const snapshotStats = (): Effect.Effect<PipelineStats> =>
       Effect.gen(function* () {
