@@ -281,7 +281,14 @@ export const createHttpOutput = (
 
         metrics.recordSent(1, duration);
         yield* maybeEmitMetrics();
-      }).pipe(Effect.provide(clientLayer)),
+      }).pipe(
+        Effect.tapError(() =>
+          Effect.sync(() => {
+            metrics.recordSendError();
+          }),
+        ),
+        Effect.provide(clientLayer),
+      ),
 
     close: (): Effect.Effect<void, never> =>
       Effect.gen(function* () {
