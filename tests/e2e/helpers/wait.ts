@@ -6,7 +6,7 @@ export const waitFor = async (
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await predicate()) return;
-    await Bun.sleep(50);
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(`Timed out waiting for ${description}`);
 };
