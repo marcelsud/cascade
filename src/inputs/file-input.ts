@@ -153,6 +153,7 @@ export const createFileInput = (
 
   const pollFile = async (): Promise<boolean> => {
     try {
+      let pending: readonly string[] | null = null;
       const handle = await fsp.open(config.path, "r");
       try {
         const stats = await handle.stat();
@@ -178,10 +179,13 @@ export const createFileInput = (
             bufferedText + decoder.write(chunk),
           );
           bufferedText = remainder;
-          await emitLineMessages(lines);
+          pending = lines;
         }
       } finally {
         await handle.close();
+      }
+      if (pending) {
+        await emitLineMessages(pending);
       }
 
       if (!follow) {
