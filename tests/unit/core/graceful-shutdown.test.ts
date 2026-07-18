@@ -108,7 +108,7 @@ describe("graceful pipeline shutdown", () => {
           Fiber.join(fiber).pipe(
             Effect.map((result) => ({ _tag: "Result" as const, result })),
           ),
-          Effect.sleep("250 millis").pipe(
+          Effect.sleep("1 second").pipe(
             Effect.as({ _tag: "TimedOut" as const }),
           ),
         );

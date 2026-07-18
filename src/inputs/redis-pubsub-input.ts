@@ -19,6 +19,7 @@ import {
   Port,
   PositiveInt,
 } from "../core/validation.js";
+import { closeRedisClient } from "../core/redis-client.js";
 import {
   createInputQueue,
   offerInputQueue,
@@ -312,9 +313,11 @@ export const createRedisPubSubInput = (
       Effect.gen(function* () {
         yield* Effect.tryPromise({
           try: async () => {
-            await subscriber.unsubscribe();
-            await subscriber.punsubscribe();
-            await subscriber.quit();
+            if (subscriber.status === "ready") {
+              await subscriber.unsubscribe();
+              await subscriber.punsubscribe();
+            }
+            await closeRedisClient(subscriber);
           },
           catch: (error) =>
             new RedisPubSubInputError(

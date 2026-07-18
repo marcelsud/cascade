@@ -1,16 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Effect } from "effect";
+import Redis from "ioredis";
 import { createRedisPubSubInput } from "../../../src/inputs/redis-pubsub-input.js";
 
 // Mock ioredis
 vi.mock("ioredis", () => {
   return {
     default: vi.fn(() => ({
+      status: "ready",
       subscribe: vi.fn().mockResolvedValue(null),
       psubscribe: vi.fn().mockResolvedValue(null),
       unsubscribe: vi.fn().mockResolvedValue(null),
       punsubscribe: vi.fn().mockResolvedValue(null),
       quit: vi.fn().mockResolvedValue("OK"),
+      disconnect: vi.fn(),
       on: vi.fn(),
     })),
   };
@@ -153,6 +156,42 @@ describe("RedisPubSubInput", () => {
       if (input.close) {
         await Effect.runPromise(input.close());
       }
+    });
+
+    it("disconnects an unready subscriber without unsubscribing", async () => {
+      const disconnect = vi.fn();
+      const quit = vi.fn().mockResolvedValue("OK");
+      const unsubscribe = vi.fn().mockResolvedValue(null);
+      const punsubscribe = vi.fn().mockResolvedValue(null);
+      const redisMock = Redis as unknown as {
+        mockImplementationOnce: (factory: () => never) => void;
+      };
+      redisMock.mockImplementationOnce(
+        () =>
+          ({
+            status: "wait",
+            subscribe: vi.fn().mockResolvedValue(null),
+            psubscribe: vi.fn().mockResolvedValue(null),
+            unsubscribe,
+            punsubscribe,
+            quit,
+            disconnect,
+            on: vi.fn(),
+          }) as never,
+      );
+      const input = createRedisPubSubInput({
+        host: "localhost",
+        port: 6379,
+        channels: ["test"],
+        lazyConnect: true,
+      });
+
+      await Effect.runPromise(input.close!());
+
+      expect(disconnect).toHaveBeenCalledOnce();
+      expect(quit).not.toHaveBeenCalled();
+      expect(unsubscribe).not.toHaveBeenCalled();
+      expect(punsubscribe).not.toHaveBeenCalled();
     });
   });
 });

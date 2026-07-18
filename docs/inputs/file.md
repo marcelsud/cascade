@@ -54,3 +54,4 @@ input:
 
 - Partial trailing lines are held until a newline arrives
 - If the file is truncated or rotated while following, Cascade restarts from the current file contents
+- Stat and read use the same open descriptor, so rotation between them cannot mix file identities

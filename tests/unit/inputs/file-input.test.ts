@@ -19,6 +19,18 @@ const createTempFile = async (content = ""): Promise<string> => {
 const collectChunk = async <T>(effect: Effect.Effect<Iterable<T>>) =>
   Array.from(await Effect.runPromise(effect));
 
+const waitUntil = async (
+  predicate: () => Promise<boolean>,
+  timeoutMs: number,
+): Promise<boolean> => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return true;
+    await delay(10);
+  }
+  return false;
+};
+
 afterEach(async () => {
   await Promise.all(
     createdPaths.splice(0).map((target) =>
@@ -176,4 +188,106 @@ describe("FileInput", () => {
       await Effect.runPromise(input.close());
     }
   });
+
+  it("follows rotation that happens between stat and read", async () => {
+    const filePath = await createTempFile("before-rotation\n");
+    const rotatedPath = `${filePath}.1`;
+    let rotated = false;
+    const input = createFileInput(
+      {
+        path: filePath,
+        follow: true,
+        startAt: "beginning",
+        pollIntervalMs: 25,
+      },
+      {
+        beforeRead: async () => {
+          if (rotated) return;
+          rotated = true;
+          await fs.rename(filePath, rotatedPath);
+          await fs.writeFile(filePath, "after-rotation\n", "utf8");
+        },
+      },
+    );
+
+    const messages = await collectChunk(
+      input.stream.pipe(Stream.take(2), Stream.runCollect),
+    );
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0].content).toEqual({ raw: "before-rotation" });
+    expect(messages[1].content).toEqual({ raw: "after-rotation" });
+
+    if (input.close) await Effect.runPromise(input.close());
+  });
+
+  it.skipIf(process.platform !== "linux")(
+    "closes the file handle before a blocking queue offer",
+    async () => {
+      const filePath = await createTempFile("first\nsecond\n");
+      let releaseRead!: () => void;
+      const readReleased = new Promise<void>((resolve) => {
+        releaseRead = resolve;
+      });
+      let openedFd!: string;
+      let notifyReadStarted!: () => void;
+      let rejectReadStarted!: (error: unknown) => void;
+      const readStarted = new Promise<void>((resolve, reject) => {
+        notifyReadStarted = resolve;
+        rejectReadStarted = reject;
+      });
+      const input = createFileInput(
+        {
+          path: filePath,
+          startAt: "beginning",
+          pollIntervalMs: 25,
+          queueSize: 1,
+          overflow: "block",
+        },
+        {
+          beforeRead: async () => {
+            try {
+              const fds = await fs.readdir("/proc/self/fd");
+              for (const fd of fds) {
+                const target = await fs
+                  .readlink(`/proc/self/fd/${fd}`)
+                  .catch(() => null);
+                if (target === filePath) {
+                  openedFd = fd;
+                  notifyReadStarted();
+                  break;
+                }
+              }
+              if (!openedFd) {
+                rejectReadStarted(
+                  new Error(`No open descriptor found for ${filePath}`),
+                );
+              }
+            } catch (error) {
+              rejectReadStarted(error);
+            }
+            await readReleased;
+          },
+        },
+      );
+
+      try {
+        await readStarted;
+        releaseRead();
+
+        const descriptorReleased = await waitUntil(
+          () =>
+            fs
+              .readlink(`/proc/self/fd/${openedFd}`)
+              .then((target) => target !== filePath)
+              .catch(() => true),
+          1_000,
+        );
+        expect(descriptorReleased).toBe(true);
+      } finally {
+        releaseRead();
+        if (input.close) await Effect.runPromise(input.close());
+      }
+    },
+  );
 });

@@ -23,6 +23,10 @@ import {
   Port,
   PositiveInt,
 } from "../core/validation.js";
+import {
+  closeRedisClient,
+  observeRedisClientErrors,
+} from "../core/redis-client.js";
 import { withReconnect } from "./redis-reconnect.js";
 
 export interface RedisStreamsInputConfig {
@@ -188,6 +192,7 @@ export const createRedisStreamsInput = (
       return delay;
     },
   });
+  observeRedisClientErrors(client, "Redis Streams input");
 
   const mode =
     config.mode ?? (config.consumerGroup ? "consumer-group" : "simple");
@@ -292,10 +297,11 @@ export const createRedisStreamsInput = (
 
     return {
       name: "redis-streams-input",
+      // Conservative: lastId advances before the converted batch is emitted.
       shutdownMode: "finish-current",
       getMetrics: () => metrics.getInputMetrics(),
       stream,
-      close: () => Effect.promise(() => client.quit()),
+      close: () => Effect.promise(() => closeRedisClient(client)),
     };
   }
 
@@ -454,6 +460,6 @@ export const createRedisStreamsInput = (
     shutdownMode: "finish-current",
     getMetrics: () => metrics.getInputMetrics(),
     stream,
-    close: () => Effect.promise(() => client.quit()),
+    close: () => Effect.promise(() => closeRedisClient(client)),
   };
 };
