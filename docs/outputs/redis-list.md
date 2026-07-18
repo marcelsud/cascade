@@ -26,7 +26,11 @@ Pushes messages to Redis Lists using LPUSH or RPUSH commands. Provides simple, r
 - `keep_alive`: TCP keep-alive in ms (default: 30000)
 - `lazy_connect`: Defer connection until first command (default: false)
 - `max_retries_per_request`: Max retries per request (default: 20)
-- `enable_offline_queue`: Queue commands when offline (default: true)
+- `enable_offline_queue`: Queue commands when offline (default: false)
+
+Redis outputs fail fast by default while disconnected, allowing Cascade retry
+and DLQ policies to handle the message. Set this to `true` only when replaying
+commands queued during an outage is explicitly acceptable.
 
 ## Examples
 

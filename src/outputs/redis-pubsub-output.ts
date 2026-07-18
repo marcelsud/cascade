@@ -27,6 +27,7 @@ import {
   closeRedisClient,
   observeRedisClientErrors,
 } from "../core/redis-client.js";
+import { redisOutputOptions } from "./redis-output-options.js";
 
 export interface RedisPubSubOutputConfig {
   readonly host: string;
@@ -42,7 +43,7 @@ export interface RedisPubSubOutputConfig {
   readonly keepAlive?: number; // TCP keep-alive in ms (default: 30000)
   readonly lazyConnect?: boolean; // Defer connection until first command (default: false)
   readonly maxRetriesPerRequest?: number; // Max retries per request (default: 20)
-  readonly enableOfflineQueue?: boolean; // Queue commands when offline (default: true)
+  readonly enableOfflineQueue?: boolean; // Queue commands when offline (default: false)
 }
 
 export class RedisPubSubOutputError extends ComponentError {
@@ -116,22 +117,7 @@ export const createRedisPubSubOutput = (
     ),
   );
 
-  const client = new Redis({
-    host: config.host,
-    port: config.port,
-    password: config.password,
-    db: config.db || 0,
-    connectTimeout: config.connectTimeout ?? 10000,
-    commandTimeout: config.commandTimeout,
-    keepAlive: config.keepAlive ?? 30000,
-    lazyConnect: config.lazyConnect ?? false,
-    maxRetriesPerRequest: config.maxRetriesPerRequest ?? 20,
-    enableOfflineQueue: config.enableOfflineQueue ?? true,
-    retryStrategy: (times) => {
-      const delay = Math.min(times * 50, 2000);
-      return delay;
-    },
-  });
+  const client = new Redis(redisOutputOptions(config));
   observeRedisClientErrors(client, "Redis Pub/Sub output");
 
   // Log connection info

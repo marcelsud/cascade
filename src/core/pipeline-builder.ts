@@ -428,8 +428,15 @@ const buildOutput = (
         port,
         stream: config.redis_streams.stream,
         maxLen: config.redis_streams.max_length,
+        maxRetries: config.redis_streams.max_retries,
         password,
         db,
+        connectTimeout: config.redis_streams.connect_timeout,
+        commandTimeout: config.redis_streams.command_timeout,
+        keepAlive: config.redis_streams.keep_alive,
+        lazyConnect: config.redis_streams.lazy_connect,
+        maxRetriesPerRequest: config.redis_streams.max_retries_per_request,
+        enableOfflineQueue: config.redis_streams.enable_offline_queue,
       }),
     );
   }
@@ -454,6 +461,13 @@ const buildOutput = (
         channel: config.redis_pubsub.channel,
         password: config.redis_pubsub.password,
         db: config.redis_pubsub.db,
+        maxRetries: config.redis_pubsub.max_retries,
+        connectTimeout: config.redis_pubsub.connect_timeout,
+        commandTimeout: config.redis_pubsub.command_timeout,
+        keepAlive: config.redis_pubsub.keep_alive,
+        lazyConnect: config.redis_pubsub.lazy_connect,
+        maxRetriesPerRequest: config.redis_pubsub.max_retries_per_request,
+        enableOfflineQueue: config.redis_pubsub.enable_offline_queue,
       }),
     );
   }
@@ -468,6 +482,13 @@ const buildOutput = (
         maxLen: config.redis_list.max_length,
         password: config.redis_list.password,
         db: config.redis_list.db,
+        maxRetries: config.redis_list.max_retries,
+        connectTimeout: config.redis_list.connect_timeout,
+        commandTimeout: config.redis_list.command_timeout,
+        keepAlive: config.redis_list.keep_alive,
+        lazyConnect: config.redis_list.lazy_connect,
+        maxRetriesPerRequest: config.redis_list.max_retries_per_request,
+        enableOfflineQueue: config.redis_list.enable_offline_queue,
       }),
     );
   }

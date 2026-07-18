@@ -351,6 +351,13 @@ const RedisStreamsOutputSchema = S.Struct({
   url: S.String,
   stream: S.String,
   max_length: S.optional(S.Number),
+  max_retries: S.optional(S.Number),
+  connect_timeout: S.optional(S.Number),
+  command_timeout: S.optional(S.Number),
+  keep_alive: S.optional(S.Number),
+  lazy_connect: S.optional(S.Boolean),
+  max_retries_per_request: S.optional(S.Number),
+  enable_offline_queue: S.optional(S.Boolean),
 });
 
 /**
