@@ -237,20 +237,27 @@ export const createSqsOutput = (
           };
         },
       );
+      let entriesToSend = entries;
 
       const batchEffect = Effect.tryPromise({
         try: async () => {
           const command = new SendMessageBatchCommand({
             QueueUrl: config.queueUrl,
-            Entries: entries,
+            Entries: entriesToSend,
           });
           const result = await client.send(command);
 
           // Check for partial failures
           if (result.Failed && result.Failed.length > 0) {
-            const failedIds = result.Failed.map((f) => f.Id).join(", ");
+            const failedIds = new Set(result.Failed.map((failure) => failure.Id));
+            const failedEntries = entriesToSend.filter((entry) =>
+              failedIds.has(entry.Id),
+            );
+            if (failedEntries.length === result.Failed.length) {
+              entriesToSend = failedEntries;
+            }
             throw new Error(
-              `Failed to send ${result.Failed.length} messages (IDs: ${failedIds})`,
+              `Failed to send ${result.Failed.length} messages (IDs: ${[...failedIds].join(", ")})`,
             );
           }
 

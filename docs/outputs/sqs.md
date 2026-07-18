@@ -75,6 +75,7 @@ output:
 - **Metadata Preservation**: Message metadata stored as SQS message attributes
 - **Delayed Delivery**: Schedule message delivery up to 15 minutes in future
 - **Partial Batch Failure Handling**: Retries failed messages in batches
+- Successful batch entries are never resent when SQS reports partial failure
 - **LocalStack Compatible**: Perfect for local development
 - **Automatic Retry**: Configurable retry logic with exponential backoff
 

@@ -169,6 +169,37 @@ describe("SQSOutput", () => {
       // Should fail due to partial failure
       await expect(result).rejects.toThrow();
     });
+
+    it("should retry only entries reported as failed", async () => {
+      const { SQSClient } = await import("@aws-sdk/client-sqs");
+      const mockClient = new SQSClient({});
+      (mockClient.send as any)
+        .mockResolvedValueOnce({
+          Successful: [{ Id: "0" }],
+          Failed: [{ Id: "1", Message: "retry" }],
+        })
+        .mockResolvedValueOnce({ Successful: [{ Id: "1" }], Failed: [] });
+
+      const output = createSqsOutput({
+        queueUrl: "http://localhost:4566/000000000000/test-queue",
+        maxBatchSize: 2,
+        maxRetries: 1,
+      });
+      await Effect.runPromise(output.send(createMessage({ id: 1 })));
+      await Effect.runPromise(output.send(createMessage({ id: 2 })));
+
+      const batchCalls = (mockClient.send as any).mock.calls.filter(
+        (call: any) => call[0].Entries !== undefined,
+      );
+      expect(batchCalls).toHaveLength(2);
+      expect(batchCalls[0][0].Entries.map((entry: any) => entry.Id)).toEqual([
+        "0",
+        "1",
+      ]);
+      expect(batchCalls[1][0].Entries.map((entry: any) => entry.Id)).toEqual([
+        "1",
+      ]);
+    });
   });
 
   describe("Configuration", () => {
