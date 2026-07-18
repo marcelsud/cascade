@@ -1,11 +1,17 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Effect } from "effect";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Effect, Stream } from "effect";
 import { createSqsOutput } from "../../../src/outputs/sqs-output.js";
-import { createMessage } from "../../../src/core/types.js";
+import { withDLQ } from "../../../src/core/dlq.js";
+import { run as runPipeline } from "../../../src/core/pipeline.js";
+import {
+  createMessage,
+  type Message,
+  type Output,
+} from "../../../src/core/types.js";
 
 // Mock AWS SDK
 vi.mock("@aws-sdk/client-sqs", () => {
-  const mockSend = vi.fn().mockResolvedValue({ MessageId: "test-id" });
+  const mockSend = vi.fn().mockResolvedValue({ Successful: [], Failed: [] });
   const mockDestroy = vi.fn().mockResolvedValue(undefined);
 
   return {
@@ -18,9 +24,40 @@ vi.mock("@aws-sdk/client-sqs", () => {
   };
 });
 
+const getMockClient = async () => {
+  const { SQSClient } = await import("@aws-sdk/client-sqs");
+  return new SQSClient({}) as any;
+};
+
+const batchCalls = (mockClient: any) =>
+  mockClient.send.mock.calls.filter(
+    (call: any) => call[0].Entries !== undefined,
+  );
+
+const runMessages = (
+  output: ReturnType<typeof createSqsOutput>,
+  messages: Message[],
+) =>
+  Effect.runPromise(
+    runPipeline({
+      name: "sqs-batch-test",
+      input: {
+        name: "test-input",
+        stream: Stream.fromIterable(messages),
+      },
+      processors: [],
+      output,
+    }),
+  );
+
 describe("SQSOutput", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    const mockClient = await getMockClient();
+    mockClient.send.mockReset();
+    mockClient.send.mockResolvedValue({ Successful: [], Failed: [] });
+    mockClient.destroy.mockReset();
+    mockClient.destroy.mockResolvedValue(undefined);
   });
 
   describe("Single Message Mode", () => {
@@ -31,147 +68,264 @@ describe("SQSOutput", () => {
         endpoint: "http://localhost:4566",
       });
 
-      const msg = createMessage({ test: "data" });
+      const result = await Effect.runPromise(
+        output.send(createMessage({ test: "data" })),
+      );
 
-      const result = await Effect.runPromise(output.send(msg));
-
-      expect(result).toBeUndefined(); // Void return
+      expect(result).toBeUndefined();
     });
 
     it("should serialize message correctly", async () => {
-      const { SQSClient } = await import("@aws-sdk/client-sqs");
-      const mockClient = new SQSClient({});
-
+      const mockClient = await getMockClient();
       const output = createSqsOutput({
         queueUrl: "http://localhost:4566/000000000000/test-queue",
       });
 
-      const msg = createMessage({ test: "data" }, { source: "test" });
+      await Effect.runPromise(
+        output.send(createMessage({ test: "data" }, { source: "test" })),
+      );
 
-      await Effect.runPromise(output.send(msg));
-
-      const sendCall = (mockClient.send as any).mock.calls[0][0];
-      expect(sendCall.MessageBody).toBeDefined();
+      const sendCall = mockClient.send.mock.calls[0][0];
       expect(JSON.parse(sendCall.MessageBody)).toEqual({ test: "data" });
-      expect(sendCall.MessageAttributes).toBeDefined();
       expect(sendCall.MessageAttributes.messageId).toBeDefined();
     });
 
     it("should support delayed messages", async () => {
+      const mockClient = await getMockClient();
       const output = createSqsOutput({
         queueUrl: "http://localhost:4566/000000000000/test-queue",
         delaySeconds: 10,
       });
 
-      const msg = createMessage({ test: "delayed" });
+      await Effect.runPromise(output.send(createMessage({ test: "delayed" })));
 
-      await Effect.runPromise(output.send(msg));
-
-      // Verify delay was set (would check mock calls in real test)
+      expect(mockClient.send.mock.calls[0][0].DelaySeconds).toBe(10);
     });
 
     it("should handle send errors", async () => {
-      const { SQSClient } = await import("@aws-sdk/client-sqs");
-      const mockClient = new SQSClient({});
-      (mockClient.send as any).mockRejectedValueOnce(
-        new Error("Network error"),
-      );
-
+      const mockClient = await getMockClient();
+      mockClient.send.mockRejectedValueOnce(new Error("Network error"));
       const output = createSqsOutput({
         queueUrl: "http://localhost:4566/000000000000/test-queue",
-        maxRetries: 0, // Disable retry for error testing
+        maxRetries: 0,
       });
 
-      const msg = createMessage({ test: "data" });
-
-      const result = Effect.runPromise(output.send(msg));
-
-      await expect(result).rejects.toThrow();
+      await expect(
+        Effect.runPromise(output.send(createMessage({ test: "data" }))),
+      ).rejects.toThrow("Network error");
     });
   });
 
-  describe("Batch Mode", () => {
-    it("should accumulate messages until batch size reached", async () => {
-      const { SQSClient, SendMessageBatchCommand } = await import(
-        "@aws-sdk/client-sqs"
+  describe("Batch Delivery Completion", () => {
+    it("does not acknowledge source messages until SQS accepts their batch", async () => {
+      const mockClient = await getMockClient();
+      let acceptBatch!: (value: {
+        Successful: unknown[];
+        Failed: unknown[];
+      }) => void;
+      mockClient.send.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            acceptBatch = resolve;
+          }),
       );
-      const mockClient = new SQSClient({});
 
+      const firstAck = vi.fn();
+      const secondAck = vi.fn();
+      const first: Message = {
+        ...createMessage({ id: 1 }),
+        ack: () => Effect.sync(firstAck),
+      };
+      const second: Message = {
+        ...createMessage({ id: 2 }),
+        ack: () => Effect.sync(secondAck),
+      };
       const output = createSqsOutput({
         queueUrl: "http://localhost:4566/000000000000/test-queue",
-        maxBatchSize: 3,
+        maxBatchSize: 2,
+        batchTimeout: 5_000,
       });
 
-      // Send 2 messages (should not trigger batch send yet)
-      await Effect.runPromise(output.send(createMessage({ id: 1 })));
-      await Effect.runPromise(output.send(createMessage({ id: 2 })));
+      const pipelineResult = runMessages(output, [first, second]);
+      await vi.waitFor(() => expect(batchCalls(mockClient)).toHaveLength(1));
 
-      // Should not have called batch send yet
-      const batchCalls = (mockClient.send as any).mock.calls.filter(
-        (call: any) => call[0].Entries !== undefined,
-      );
-      expect(batchCalls.length).toBe(0);
+      expect(firstAck).not.toHaveBeenCalled();
+      expect(secondAck).not.toHaveBeenCalled();
 
-      // Send 3rd message (should trigger batch)
-      await Effect.runPromise(output.send(createMessage({ id: 3 })));
+      acceptBatch({ Successful: [{ Id: "0" }, { Id: "1" }], Failed: [] });
+      const result = await pipelineResult;
 
-      // Now should have sent batch
-      const newBatchCalls = (mockClient.send as any).mock.calls.filter(
-        (call: any) => call[0].Entries !== undefined,
-      );
-      expect(newBatchCalls.length).toBeGreaterThan(0);
+      expect(result.success).toBe(true);
+      expect(firstAck).toHaveBeenCalledOnce();
+      expect(secondAck).toHaveBeenCalledOnce();
     });
 
-    it("should flush remaining messages on close", async () => {
-      const { SQSClient } = await import("@aws-sdk/client-sqs");
-      const mockClient = new SQSClient({});
+    it("leaves source messages unacknowledged when their batch flush fails", async () => {
+      const mockClient = await getMockClient();
+      mockClient.send.mockRejectedValueOnce(new Error("SQS unavailable"));
+      const firstAck = vi.fn();
+      const secondAck = vi.fn();
+      const messages: Message[] = [
+        {
+          ...createMessage({ id: 1 }),
+          ack: () => Effect.sync(firstAck),
+        },
+        {
+          ...createMessage({ id: 2 }),
+          ack: () => Effect.sync(secondAck),
+        },
+      ];
+      const output = createSqsOutput({
+        queueUrl: "http://localhost:4566/000000000000/test-queue",
+        maxBatchSize: 2,
+        maxRetries: 0,
+        batchTimeout: 5_000,
+      });
 
+      const result = await runMessages(output, messages);
+
+      expect(result.success).toBe(false);
+      expect(result.stats.failed).toBe(2);
+      expect(firstAck).not.toHaveBeenCalled();
+      expect(secondAck).not.toHaveBeenCalled();
+    });
+
+    it("completes the source ack after a timeout flush succeeds", async () => {
+      const mockClient = await getMockClient();
+      const ack = vi.fn();
+      const message: Message = {
+        ...createMessage({ id: 1 }),
+        ack: () => Effect.sync(ack),
+      };
+      const output = createSqsOutput({
+        queueUrl: "http://localhost:4566/000000000000/test-queue",
+        maxBatchSize: 10,
+        batchTimeout: 20,
+      });
+
+      const result = await runMessages(output, [message]);
+
+      expect(result.success).toBe(true);
+      expect(ack).toHaveBeenCalledOnce();
+      expect(batchCalls(mockClient)).toHaveLength(1);
+      expect(batchCalls(mockClient)[0][0].Entries).toHaveLength(1);
+    });
+
+    it("uses a bounded default linger so a partial batch cannot deadlock", async () => {
+      const mockClient = await getMockClient();
       const output = createSqsOutput({
         queueUrl: "http://localhost:4566/000000000000/test-queue",
         maxBatchSize: 10,
       });
 
-      // Send 3 messages (less than batch size)
       await Effect.runPromise(output.send(createMessage({ id: 1 })));
-      await Effect.runPromise(output.send(createMessage({ id: 2 })));
-      await Effect.runPromise(output.send(createMessage({ id: 3 })));
 
-      // Close should flush
-      if (output.close) {
-        await Effect.runPromise(output.close());
-      }
-
-      // Should have sent the remaining batch
-      const batchCalls = (mockClient.send as any).mock.calls.filter(
-        (call: any) => call[0].Entries !== undefined,
-      );
-      expect(batchCalls.length).toBeGreaterThan(0);
+      expect(batchCalls(mockClient)).toHaveLength(1);
     });
 
-    it("should handle partial batch failures", async () => {
-      const { SQSClient } = await import("@aws-sdk/client-sqs");
-      const mockClient = new SQSClient({});
-      (mockClient.send as any).mockResolvedValueOnce({
-        Successful: [{ Id: "0" }],
-        Failed: [{ Id: "1", Message: "Error" }],
-      });
-
+    it("propagates a final close flush failure to close and waiting sends", async () => {
+      const mockClient = await getMockClient();
+      mockClient.send.mockRejectedValueOnce(new Error("final flush failed"));
       const output = createSqsOutput({
         queueUrl: "http://localhost:4566/000000000000/test-queue",
-        maxBatchSize: 2,
-        maxRetries: 0, // Disable retry for error testing
+        maxBatchSize: 10,
+        maxRetries: 0,
+        batchTimeout: 5_000,
       });
 
-      await Effect.runPromise(output.send(createMessage({ id: 1 })));
+      const pendingSend = Effect.runPromise(
+        output.send(createMessage({ id: 1 })),
+      );
+      const sendFailure =
+        expect(pendingSend).rejects.toThrow("final flush failed");
+      await new Promise((resolve) => setTimeout(resolve, 10));
 
-      const result = Effect.runPromise(output.send(createMessage({ id: 2 })));
-
-      // Should fail due to partial failure
-      await expect(result).rejects.toThrow();
+      await expect(Effect.runPromise(output.close!())).rejects.toThrow(
+        "final flush failed",
+      );
+      await sendFailure;
     });
   });
 
-  describe("Configuration", () => {
+  describe("Batch Partial Failures", () => {
+    it("retries only entries that SQS rejected", async () => {
+      const mockClient = await getMockClient();
+      mockClient.send
+        .mockResolvedValueOnce({
+          Successful: [{ Id: "0" }],
+          Failed: [{ Id: "1", Message: "retry", SenderFault: false }],
+        })
+        .mockResolvedValueOnce({ Successful: [{ Id: "0" }], Failed: [] });
+      const output = createSqsOutput({
+        queueUrl: "http://localhost:4566/000000000000/test-queue",
+        maxBatchSize: 2,
+        maxRetries: 1,
+        batchTimeout: 5_000,
+      });
+
+      await Promise.all([
+        Effect.runPromise(output.send(createMessage({ id: 1 }))),
+        Effect.runPromise(output.send(createMessage({ id: 2 }))),
+      ]);
+
+      const calls = batchCalls(mockClient);
+      expect(calls).toHaveLength(2);
+      expect(calls[0][0].Entries).toHaveLength(2);
+      expect(calls[1][0].Entries).toHaveLength(1);
+      expect(JSON.parse(calls[1][0].Entries[0].MessageBody)).toEqual({ id: 2 });
+    });
+
+    it("routes only the rejected entry through the per-message DLQ wrapper", async () => {
+      const mockClient = await getMockClient();
+      mockClient.send.mockResolvedValueOnce({
+        Successful: [{ Id: "0" }],
+        Failed: [{ Id: "1", Message: "rejected", SenderFault: true }],
+      });
+      const primary = createSqsOutput({
+        queueUrl: "http://localhost:4566/000000000000/test-queue",
+        maxBatchSize: 2,
+        maxRetries: 0,
+        batchTimeout: 5_000,
+      });
+      const dlqSend = vi.fn().mockReturnValue(Effect.void);
+      const dlq: Output<Error> = { name: "test-dlq", send: dlqSend };
+      const output = withDLQ({
+        output: primary,
+        dlq,
+        maxRetries: 0,
+      });
+
+      await Promise.all([
+        Effect.runPromise(output.send(createMessage({ id: 1 }))),
+        Effect.runPromise(output.send(createMessage({ id: 2 }))),
+      ]);
+
+      expect(dlqSend).toHaveBeenCalledOnce();
+      expect(dlqSend.mock.calls[0][0].content).toEqual({ id: 2 });
+    });
+
+    it("starts a new timeout after a timeout-driven batch fails", async () => {
+      const mockClient = await getMockClient();
+      mockClient.send
+        .mockRejectedValueOnce(new Error("first timeout failed"))
+        .mockResolvedValueOnce({ Successful: [{ Id: "0" }], Failed: [] });
+      const output = createSqsOutput({
+        queueUrl: "http://localhost:4566/000000000000/test-queue",
+        maxBatchSize: 10,
+        maxRetries: 0,
+        batchTimeout: 20,
+      });
+
+      await expect(
+        Effect.runPromise(output.send(createMessage({ id: 1 }))),
+      ).rejects.toThrow("first timeout failed");
+      await Effect.runPromise(output.send(createMessage({ id: 2 })));
+
+      expect(batchCalls(mockClient)).toHaveLength(2);
+    });
+  });
+
+  describe("Configuration and Message Format", () => {
     it("should use default batch size of 1", () => {
       const output = createSqsOutput({
         queueUrl: "http://localhost:4566/000000000000/test-queue",
@@ -187,194 +341,27 @@ describe("SQSOutput", () => {
         endpoint: "http://localhost:4566",
       });
 
-      expect(output).toBeDefined();
       expect(output.send).toBeDefined();
-    });
-
-    it("should implement close method", async () => {
-      const output = createSqsOutput({
-        queueUrl: "http://localhost:4566/000000000000/test-queue",
-      });
-
       expect(output.close).toBeDefined();
-
-      if (output.close) {
-        await Effect.runPromise(output.close());
-      }
-    });
-  });
-
-  describe("Batch Timeout", () => {
-    it("should flush batch after timeout expires", async () => {
-      const { SQSClient } = await import("@aws-sdk/client-sqs");
-      const mockClient = new SQSClient({});
-
-      const output = createSqsOutput({
-        queueUrl: "http://localhost:4566/000000000000/test-queue",
-        maxBatchSize: 10,
-        batchTimeout: 100, // 100ms timeout
-      });
-
-      // Send 3 messages (less than batch size)
-      await Effect.runPromise(output.send(createMessage({ id: 1 })));
-      await Effect.runPromise(output.send(createMessage({ id: 2 })));
-      await Effect.runPromise(output.send(createMessage({ id: 3 })));
-
-      // Wait for timeout to expire with significant buffer for fiber execution
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
-      // Should have sent the batch due to timeout
-      const batchCalls = (mockClient.send as any).mock.calls.filter(
-        (call: any) => call[0].Entries !== undefined,
-      );
-      expect(batchCalls.length).toBeGreaterThan(0);
-      expect(batchCalls[0][0].Entries.length).toBe(3);
     });
 
-    it("should cancel timeout when batch fills", async () => {
-      const { SQSClient } = await import("@aws-sdk/client-sqs");
-      const mockClient = new SQSClient({});
-
-      const output = createSqsOutput({
-        queueUrl: "http://localhost:4566/000000000000/test-queue",
-        maxBatchSize: 3,
-        batchTimeout: 5000, // Long timeout
-      });
-
-      // Send messages to fill batch
-      await Effect.runPromise(output.send(createMessage({ id: 1 })));
-      await Effect.runPromise(output.send(createMessage({ id: 2 })));
-      await Effect.runPromise(output.send(createMessage({ id: 3 })));
-
-      // Should have sent immediately when batch filled
-      const batchCalls = (mockClient.send as any).mock.calls.filter(
-        (call: any) => call[0].Entries !== undefined,
-      );
-      expect(batchCalls.length).toBe(1);
-      expect(batchCalls[0][0].Entries.length).toBe(3);
-
-      // Timeout should be cancelled - no additional sends
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      const batchCallsAfter = (mockClient.send as any).mock.calls.filter(
-        (call: any) => call[0].Entries !== undefined,
-      );
-      expect(batchCallsAfter.length).toBe(1); // Still only 1 batch
-    });
-
-    it("should restart timeout for new batch", async () => {
-      const { SQSClient } = await import("@aws-sdk/client-sqs");
-      const mockClient = new SQSClient({});
-
-      const output = createSqsOutput({
-        queueUrl: "http://localhost:4566/000000000000/test-queue",
-        maxBatchSize: 3,
-        batchTimeout: 100,
-      });
-
-      // First batch - fill it
-      await Effect.runPromise(output.send(createMessage({ id: 1 })));
-      await Effect.runPromise(output.send(createMessage({ id: 2 })));
-      await Effect.runPromise(output.send(createMessage({ id: 3 })));
-
-      // Second batch - partial
-      await Effect.runPromise(output.send(createMessage({ id: 4 })));
-
-      // Wait for timeout with significant buffer for fiber execution
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
-      // Should have 2 batches sent
-      const batchCalls = (mockClient.send as any).mock.calls.filter(
-        (call: any) => call[0].Entries !== undefined,
-      );
-      expect(batchCalls.length).toBe(2);
-      expect(batchCalls[0][0].Entries.length).toBe(3);
-      expect(batchCalls[1][0].Entries.length).toBe(1);
-    });
-
-    it("should work without timeout configured", async () => {
-      const { SQSClient } = await import("@aws-sdk/client-sqs");
-      const mockClient = new SQSClient({});
-
-      const output = createSqsOutput({
-        queueUrl: "http://localhost:4566/000000000000/test-queue",
-        maxBatchSize: 10,
-        // No batchTimeout configured
-      });
-
-      // Send messages
-      await Effect.runPromise(output.send(createMessage({ id: 1 })));
-      await Effect.runPromise(output.send(createMessage({ id: 2 })));
-
-      // Wait a bit
-      await new Promise((resolve) => setTimeout(resolve, 150));
-
-      // Should NOT have sent batch (no timeout)
-      const batchCalls = (mockClient.send as any).mock.calls.filter(
-        (call: any) => call[0].Entries !== undefined,
-      );
-      expect(batchCalls.length).toBe(0);
-    });
-
-    it("should cancel timeout on close", async () => {
-      const output = createSqsOutput({
-        queueUrl: "http://localhost:4566/000000000000/test-queue",
-        maxBatchSize: 10,
-        batchTimeout: 5000, // Long timeout
-      });
-
-      // Send message to start timeout
-      await Effect.runPromise(output.send(createMessage({ id: 1 })));
-
-      // Close should cancel timeout and flush
-      if (output.close) {
-        await Effect.runPromise(output.close());
-      }
-
-      // No errors should occur
-    });
-  });
-
-  describe("Message Format", () => {
-    it("should preserve message metadata in attributes", async () => {
-      const { SQSClient } = await import("@aws-sdk/client-sqs");
-      const mockClient = new SQSClient({});
-
+    it("should preserve message metadata and correlation ID", async () => {
+      const mockClient = await getMockClient();
       const output = createSqsOutput({
         queueUrl: "http://localhost:4566/000000000000/test-queue",
       });
+      const message: Message = {
+        ...createMessage({ test: "data" }, { source: "test", custom: "value" }),
+        correlationId: "test-correlation-id",
+      };
 
-      const msg = createMessage(
-        { test: "data" },
-        { source: "test", custom: "value" },
-      );
+      await Effect.runPromise(output.send(message));
 
-      await Effect.runPromise(output.send(msg));
-
-      const sendCall = (mockClient.send as any).mock.calls[0][0];
-      expect(sendCall.MessageAttributes.metadata).toBeDefined();
-
+      const sendCall = mockClient.send.mock.calls[0][0];
       const metadata = JSON.parse(
         sendCall.MessageAttributes.metadata.StringValue,
       );
-      expect(metadata.source).toBe("test");
-      expect(metadata.custom).toBe("value");
-    });
-
-    it("should preserve correlation ID", async () => {
-      const { SQSClient } = await import("@aws-sdk/client-sqs");
-      const mockClient = new SQSClient({});
-
-      const output = createSqsOutput({
-        queueUrl: "http://localhost:4566/000000000000/test-queue",
-      });
-
-      const msg = createMessage({ test: "data" });
-      msg.correlationId = "test-correlation-id";
-
-      await Effect.runPromise(output.send(msg));
-
-      const sendCall = (mockClient.send as any).mock.calls[0][0];
-      expect(sendCall.MessageAttributes.correlationId).toBeDefined();
+      expect(metadata).toEqual({ source: "test", custom: "value" });
       expect(sendCall.MessageAttributes.correlationId.StringValue).toBe(
         "test-correlation-id",
       );

@@ -49,7 +49,8 @@ export interface Processor<E = never, R = never> {
 export interface Output<E = never, R = never> {
   readonly name: string;
   readonly send: (msg: Message) => Effect.Effect<void, E, R>;
-  readonly close?: () => Effect.Effect<void, never, never>;
+  /** Flush buffered data and release resources, surfacing delivery failures. */
+  readonly close?: () => Effect.Effect<void, E, R>;
   readonly getMetrics?: () => OutputMetrics;
   /** Metrics for a distinct DLQ destination wrapped around this output. */
   readonly getDLQMetrics?: () => OutputMetrics;
