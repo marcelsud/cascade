@@ -29,6 +29,8 @@ export interface Message<A = unknown> {
 export interface Input<E = never, R = never> {
   readonly name: string;
   readonly stream: Stream.Stream<Message, E, R>;
+  /** Finish a destructive pull already in progress before stopping intake. */
+  readonly shutdownMode?: "interrupt" | "finish-current";
   readonly close?: () => Effect.Effect<void, never, never>;
   readonly getMetrics?: () => InputMetrics;
 }

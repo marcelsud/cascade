@@ -210,9 +210,16 @@ close: () => Effect.Effect<void, never, never>
 interface Input<E = never, R = never> {
   readonly name: string
   readonly stream: Stream.Stream<Message, E, R>
+  readonly shutdownMode?: "interrupt" | "finish-current"
   readonly close?: () => Effect.Effect<void, never, never>
 }
 ```
+
+Inputs default to `interrupt`, which cancels an in-progress pull as soon as
+graceful shutdown is requested. A destructive-pull source that removes,
+advances, or acknowledges data before emitting it into the stream must set
+`shutdownMode: "finish-current"` so the active pull can reach downstream
+delivery before intake stops.
 
 ### Implementation Guidelines
 

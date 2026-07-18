@@ -7,6 +7,128 @@ import { makeShutdownController, run } from "../../../src/core/pipeline.js";
 import { createMessage } from "../../../src/core/types.js";
 
 describe("graceful pipeline shutdown", () => {
+  it("finishes a destructive pull already in progress before stopping", async () => {
+    let removed = 0;
+    let delivered = 0;
+    let acknowledged = 0;
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const pullStarted = yield* Deferred.make<void>();
+        const releasePull = yield* Deferred.make<void>();
+        const shutdown = yield* makeShutdownController();
+        const message = {
+          ...createMessage("destructive-pull"),
+          ack: () =>
+            Effect.sync(() => {
+              acknowledged += 1;
+            }),
+        };
+        const stream = Stream.fromEffect(
+          Effect.gen(function* () {
+            removed += 1;
+            yield* Deferred.succeed(pullStarted, undefined);
+            yield* Deferred.await(releasePull);
+            return message;
+          }),
+        ).pipe(Stream.concat(Stream.never));
+        const fiber = yield* Effect.fork(
+          run(
+            {
+              name: "finish-current-pull-test",
+              input: {
+                name: "destructive-pull",
+                shutdownMode: "finish-current",
+                stream,
+              },
+              processors: [],
+              output: {
+                name: "capture",
+                send: () =>
+                  Effect.sync(() => {
+                    delivered += 1;
+                  }),
+              },
+            },
+            { shutdown, shutdownTimeoutMs: 1_000 },
+          ),
+        );
+
+        yield* Deferred.await(pullStarted);
+        yield* shutdown.request;
+        yield* Deferred.succeed(releasePull, undefined);
+        return yield* Fiber.join(fiber);
+      }),
+    );
+
+    expect(removed).toBe(1);
+    expect(delivered).toBe(1);
+    expect(acknowledged).toBe(1);
+    expect(result.shutdown).toBe("graceful");
+  });
+
+  it("interrupts a default input without waiting for its current pull", async () => {
+    let removed = 0;
+    let delivered = 0;
+
+    const outcome = await Effect.runPromise(
+      Effect.gen(function* () {
+        const pullStarted = yield* Deferred.make<void>();
+        const releasePull = yield* Deferred.make<void>();
+        const shutdown = yield* makeShutdownController();
+        const stream = Stream.fromEffect(
+          Effect.gen(function* () {
+            removed += 1;
+            yield* Deferred.succeed(pullStarted, undefined);
+            yield* Deferred.await(releasePull);
+            return createMessage("interruptible-pull");
+          }),
+        ).pipe(Stream.concat(Stream.never));
+        const fiber = yield* Effect.fork(
+          run(
+            {
+              name: "interrupt-pull-test",
+              input: { name: "interruptible-pull", stream },
+              processors: [],
+              output: {
+                name: "capture",
+                send: () =>
+                  Effect.sync(() => {
+                    delivered += 1;
+                  }),
+              },
+            },
+            { shutdown, shutdownTimeoutMs: 1_000 },
+          ),
+        );
+
+        yield* Deferred.await(pullStarted);
+        yield* shutdown.request;
+        const outcome = yield* Effect.race(
+          Fiber.join(fiber).pipe(
+            Effect.map((result) => ({ _tag: "Result" as const, result })),
+          ),
+          Effect.sleep("1 second").pipe(
+            Effect.as({ _tag: "TimedOut" as const }),
+          ),
+        );
+        if (outcome._tag === "TimedOut") {
+          yield* Deferred.succeed(releasePull, undefined);
+          yield* shutdown.requestForce;
+          yield* Fiber.join(fiber);
+        }
+        return outcome;
+      }),
+    );
+
+    expect(outcome._tag).toBe("Result");
+    if (outcome._tag === "Result") {
+      expect(outcome.result.shutdown).toBe("graceful");
+    }
+    expect(removed).toBe(1);
+    expect(delivered).toBe(0);
+  });
+
   it("stops intake, drains in-flight delivery and acknowledgement, then closes", async () => {
     const events: string[] = [];
     let acknowledgements = 0;

@@ -9,9 +9,12 @@ import { run } from "../../../src/core/pipeline.js";
 vi.mock("ioredis", () => {
   return {
     default: vi.fn(() => ({
+      status: "ready",
       blpop: vi.fn().mockResolvedValue(null),
       brpop: vi.fn().mockResolvedValue(null),
       quit: vi.fn().mockResolvedValue("OK"),
+      disconnect: vi.fn(),
+      on: vi.fn(),
     })),
   };
 });
@@ -180,6 +183,35 @@ describe("RedisListInput", () => {
         await Effect.runPromise(input.close());
       }
     });
+
+    it("disconnects an unready client without waiting for quit", async () => {
+      const disconnect = vi.fn();
+      const quit = vi.fn().mockResolvedValue("OK");
+      const redisMock = Redis as unknown as {
+        mockImplementationOnce: (factory: () => never) => void;
+      };
+      redisMock.mockImplementationOnce(
+        () =>
+          ({
+            status: "wait",
+            blpop: vi.fn().mockResolvedValue(null),
+            brpop: vi.fn().mockResolvedValue(null),
+            quit,
+            disconnect,
+            on: vi.fn(),
+          }) as never,
+      );
+      const input = createRedisListInput({
+        host: "localhost",
+        port: 6379,
+        key: "tasks",
+      });
+
+      await Effect.runPromise(input.close!());
+
+      expect(disconnect).toHaveBeenCalledOnce();
+      expect(quit).not.toHaveBeenCalled();
+    });
   });
 
   it("fails the stream with a typed error after reconnect exhaustion", async () => {
@@ -189,9 +221,12 @@ describe("RedisListInput", () => {
     redisMock.mockImplementationOnce(
       () =>
         ({
+          status: "ready",
           blpop: vi.fn().mockRejectedValue(new Error("offline")),
           brpop: vi.fn().mockRejectedValue(new Error("offline")),
           quit: vi.fn().mockResolvedValue("OK"),
+          disconnect: vi.fn(),
+          on: vi.fn(),
         }) as never,
     );
     const input = createRedisListInput({

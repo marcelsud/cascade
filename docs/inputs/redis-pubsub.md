@@ -29,6 +29,8 @@ queue, but sustained publishing can still accumulate pending handler work while
 queue offers wait. Prefer `drop_new` or `drop_old` when publishers can outpace
 the pipeline for extended periods.
 
+The Docker-backed end-to-end suite verifies `drop_old` under publisher overload.
+
 ### Connection Configuration Fields
 
 - `connect_timeout`: Connection timeout in ms (default: 10000)

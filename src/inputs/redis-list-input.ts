@@ -23,6 +23,10 @@ import {
   Port,
   PositiveInt,
 } from "../core/validation.js";
+import {
+  closeRedisClient,
+  observeRedisClientErrors,
+} from "../core/redis-client.js";
 import { withReconnect } from "./redis-reconnect.js";
 
 export interface RedisListInputConfig {
@@ -151,6 +155,7 @@ export const createRedisListInput = (
       return delay;
     },
   });
+  observeRedisClientErrors(client, "Redis List input");
 
   const direction = config.direction ?? "left";
   const timeout = config.timeout ?? 5;
@@ -238,8 +243,9 @@ export const createRedisListInput = (
 
   return {
     name: "redis-list-input",
+    shutdownMode: "finish-current",
     getMetrics: () => metrics.getInputMetrics(),
     stream,
-    close: () => Effect.promise(() => client.quit()),
+    close: () => Effect.promise(() => closeRedisClient(client)),
   };
 };

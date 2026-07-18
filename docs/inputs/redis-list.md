@@ -32,6 +32,7 @@ Consumes messages from Redis Lists using blocking pop operations (BLPOP/BRPOP). 
 Reconnect delays double after each failure and are capped at 30 seconds. When
 `max_reconnect_attempts` is exhausted, the input stream fails with a typed error
 and the pipeline exits non-zero. Omit it to preserve unlimited reconnects.
+The end-to-end suite also verifies bounded retries against an unreachable Redis.
 
 ## Examples
 

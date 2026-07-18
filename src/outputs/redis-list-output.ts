@@ -24,9 +24,9 @@ import {
   RetryCount,
 } from "../core/validation.js";
 import {
-  closeRedisOutputClient,
-  observeRedisOutputErrors,
-} from "./redis-output-client.js";
+  closeRedisClient,
+  observeRedisClientErrors,
+} from "../core/redis-client.js";
 
 export interface RedisListOutputConfig {
   readonly host: string;
@@ -138,7 +138,7 @@ export const createRedisListOutput = (
       return delay;
     },
   });
-  observeRedisOutputErrors(client, "Redis List output");
+  observeRedisClientErrors(client, "Redis List output");
 
   const direction = config.direction ?? "right";
 
@@ -235,7 +235,7 @@ export const createRedisListOutput = (
         }
         yield* Effect.tryPromise({
           try: async () => {
-            await closeRedisOutputClient(client);
+            await closeRedisClient(client);
           },
           catch: (error) => {
             // Log but don't fail on close (best effort cleanup)
