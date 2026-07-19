@@ -292,6 +292,36 @@ describe("Dead Letter Queue (DLQ)", () => {
       }
     });
 
+    it("waits for the DLQ output to close when the primary close fails", async () => {
+      const primaryError = new Error("primary close failed");
+      let dlqClosed = false;
+      const mockOutput: Output<Error> = {
+        name: "mock-output",
+        send: vi.fn().mockReturnValue(Effect.void),
+        close: vi.fn().mockReturnValue(Effect.fail(primaryError)),
+      };
+      const dlqOutput: Output<Error> = {
+        name: "dlq-output",
+        send: vi.fn().mockReturnValue(Effect.void),
+        close: vi.fn().mockReturnValue(
+          Effect.sleep("20 millis").pipe(
+            Effect.tap(() => Effect.sync(() => (dlqClosed = true))),
+          ),
+        ),
+      };
+
+      const wrappedOutput = withDLQ({
+        output: mockOutput,
+        dlq: dlqOutput,
+      });
+
+      await expect(Effect.runPromise(wrappedOutput.close!())).rejects.toThrow(
+        "primary close failed",
+      );
+      expect(dlqClosed).toBe(true);
+      expect(dlqOutput.close).toHaveBeenCalledOnce();
+    });
+
     it("should expose no close method when neither output needs cleanup", () => {
       const wrappedOutput = withDLQ({
         output: {

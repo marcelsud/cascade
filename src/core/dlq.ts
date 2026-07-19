@@ -123,13 +123,19 @@ export const withDLQ = <E>(config: DLQConfig<E>): Output<E | DLQError> => {
     close:
       closeOutputs.length > 0
         ? () =>
-            Effect.all(
-              closeOutputs.map((close) => close()),
-              {
-                concurrency: "unbounded",
-                discard: true,
-              },
-            )
+            Effect.gen(function* () {
+              // Closing one output must not interrupt cleanup of the other.
+              const results = yield* Effect.all(
+                closeOutputs.map((close) => Effect.either(close())),
+                { concurrency: "unbounded" },
+              );
+              const failure = results.find(
+                (result) => result._tag === "Left",
+              );
+              if (failure?._tag === "Left") {
+                return yield* Effect.fail(failure.left);
+              }
+            })
         : undefined,
     getMetrics: config.output.getMetrics,
     getDLQMetrics: config.dlq?.getMetrics,

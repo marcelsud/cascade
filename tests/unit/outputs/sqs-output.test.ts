@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Effect, Stream } from "effect";
+import { Effect, Exit, Fiber, Stream } from "effect";
 import { createSqsOutput } from "../../../src/outputs/sqs-output.js";
 import { withDLQ } from "../../../src/core/dlq.js";
 import { run as runPipeline } from "../../../src/core/pipeline.js";
@@ -244,6 +244,31 @@ describe("SQSOutput", () => {
         "final flush failed",
       );
       await sendFailure;
+    });
+
+    it("fails sibling completions when a batch send is interrupted", async () => {
+      const mockClient = await getMockClient();
+      mockClient.send.mockImplementationOnce(() => new Promise(() => {}));
+      const output = createSqsOutput({
+        queueUrl: "http://localhost:4566/000000000000/test-queue",
+        maxBatchSize: 2,
+        batchTimeout: 5_000,
+      });
+
+      const first = Effect.runFork(output.send(createMessage({ id: 1 })));
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const coordinator = Effect.runFork(
+        output.send(createMessage({ id: 2 })),
+      );
+      await vi.waitFor(() => expect(batchCalls(mockClient)).toHaveLength(1));
+
+      await Effect.runPromise(Fiber.interrupt(coordinator));
+      const firstExit = await Effect.runPromise(
+        Fiber.await(first).pipe(Effect.timeout("200 millis")),
+      );
+
+      expect(Exit.isFailure(firstExit)).toBe(true);
+      await Effect.runPromise(output.close!());
     });
   });
 

@@ -365,7 +365,17 @@ export const createSqsOutput = (
     });
 
   const sendBatch = (entries: readonly PendingBatchMessage[]) =>
-    sendBatchEntries(entries, config.maxRetries ?? 3);
+    sendBatchEntries(entries, config.maxRetries ?? 3).pipe(
+      Effect.onInterrupt(() =>
+        failEntries(
+          entries,
+          new SqsOutputError(
+            "SQS batch send was interrupted before delivery completed",
+            "intermittent",
+          ),
+        ),
+      ),
+    );
 
   const cancelBatchTimer = Effect.gen(function* () {
     const timer = yield* Ref.getAndSet(batchTimerRef, null);
@@ -457,7 +467,9 @@ export const createSqsOutput = (
         const { batch, shouldStartTimer } = yield* enqueue(pending);
 
         if (batch) {
-          yield* cancelBatchTimer;
+          // Leave the existing timer installed. It will either observe an empty
+          // buffer or flush messages that arrived while this batch was sending.
+          // Cancelling here can race with a new first entry and orphan it.
           // Every entry receives its own success/failure below. Observing the
           // aggregate result prevents the coordinating sender from inheriting
           // another entry's failure.
