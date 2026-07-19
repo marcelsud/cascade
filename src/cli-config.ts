@@ -84,5 +84,5 @@ export const validateConfig = (
         output: selectedComponent(config.output),
         dlq: config.dlq !== undefined,
       }),
-    ({ pipeline }) => closeBuiltPipeline(pipeline),
+    ({ pipeline }) => closeBuiltPipeline(pipeline).pipe(Effect.orDie),
   );
