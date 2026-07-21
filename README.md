@@ -249,6 +249,7 @@ Custom components can provide their own Effect Schema configuration and factory 
 - **[Redis Streams](docs/outputs/redis-streams.md)** - Send to Redis Streams with length management
 - **[Redis Pub/Sub](docs/outputs/redis-pubsub.md)** - Publish to Redis Pub/Sub channels
 - **[Redis Lists](docs/outputs/redis-list.md)** - Push to Redis Lists (LPUSH/RPUSH queues)
+- **[Stdout](docs/outputs/stdout.md)** *(alpha)* - Write each message to standard output, newline-delimited
 
 ### 🚀 Advanced Features
 

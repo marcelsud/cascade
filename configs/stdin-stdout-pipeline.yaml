@@ -1,0 +1,7 @@
+input:
+  stdin:
+    mode: lines
+
+output:
+  stdout:
+    format: content
