@@ -35,6 +35,7 @@ import { createRedisPubSubOutput } from "../outputs/redis-pubsub-output.js";
 import { createRedisListOutput } from "../outputs/redis-list-output.js";
 import { createSqsOutput } from "../outputs/sqs-output.js";
 import { createHttpOutput } from "../outputs/http-output.js";
+import { createStdoutOutput } from "../outputs/stdout-output.js";
 // Testing utilities
 import { createGenerateInput } from "../testing/generate-input.js";
 import { createCaptureOutput } from "../testing/capture-output.js";
@@ -481,6 +482,14 @@ const buildOutput = (
         timeout: config.http.timeout,
         maxRetries: config.http.max_retries,
         auth: config.http.auth,
+      }),
+    );
+  }
+
+  if (config.stdout) {
+    return Effect.succeed(
+      createStdoutOutput({
+        format: config.stdout.format,
       }),
     );
   }

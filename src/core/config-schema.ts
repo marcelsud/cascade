@@ -431,6 +431,15 @@ const CaptureOutputSchema = S.Struct({
 });
 
 /**
+ * Schema for Stdout Output configuration
+ *
+ * @experimental Alpha component — shape may change before it stabilizes.
+ */
+const StdoutOutputSchema = S.Struct({
+  format: S.optional(S.Union(S.Literal("content"), S.Literal("message"))),
+});
+
+/**
  * Output configuration - detects type by key
  */
 const OutputConfigFields = {
@@ -439,6 +448,7 @@ const OutputConfigFields = {
   redis_list: S.optional(RedisListOutputSchema),
   aws_sqs: S.optional(AwsSqsOutputSchema),
   http: S.optional(HttpOutputSchema),
+  stdout: S.optional(StdoutOutputSchema),
   capture: S.optional(CaptureOutputSchema),
 };
 

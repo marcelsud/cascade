@@ -36,6 +36,7 @@ export * from "./outputs/redis-pubsub-output.js";
 export * from "./outputs/redis-list-output.js";
 export * from "./outputs/sqs-output.js";
 export * from "./outputs/http-output.js";
+export * from "./outputs/stdout-output.js";
 
 // Testing Utilities (for building tests and examples)
 export * from "./testing/index.js";
