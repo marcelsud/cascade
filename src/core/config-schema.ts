@@ -440,6 +440,17 @@ const StdoutOutputSchema = S.Struct({
 });
 
 /**
+ * Schema for File Output configuration
+ *
+ * @experimental Alpha component — shape may change before it stabilizes.
+ */
+const FileOutputSchema = S.Struct({
+  path: S.String,
+  format: S.optional(S.Union(S.Literal("content"), S.Literal("message"))),
+  mode: S.optional(S.Union(S.Literal("append"), S.Literal("overwrite"))),
+});
+
+/**
  * Output configuration - detects type by key
  */
 const OutputConfigFields = {
@@ -449,6 +460,7 @@ const OutputConfigFields = {
   aws_sqs: S.optional(AwsSqsOutputSchema),
   http: S.optional(HttpOutputSchema),
   stdout: S.optional(StdoutOutputSchema),
+  file: S.optional(FileOutputSchema),
   capture: S.optional(CaptureOutputSchema),
 };
 

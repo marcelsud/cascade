@@ -250,6 +250,7 @@ Custom components can provide their own Effect Schema configuration and factory 
 - **[Redis Pub/Sub](docs/outputs/redis-pubsub.md)** - Publish to Redis Pub/Sub channels
 - **[Redis Lists](docs/outputs/redis-list.md)** - Push to Redis Lists (LPUSH/RPUSH queues)
 - **[Stdout](docs/outputs/stdout.md)** *(alpha)* - Write each message to standard output, newline-delimited
+- **[File](docs/outputs/file.md)** *(alpha)* - Write each message to a local file, newline-delimited (append or overwrite)
 
 ### 🚀 Advanced Features
 

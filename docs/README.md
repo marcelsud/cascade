@@ -50,6 +50,7 @@ Destination systems for processed messages:
 - **[AWS SQS](outputs/sqs.md)** - Send to SQS queues (single or batch mode)
 - **[Redis Streams](outputs/redis-streams.md)** - Send to Redis Streams with length management
 - **[Stdout](outputs/stdout.md)** *(alpha)* - Write each message to standard output, newline-delimited
+- **[File](outputs/file.md)** *(alpha)* - Write each message to a local file, newline-delimited (append or overwrite)
 
 ## 🚀 Advanced Features
 
