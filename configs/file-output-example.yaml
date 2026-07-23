@@ -1,0 +1,15 @@
+# Alpha file output: write newline-delimited records to a local file.
+# The parent directory must already exist; the file is created lazily on the
+# first message (append mode preserves any existing content).
+#
+#   printf 'hello\nworld\n' | npx tsx src/cli.ts run configs/file-output-example.yaml
+#   cat ./events.ndjson
+input:
+  stdin:
+    mode: lines
+
+output:
+  file:
+    path: "./events.ndjson"
+    format: content
+    mode: append

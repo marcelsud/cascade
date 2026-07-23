@@ -36,6 +36,7 @@ import { createRedisListOutput } from "../outputs/redis-list-output.js";
 import { createSqsOutput } from "../outputs/sqs-output.js";
 import { createHttpOutput } from "../outputs/http-output.js";
 import { createStdoutOutput } from "../outputs/stdout-output.js";
+import { createFileOutput } from "../outputs/file-output.js";
 // Testing utilities
 import { createGenerateInput } from "../testing/generate-input.js";
 import { createCaptureOutput } from "../testing/capture-output.js";
@@ -492,6 +493,23 @@ const buildOutput = (
         format: config.stdout.format,
       }),
     );
+  }
+
+  if (config.file) {
+    return Effect.try({
+      try: () =>
+        createFileOutput({
+          path: config.file!.path,
+          format: config.file!.format,
+          mode: config.file!.mode,
+        }),
+      catch: (error) =>
+        new BuildError(
+          error instanceof Error
+            ? error.message
+            : `Failed to build file output: ${String(error)}`,
+        ),
+    });
   }
 
   // Testing utility: capture output
