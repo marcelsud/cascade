@@ -1,5 +1,9 @@
 /**
  * Filter Processor - Suppresses messages that do not satisfy a JSONata check.
+ *
+ * @experimental This component is alpha. Its configuration shape and
+ * expression semantics may change in a backwards-incompatible way before it
+ * stabilizes.
  */
 import { Effect } from "effect";
 import * as Schema from "effect/Schema";
@@ -8,6 +12,9 @@ import type { Message, Processor } from "../core/types.js";
 import { ComponentError } from "../core/errors.js";
 import { NonEmptyString, validate } from "../core/validation.js";
 
+/**
+ * @experimental Config shape may change before this component stabilizes.
+ */
 export interface FilterProcessorConfig {
   readonly check: string;
 }
@@ -25,6 +32,11 @@ export const FilterProcessorConfigSchema = Schema.Struct({
   ),
 });
 
+/**
+ * Create a Filter processor.
+ *
+ * @experimental Alpha component — see module docs.
+ */
 export const createFilterProcessor = (
   config: FilterProcessorConfig,
 ): Processor<FilterError> => {

@@ -1,5 +1,8 @@
 # Filter Processor
 
+> **Alpha:** This component's configuration shape and expression semantics may
+> change in a backwards-incompatible way before it stabilizes.
+
 The **filter processor** evaluates a JSONata check and suppresses messages that
 do not match. Suppressed messages do not reach later processors or the output,
 but are treated as successfully handled and are acknowledged by the input.

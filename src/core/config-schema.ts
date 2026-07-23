@@ -215,6 +215,8 @@ const MappingProcessorSchema = S.Struct({
 
 /**
  * Schema for Filter Processor (JSONata-based condition)
+ *
+ * @experimental Alpha component — shape may change before it stabilizes.
  */
 const FilterProcessorSchema = S.Struct({
   check: S.String.pipe(
