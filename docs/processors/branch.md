@@ -29,8 +29,12 @@ pipeline:
 
 1. Creates a deep copy of the incoming message
 2. Executes all nested processors sequentially on the copy
-3. Merges the processed result into `metadata.branchResult`
-4. Returns the **original message** with enriched metadata
+3. Merges each processed result into `metadata.branchResult`
+4. Returns one copy of the **original message** for each branch result
+
+If the nested chain produces no results, the original is suppressed. If it
+produces multiple results, the branch emits multiple copies of the original in
+the same order, each with its corresponding branch result.
 
 ### Example
 
@@ -77,7 +81,7 @@ pipeline:
 
 - Uses `JSON.parse(JSON.stringify())` for deep cloning
 - Nested processors can themselves be branch/switch processors (recursive)
-- If nested processor returns array, takes first message
+- Preserves zero-or-many results from nested processor chains
 - Thread-safe and stateless
 
 ## See Also

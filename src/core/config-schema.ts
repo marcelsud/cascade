@@ -214,6 +214,17 @@ const MappingProcessorSchema = S.Struct({
 });
 
 /**
+ * Schema for Filter Processor (JSONata-based condition)
+ */
+const FilterProcessorSchema = S.Struct({
+  check: S.String.pipe(
+    S.filter((value) => value.trim().length > 0, {
+      message: () => "Filter processor 'check' must be a non-empty string",
+    }),
+  ),
+});
+
+/**
  * Schema for HTTP Processor (API enrichment and validation)
  */
 const HttpProcessorSchema = S.Struct({
@@ -301,6 +312,7 @@ const createProcessorConfigSchema = (registry?: ComponentRegistry) => {
       uppercase: S.optional(UppercaseProcessorSchema),
       log: S.optional(LogProcessorSchema),
       mapping: S.optional(MappingProcessorSchema),
+      filter: S.optional(FilterProcessorSchema),
       http: S.optional(HttpProcessorSchema),
       branch: S.optional(
         S.Struct({
@@ -329,6 +341,7 @@ const createProcessorConfigSchema = (registry?: ComponentRegistry) => {
           "uppercase",
           "log",
           "mapping",
+          "filter",
           "http",
           "branch",
           "switch",
@@ -568,6 +581,9 @@ export type ProcessorConfig = {
   };
   readonly mapping?: {
     readonly expression: string;
+  };
+  readonly filter?: {
+    readonly check: string;
   };
   readonly http?: {
     readonly url: string;

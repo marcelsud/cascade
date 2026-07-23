@@ -10,6 +10,7 @@
 import { Effect } from "effect";
 import jsonata from "jsonata";
 import type { Processor, Message } from "../core/types.js";
+import { runProcessorChain } from "../core/processor-chain.js";
 
 export interface SwitchCase {
   readonly check: string; // JSONata boolean expression
@@ -53,7 +54,9 @@ export const createSwitchProcessor = (
 
   return {
     name: "switch-processor",
-    process: (msg: Message): Effect.Effect<Message, SwitchError, any> => {
+    process: (
+      msg: Message,
+    ): Effect.Effect<Message | Message[], SwitchError, any> => {
       return Effect.gen(function* () {
         // Prepare context for JSONata evaluation
         const context =
@@ -89,15 +92,11 @@ export const createSwitchProcessor = (
 
           // If this case matches, execute its processors
           if (matches) {
-            let processedMessage = msg;
-            for (const processor of compiledCase.processors) {
-              const result: Message | Message[] = yield* processor.process(
-                processedMessage,
-              );
-              // If processor returns array, take first message
-              processedMessage = Array.isArray(result) ? result[0] : result;
-            }
-            return processedMessage;
+            const results = yield* runProcessorChain(
+              msg,
+              compiledCase.processors,
+            );
+            return results.length === 1 ? results[0] : results;
           }
         }
 
