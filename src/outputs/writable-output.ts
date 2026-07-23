@@ -250,10 +250,16 @@ export const createWriteCoordinator = (
     try {
       await new Promise<void>((resolve, reject) => {
         const cleanup = () => {
-          target.removeListener("finish", onFinish);
+          target.removeListener("close", onClose);
           target.removeListener("error", onCloseError);
         };
-        const onFinish = () => {
+        // Resolve on 'close', NOT 'finish'. For fs.WriteStream, 'finish' fires
+        // when writes are flushed but the file descriptor is still closing;
+        // 'close' fires after the fd is actually released. Resolving on
+        // 'finish' would return while the fd is still open, and would drop the
+        // error listener during the finish→close window — a flush/close failure
+        // in that window would then escape as an uncaughtException.
+        const onClose = () => {
           cleanup();
           resolve();
         };
@@ -261,10 +267,11 @@ export const createWriteCoordinator = (
           cleanup();
           reject(new StreamWriteError("close", error));
         };
-        // Swap the write-time error listener for a close-time one so a flush
-        // failure surfaces here instead of being swallowed.
+        // Swap the write-time error listener for a close-time one so a flush or
+        // close failure surfaces here instead of being swallowed, and keep it
+        // installed until 'close' so nothing escapes after 'finish'.
         target.removeListener("error", onStreamError);
-        target.once("finish", onFinish);
+        target.once("close", onClose);
         target.once("error", onCloseError);
         target.end();
       });

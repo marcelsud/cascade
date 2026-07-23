@@ -314,4 +314,60 @@ describe("createWriteCoordinator (owned stream)", () => {
     expect(error).toBeInstanceOf(StreamWriteError);
     expect((error as StreamWriteError).phase).toBe("open");
   });
+
+  it("resolves close() only after the file descriptor is actually closed", async () => {
+    const dir = await createTempDir();
+    const filePath = path.join(dir, "closed.ndjson");
+    let stream: fs.WriteStream | undefined;
+    const c = createWriteCoordinator({
+      owned: true,
+      open: () => (stream = fs.createWriteStream(filePath)),
+    });
+
+    await c.write("a");
+    // 'finish' precedes 'close' on fs.WriteStream; close() must wait for
+    // 'close', so the descriptor is already released when it resolves.
+    await c.close();
+
+    expect(stream!.closed).toBe(true);
+  });
+
+  it("rejects with StreamWriteError('close') on an error between finish and close, without an uncaughtException", async () => {
+    // autoDestroy: false so the stream does not emit 'close' on its own —
+    // this isolates the finish→close window and lets us inject a late error.
+    const stream = new Writable({
+      autoDestroy: false,
+      write(_chunk, _encoding, callback) {
+        callback();
+      },
+    });
+    stream.on("finish", () =>
+      setTimeout(
+        () => stream.emit("error", new Error("late close failure")),
+        1,
+      ),
+    );
+    const c = createWriteCoordinator({ owned: true, open: () => stream });
+    stream.emit("open");
+
+    const uncaught: Error[] = [];
+    const handler = (e: Error) => uncaught.push(e);
+    process.on("uncaughtException", handler);
+    let error: unknown;
+    try {
+      await c.write("x");
+      error = await c.close().then(
+        () => undefined,
+        (e) => e,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 15));
+    } finally {
+      process.removeListener("uncaughtException", handler);
+    }
+
+    expect(error).toBeInstanceOf(StreamWriteError);
+    expect((error as StreamWriteError).phase).toBe("close");
+    expect(uncaught).toEqual([]);
+    expect(stream.listenerCount("error")).toBe(0);
+  });
 });
