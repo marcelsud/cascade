@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ratchets:
+    runs-on: ubuntu-latest
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+      - name: Install (frozen lockfile)
+        run: bun install --frozen-lockfile
+      - name: Grading tool tests
+        run: node --test .github/grading/checks.test.mjs
+      - name: RT-1 type safety
+        run: npm run lint
+      - name: RT-1 build
+        run: npm run build
+      - name: RT-2 focused/skipped/ignored test guard
+        run: node .github/grading/checks.mjs test-integrity --base "$BASE_SHA"
+      - name: RT-2 unit tests
+        run: npm run test:unit
+      - name: RT-5 complexity signal (report-only)
+        run: node .github/grading/checks.mjs complexity --base "$BASE_SHA" --config .github/grading/config.yml
+        continue-on-error: true
+      - name: RT-6 duplicate-rule signal (report-only)
+        run: node .github/grading/checks.mjs duplicates --base "$BASE_SHA" --config .github/grading/config.yml
+        continue-on-error: true
+      - name: RT-4 coverage floor (report-only)
+        run: |
+          set -o pipefail
+          npm run test:coverage 2>&1 | tee /tmp/cascade-coverage.txt
+          node .github/grading/checks.mjs coverage --report /tmp/cascade-coverage.txt --config .github/grading/config.yml
+        continue-on-error: true

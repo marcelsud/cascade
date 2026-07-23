@@ -1,0 +1,58 @@
+# Grading configuration for marcelsud/cascade.
+# Spec: https://github.com/marcelsud/specs/blob/main/grading-methodology.md
+# Changing thresholds, exclusions, or mode is a policy change and MUST be its
+# own reviewed PR (spec §10.1), never part of a feature PR.
+rubric_version: 1.0.1
+mode: report-only
+
+# Objective registry for IE-7. Issues cite an ID from this list. A recorded
+# administrative request may satisfy IE-7 without an objective, but only via
+# the D path (issue grade D, spec §5.1).
+objectives:
+  REL-1: >-
+    Delivery guarantees: documented reliable/at-least-once delivery paths hold
+    across the full pipeline boundary (input -> processors -> outputs/DLQ).
+  REL-2: >-
+    Documented component contracts behave as documented (timeouts, retries,
+    template evaluation, error classification).
+  TEST-1: >-
+    Release gates and test tooling are trustworthy: runnable from a clean
+    checkout and free of false positives.
+
+# RT-3 is intentionally unused in rubric 1.0.1. Behavioral proof is a reviewer
+# duty under SG-5, not a machine ratchet.
+ratchets:
+  RT-1:
+    check: "npm run lint && npm run build"
+    enforcement: ci-blocking
+  RT-2:
+    check: "node .github/grading/checks.mjs test-integrity --base $BASE_SHA && npm run test:unit"
+    enforcement: ci-blocking
+  RT-4:
+    check: "npm run test:coverage; node .github/grading/checks.mjs coverage --report <output> --config .github/grading/config.yml"
+    enforcement: report-only
+    baseline_commit: 60d85c8
+    baseline_total_lines_pct: 67.57
+  RT-5:
+    check: "node .github/grading/checks.mjs complexity --base $BASE_SHA --config .github/grading/config.yml"
+    enforcement: report-only
+    max_cyclomatic_complexity: 20
+  RT-6:
+    check: "node .github/grading/checks.mjs duplicates --base $BASE_SHA --config .github/grading/config.yml"
+    enforcement: report-only
+    minimum_tokens: 60
+  RT-7:
+    check: "New runtime dependency requires capability/ownership/security justification in the PR body"
+    enforcement: reviewer
+  RT-8:
+    check: "Public config/API changes require schema, docs, and behavioral tests"
+    enforcement: reviewer
+
+baseline:
+  commit: 60d85c8
+  unit_tests_passing: 662
+  lint: clean
+  runtime_focused_or_skipped_tests: 0
+  conditional_test_guards:
+    - "tests/unit/inputs/file-input.test.ts:224 skipIf"
+    - "tests/unit/outputs/file-output.test.ts:308 runIf"
