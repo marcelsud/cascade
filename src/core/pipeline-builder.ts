@@ -25,6 +25,7 @@ import { createMetadataProcessor } from "../processors/metadata-processor.js";
 import { createUppercaseProcessor } from "../processors/uppercase-processor.js";
 import { createLoggingProcessor } from "../processors/logging-processor.js";
 import { createMappingProcessor } from "../processors/mapping-processor.js";
+import { createFilterProcessor } from "../processors/filter-processor.js";
 import { createHttpProcessor } from "../processors/http-processor.js";
 import { createBranchProcessor } from "../processors/branch-processor.js";
 import { createSwitchProcessor } from "../processors/switch-processor.js";
@@ -281,6 +282,18 @@ const buildProcessor = (
         expression: config.mapping.expression,
       }),
     );
+  }
+
+  if (config.filter) {
+    return Effect.try({
+      try: () => createFilterProcessor({ check: config.filter!.check }),
+      catch: (error) =>
+        new BuildError(
+          error instanceof Error
+            ? error.message
+            : `Failed to build filter processor: ${String(error)}`,
+        ),
+    });
   }
 
   if (config.http) {

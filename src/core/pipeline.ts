@@ -8,6 +8,7 @@ import type {
   PipelineResult,
   PipelineStats,
 } from "./types.js";
+import { runProcessorChain } from "./processor-chain.js";
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -133,27 +134,7 @@ export const run = <E, R>(
 
     const processMessage = (msg: Message) =>
       pipe(
-        Effect.succeed(msg),
-        Effect.flatMap((currentMsg) =>
-          Effect.reduce(
-            pipeline.processors,
-            currentMsg as Message | Message[],
-            (acc, processor) => {
-              const messages = Array.isArray(acc) ? acc : [acc];
-              return pipe(
-                Effect.forEach(
-                  messages,
-                  (message) => processor.process(message),
-                  {
-                    concurrency: 1,
-                  },
-                ),
-                Effect.map((results) => results.flat()),
-              );
-            },
-          ),
-        ),
-        Effect.map((result) => (Array.isArray(result) ? result : [result])),
+        runProcessorChain(msg, pipeline.processors),
         Effect.flatMap((messages) =>
           Effect.forEach(
             messages,

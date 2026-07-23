@@ -10,6 +10,7 @@
  */
 import { Effect } from "effect";
 import type { Processor, Message } from "../core/types.js";
+import { runProcessorChain } from "../core/processor-chain.js";
 
 export interface BranchProcessorConfig {
   readonly processors: readonly Processor<any, any>[];
@@ -24,7 +25,9 @@ export const createBranchProcessor = (
 ): Processor<any, any> => {
   return {
     name: "branch-processor",
-    process: (originalMessage: Message): Effect.Effect<Message, any, any> => {
+    process: (
+      originalMessage: Message,
+    ): Effect.Effect<Message | Message[], any, any> => {
       return Effect.gen(function* () {
         // Create a copy of the message for branch processing
         // Use JSON parse/stringify for deep clone to ensure compatibility
@@ -34,19 +37,14 @@ export const createBranchProcessor = (
           content: JSON.parse(JSON.stringify(originalMessage.content)),
         };
 
-        // Execute nested processors sequentially on the branch
-        let processedBranchMessage: Message = branchMessage;
-        for (const processor of config.processors) {
-          const result: Message | Message[] = yield* processor.process(
-            processedBranchMessage,
-          );
-          // If processor returns array, take first message (branches don't split)
-          processedBranchMessage = Array.isArray(result) ? result[0] : result;
-        }
+        const branchResults = yield* runProcessorChain(
+          branchMessage,
+          config.processors,
+        );
 
-        // Merge the branch result into original message metadata
-        // under "branchResult" key to avoid overwriting original data
-        return {
+        // Preserve the original once per branch result. Empty branch results
+        // suppress the original, matching normal processor-chain cardinality.
+        const results = branchResults.map((processedBranchMessage) => ({
           ...originalMessage,
           metadata: {
             ...originalMessage.metadata,
@@ -55,7 +53,9 @@ export const createBranchProcessor = (
               metadata: processedBranchMessage.metadata,
             },
           },
-        };
+        }));
+
+        return results.length === 1 ? results[0] : results;
       });
     },
   };

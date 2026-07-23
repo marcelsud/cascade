@@ -27,6 +27,7 @@ export * from "./processors/metadata-processor.js";
 export * from "./processors/uppercase-processor.js";
 export * from "./processors/logging-processor.js";
 export * from "./processors/mapping-processor.js";
+export * from "./processors/filter-processor.js";
 export * from "./processors/http-processor.js";
 export * from "./processors/dedupe-processor.js";
 

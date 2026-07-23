@@ -40,6 +40,7 @@ Transform and enrich messages:
 - **[Metadata](processors/metadata.md)** - Add correlation IDs and timestamps for tracing
 - **[Uppercase](processors/uppercase.md)** - Simple field transformation to uppercase
 - **[Mapping](processors/mapping.md)** - Complex JSONata transformations and data manipulation
+- **[Filter](processors/filter.md)** *(alpha)* - Suppress messages using JSONata conditions
 - **[JavaScript](processors/javascript.md)** - Sandboxed JavaScript execution (QuickJS/WASM) for imperative logic
 - **[Logging](processors/logging.md)** - Log messages for debugging and monitoring
 

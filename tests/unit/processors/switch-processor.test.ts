@@ -128,10 +128,7 @@ describe("SwitchProcessor", () => {
   });
 
   it("should access message metadata in check expressions", async () => {
-    const message = createMessage(
-      { value: 1 },
-      { source: "external-api" },
-    );
+    const message = createMessage({ value: 1 }, { source: "external-api" });
 
     const switchProcessor = createSwitchProcessor({
       cases: [
@@ -146,6 +143,47 @@ describe("SwitchProcessor", () => {
 
     // Case should match based on metadata
     expect(result.metadata.processedBy).toBe("metadata-processor");
+  });
+
+  it("should propagate an empty result from a matching case", async () => {
+    const message = createMessage({ enabled: false });
+    const suppress = {
+      name: "suppress",
+      process: () => Effect.succeed([]),
+    };
+    const switchProcessor = createSwitchProcessor({
+      cases: [{ check: "true", processors: [suppress] }],
+    });
+
+    const result = await Effect.runPromise(switchProcessor.process(message));
+
+    expect(result).toEqual([]);
+  });
+
+  it("should propagate multiple results through remaining case processors", async () => {
+    const message = createMessage({ value: 1 });
+    const split = {
+      name: "split",
+      process: (msg: any) =>
+        Effect.succeed([
+          { ...msg, content: { value: 2 } },
+          { ...msg, content: { value: 3 } },
+        ]),
+    };
+    const mark = {
+      name: "mark",
+      process: (msg: any) =>
+        Effect.succeed({ ...msg, metadata: { ...msg.metadata, marked: true } }),
+    };
+    const switchProcessor = createSwitchProcessor({
+      cases: [{ check: "true", processors: [split, mark] }],
+    });
+
+    const result = await Effect.runPromise(switchProcessor.process(message));
+
+    expect(result).toHaveLength(2);
+    expect(result.map((item: any) => item.content.value)).toEqual([2, 3]);
+    expect(result.every((item: any) => item.metadata.marked)).toBe(true);
   });
 
   it("should coerce non-boolean results to boolean", async () => {

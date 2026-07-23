@@ -41,6 +41,10 @@ pipeline:
 3. Stops after first match (**no fallthrough**)
 4. Returns message unchanged if no case matches
 
+Matched processor chains preserve cardinality: a nested filter can suppress the
+message, and a nested processor that returns multiple messages propagates all
+of them in order.
+
 ### Check Expressions
 
 Check expressions are JSONata boolean expressions evaluated against the message content:

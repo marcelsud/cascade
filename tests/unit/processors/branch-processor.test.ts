@@ -11,9 +11,7 @@ describe("BranchProcessor", () => {
     const message = createMessage(originalContent);
 
     const branchProcessor = createBranchProcessor({
-      processors: [
-        createMetadataProcessor({ addTimestamp: true }),
-      ],
+      processors: [createMetadataProcessor({ addTimestamp: true })],
     });
 
     const result = await Effect.runPromise(branchProcessor.process(message));
@@ -30,7 +28,7 @@ describe("BranchProcessor", () => {
       processors: [
         createMetadataProcessor({ addTimestamp: true }),
         createMappingProcessor({
-          expression: "$",  // Return entire content as-is
+          expression: "$", // Return entire content as-is
         }),
       ],
     });
@@ -45,7 +43,10 @@ describe("BranchProcessor", () => {
     // Branch should have enriched metadata
     expect(result.metadata.branchResult.metadata.processedAt).toBeDefined();
     // Branch content should be preserved
-    expect(result.metadata.branchResult.content).toEqual({ orderId: "123", amount: 100 });
+    expect(result.metadata.branchResult.content).toEqual({
+      orderId: "123",
+      amount: 100,
+    });
   });
 
   it("should run multiple nested processors sequentially", async () => {
@@ -64,7 +65,9 @@ describe("BranchProcessor", () => {
     expect(result.content).toEqual({ value: 10 });
 
     // Branch should have both metadata processors applied
-    expect(result.metadata.branchResult.metadata.processedBy).toBe("metadata-processor");
+    expect(result.metadata.branchResult.metadata.processedBy).toBe(
+      "metadata-processor",
+    );
     expect(result.metadata.branchResult.metadata.processedAt).toBeDefined();
   });
 
@@ -92,5 +95,51 @@ describe("BranchProcessor", () => {
 
     // Branch result should have processedAt in its metadata
     expect(result.metadata.branchResult.metadata.processedAt).toBeDefined();
+  });
+
+  it("should suppress the original when the branch produces no results", async () => {
+    const message = createMessage({ value: 1 });
+    const branchProcessor = createBranchProcessor({
+      processors: [
+        {
+          name: "suppress",
+          process: () => Effect.succeed([]),
+        },
+      ],
+    });
+
+    const result = await Effect.runPromise(branchProcessor.process(message));
+
+    expect(result).toEqual([]);
+  });
+
+  it("should emit one original per branch result in order", async () => {
+    const message = createMessage({ original: true }, { existing: "value" });
+    const branchProcessor = createBranchProcessor({
+      processors: [
+        {
+          name: "split",
+          process: (msg) =>
+            Effect.succeed([
+              { ...msg, content: { branch: 1 } },
+              { ...msg, content: { branch: 2 } },
+            ]),
+        },
+      ],
+    });
+
+    const result = await Effect.runPromise(branchProcessor.process(message));
+
+    expect(result).toHaveLength(2);
+    expect(result.map((item: any) => item.content)).toEqual([
+      { original: true },
+      { original: true },
+    ]);
+    expect(
+      result.map((item: any) => item.metadata.branchResult.content.branch),
+    ).toEqual([1, 2]);
+    expect(
+      result.every((item: any) => item.metadata.existing === "value"),
+    ).toBe(true);
   });
 });
