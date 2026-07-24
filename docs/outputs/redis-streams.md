@@ -14,6 +14,16 @@ Sends messages to Redis Streams with optional stream length management. Efficien
 ### Optional Fields
 
 - `max_length`: Maximum number of entries in the stream (optional, enables MAXLEN trimming)
+- `max_retries`: Number of retry attempts for failed writes (default: 3)
+
+### Connection Configuration Fields
+
+- `connect_timeout`: Connection timeout in ms (default: 10000)
+- `command_timeout`: Command timeout in ms (optional)
+- `keep_alive`: TCP keep-alive in ms (default: 30000)
+- `lazy_connect`: Defer connection until first command (default: false)
+- `max_retries_per_request`: Max retries per request (default: 20)
+- `enable_offline_queue`: Queue commands when offline (default: true)
 
 ## Examples
 
@@ -33,7 +43,7 @@ output:
   redis_streams:
     url: "redis://localhost:6379"
     stream: "processed-messages"
-    max_length: 1000  # Keep only the most recent 1000 messages
+    max_length: 1000 # Keep only the most recent 1000 messages
 ```
 
 ### Authenticated Redis
@@ -41,7 +51,7 @@ output:
 ```yaml
 output:
   redis_streams:
-    url: "redis://:secret@localhost:6379/0"  # With password and database
+    url: "redis://:secret@localhost:6379/0" # With password and database
     stream: "secure-stream"
     max_length: 5000
 ```
@@ -127,6 +137,7 @@ redis://[password@]host:port[/db]
 ```
 
 Examples:
+
 - `redis://localhost:6379` - Basic connection
 - `redis://:mypassword@localhost:6379` - With password
 - `redis://localhost:6379/2` - Select database 2

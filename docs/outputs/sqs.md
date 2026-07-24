@@ -15,9 +15,12 @@ Sends messages to AWS SQS queues with support for both single-message and batch 
 
 - `endpoint`: Custom endpoint URL (useful for LocalStack) - no default
 - `max_batch_size`: Messages per batch - 1 for single sends, 2-10 for batching (default: 1)
-- `batch_timeout`: Auto-flush timeout in milliseconds (optional, requires max_batch_size > 1)
+- `batch_timeout`: Maximum linger before flushing a partial batch in milliseconds (default: 100)
 - `delay_seconds`: Delay message delivery (0-900 seconds, default: 0)
-- `max_retries`: Maximum retry attempts for failures (inherited from parent config)
+- `max_retries`: Maximum retry attempts for failed send operations (default: 3)
+- `max_attempts`: Maximum AWS SDK retry attempts for the client (default: 3)
+- `request_timeout`: Request timeout in milliseconds (default: 0 = no timeout)
+- `connection_timeout`: Connection timeout in milliseconds (default: 1000)
 
 ## Examples
 
@@ -29,7 +32,7 @@ output:
     url: "http://localhost:4566/000000000000/output-queue"
     region: "us-east-1"
     endpoint: "http://localhost:4566"
-    max_batch_size: 1  # Send immediately
+    max_batch_size: 1 # Send immediately
 ```
 
 ### Batch Mode (High Throughput)
@@ -40,8 +43,8 @@ output:
     url: "http://localhost:4566/000000000000/output-queue"
     region: "us-east-1"
     endpoint: "http://localhost:4566"
-    max_batch_size: 10        # Accumulate up to 10 messages
-    batch_timeout: 5000       # Auto-flush after 5 seconds
+    max_batch_size: 10 # Accumulate up to 10 messages
+    batch_timeout: 5000 # Auto-flush after 5 seconds
 ```
 
 ### Production Example
@@ -52,7 +55,7 @@ output:
     url: "https://sqs.us-east-1.amazonaws.com/123456789/production-queue"
     region: "us-east-1"
     max_batch_size: 10
-    batch_timeout: 3000       # 3 second auto-flush
+    batch_timeout: 3000 # 3 second auto-flush
     delay_seconds: 0
 ```
 
@@ -64,7 +67,7 @@ output:
     url: "https://sqs.us-east-1.amazonaws.com/123456789/delayed-queue"
     region: "us-east-1"
     max_batch_size: 1
-    delay_seconds: 300        # Deliver after 5 minutes
+    delay_seconds: 300 # Deliver after 5 minutes
 ```
 
 ## Features
@@ -83,12 +86,14 @@ output:
 ### Single Message Mode (max_batch_size: 1)
 
 **Best for:**
+
 - Low-latency requirements
 - Low message volume
 - Real-time processing
 - Simple use cases
 
 **Characteristics:**
+
 - Each message sent immediately
 - No batching overhead
 - Higher API call costs (AWS charges per request)
@@ -97,12 +102,14 @@ output:
 ### Batch Mode (max_batch_size: 2-10)
 
 **Best for:**
+
 - High message volume
 - Cost optimization
 - High throughput pipelines
 - Bulk processing
 
 **Characteristics:**
+
 - Accumulates messages before sending
 - Sends when batch is full OR timeout expires
 - Reduced API calls (lower AWS costs)
@@ -120,6 +127,7 @@ When `batch_timeout` is configured:
 3. Auto-flush on pipeline shutdown
 
 **Example Timeline:**
+
 ```
 T+0ms:    Message 1 arrives → Start timer
 T+100ms:  Message 2 arrives → Batch size: 2
@@ -132,6 +140,7 @@ T+5000ms: Timeout expires → Send batch (3 messages)
 Messages are serialized to JSON and sent with metadata as SQS message attributes:
 
 **SQS Message Attributes:**
+
 - `correlationId`: String
 - `source`: String (e.g., "redis-streams", "sqs")
 - `receivedAt`: String (ISO 8601)
@@ -171,22 +180,26 @@ Messages are serialized to JSON and sent with metadata as SQS message attributes
 ## Best Practices
 
 ### For High Throughput
+
 - Use `max_batch_size: 10`
 - Set `batch_timeout: 1000-5000` ms
 - Monitor batch fill rate
 - Scale horizontally if needed
 
 ### For Low Latency
+
 - Use `max_batch_size: 1`
 - No batch_timeout needed
 - Accept higher costs
 
 ### For Cost Optimization
+
 - Use `max_batch_size: 10`
 - Set `batch_timeout: 5000-10000` ms
 - Monitor AWS costs in CloudWatch
 
 ### For Production
+
 - Set appropriate `max_retries` (3-5)
 - Configure [Dead Letter Queue](../advanced/dlq.md)
 - Monitor SQS metrics (ApproximateNumberOfMessages, etc.)
@@ -251,6 +264,7 @@ When sending batches, SQS may accept some messages and reject others:
 ## Monitoring
 
 ### Key Metrics
+
 - Messages sent per second
 - Batch fill rate
 - API request count
@@ -258,6 +272,7 @@ When sending batches, SQS may accept some messages and reject others:
 - DLQ message count
 
 ### CloudWatch Metrics
+
 - `NumberOfMessagesSent`
 - `NumberOfMessagesReceived`
 - `ApproximateAgeOfOldestMessage`
