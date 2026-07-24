@@ -10,6 +10,7 @@ import {
   ComponentError,
   type ErrorCategory,
   detectCategory,
+  isIntermittentError,
 } from "../core/errors.js";
 import {
   MetricsAccumulator,
@@ -225,6 +226,19 @@ export const createHttpOutput = (
   // Create HTTP client layer
   const clientLayer = NodeHttpClient.layer;
 
+  const toHttpOutputError = (error: unknown): HttpOutputError => {
+    if (error instanceof HttpOutputError) {
+      return error;
+    }
+    const category = detectHttpErrorCategory(error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return new HttpOutputError(
+      `Failed to send HTTP ${method} request to ${config.url}: ${errorMessage}`,
+      category,
+      error,
+    );
+  };
+
   return {
     name: "http-output",
     getMetrics: () => metrics.getOutputMetrics(),
@@ -241,42 +255,36 @@ export const createHttpOutput = (
           }),
         );
 
-        const [_, duration] = yield* measureDuration(
-          Effect.gen(function* () {
-            const client = yield* HttpClient.HttpClient;
+        // One attempt = transport/timeout + status classification, already
+        // normalized to HttpOutputError so category-aware retry can see 5xx.
+        const sendOnce = Effect.gen(function* () {
+          const client = yield* HttpClient.HttpClient;
 
-            const response = yield* client.execute(httpRequest).pipe(
-              Effect.timeout(`${timeout} millis`),
-              Effect.retry({
-                times: maxRetries,
-                schedule: Schedule.exponential("1 second"),
-              }),
-              Effect.catchAll((error) => {
-                const category = detectHttpErrorCategory(error);
-                const errorMessage =
-                  error instanceof Error ? error.message : String(error);
-                return Effect.fail(
-                  new HttpOutputError(
-                    `Failed to send HTTP ${method} request to ${config.url}: ${errorMessage}`,
-                    category,
-                    error,
-                  ),
-                );
-              }),
+          const response = yield* client.execute(httpRequest).pipe(
+            Effect.timeout(`${timeout} millis`),
+            Effect.mapError(toHttpOutputError),
+          );
+
+          if (response.status >= 400) {
+            const category =
+              response.status >= 500 ? "intermittent" : "logical";
+            return yield* Effect.fail(
+              new HttpOutputError(
+                `HTTP ${method} request failed with status ${response.status}`,
+                category,
+              ),
             );
+          }
+        });
 
-            // Check response status
-            if (response.status >= 400) {
-              const category =
-                response.status >= 500 ? "intermittent" : "logical";
-              return yield* Effect.fail(
-                new HttpOutputError(
-                  `HTTP ${method} request failed with status ${response.status}`,
-                  category,
-                ),
-              );
-            }
-          }),
+        const [_, duration] = yield* measureDuration(
+          sendOnce.pipe(
+            Effect.retry({
+              times: maxRetries,
+              schedule: Schedule.exponential("1 second"),
+              while: (error) => isIntermittentError(error),
+            }),
+          ),
         );
 
         metrics.recordSent(1, duration);
