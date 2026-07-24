@@ -8,6 +8,7 @@ import { glob } from "glob";
 import { parseTestFile, type Test, type TestFile } from "./test-file-parser.js";
 import { buildPipeline } from "../core/pipeline-builder.js";
 import { run as runPipeline } from "../core/pipeline.js";
+import type { PipelineConfig as CorePipelineConfig } from "../core/config-schema.js";
 import type { Message } from "../core/types.js";
 import { executeAssertions, type AssertionContext } from "./assertions.js";
 
@@ -119,7 +120,23 @@ const matchExpectError = (
     };
   }
 
-  if (expectError.type) {
+  // Vacuous expectError ({} / blank-only fields) must never match arbitrary failures.
+  const hasType =
+    typeof expectError.type === "string" && expectError.type.trim().length > 0;
+  const hasMessage =
+    typeof expectError.messageContains === "string" &&
+    expectError.messageContains.trim().length > 0;
+  if (!hasType && !hasMessage) {
+    return {
+      testName: test.name,
+      passed: false,
+      duration: Date.now() - startTime,
+      error:
+        "expectError requires a non-empty type and/or messageContains discriminator",
+    };
+  }
+
+  if (hasType) {
     const errorType = getErrorType(error);
     if (errorType !== expectError.type) {
       return {
@@ -131,14 +148,15 @@ const matchExpectError = (
     }
   }
 
-  if (expectError.messageContains) {
+  if (hasMessage) {
+    const expectedFragment = expectError.messageContains ?? "";
     const errorMessage = formatUnknownError(error);
-    if (!errorMessage.includes(expectError.messageContains)) {
+    if (!errorMessage.includes(expectedFragment)) {
       return {
         testName: test.name,
         passed: false,
         duration: Date.now() - startTime,
-        error: `Expected error message to contain '${expectError.messageContains}' but got: ${errorMessage}`,
+        error: `Expected error message to contain '${expectedFragment}' but got: ${errorMessage}`,
       };
     }
   }
@@ -170,6 +188,46 @@ const getCapturedMessages = (
 };
 
 /**
+ * Map test-file DSL pipeline settings onto core PipelineConfig shapes.
+ * Keeps processors as-is; nests dlq at root; maps camelCase DSL fields.
+ */
+const toBuildPipelineConfig = (test: Test): CorePipelineConfig => {
+  const processors = test.pipeline.processors ?? [];
+  const concurrency = test.pipeline.backpressure?.concurrency;
+  const backpressure =
+    concurrency !== undefined
+      ? {
+          // Honor the single DSL concurrency knob for both runtime limits.
+          max_concurrent_messages: concurrency,
+          max_concurrent_outputs: concurrency,
+        }
+      : undefined;
+
+  const dlq = test.pipeline.dlq
+    ? {
+        output: test.pipeline.dlq.output,
+        ...(test.pipeline.dlq.maxRetries !== undefined
+          ? { max_retries: test.pipeline.dlq.maxRetries }
+          : {}),
+        ...(test.pipeline.dlq.retryDelay !== undefined
+          ? { retry_interval_ms: test.pipeline.dlq.retryDelay }
+          : {}),
+      }
+    : undefined;
+
+  // Test YAML payloads are component records validated at build time.
+  return {
+    input: test.pipeline.input,
+    pipeline: {
+      processors,
+      ...(backpressure ? { backpressure } : {}),
+    },
+    output: test.pipeline.output,
+    ...(dlq ? { dlq } : {}),
+  } as unknown as CorePipelineConfig;
+};
+
+/**
  * Run a single test case
  */
 const runTest = (test: Test, _fileName: string) =>
@@ -177,18 +235,16 @@ const runTest = (test: Test, _fileName: string) =>
     const startTime = Date.now();
 
     const buildAndRun = Effect.gen(function* () {
-      const pipeline = yield* buildPipeline({
-        input: test.pipeline.input,
-        pipeline: {
-          processors: test.pipeline.processors ?? [],
-        },
-        output: test.pipeline.output,
-      });
+      const pipeline = yield* buildPipeline(toBuildPipelineConfig(test));
 
       const result = yield* runPipeline(pipeline);
-      const outputMessages = yield* getCapturedMessages(pipeline.output);
+      // Wrapped output owns close; observe unwrapped primary/DLQ captures.
+      const outputMessages = yield* getCapturedMessages(
+        pipeline.primaryOutput ?? pipeline.output,
+      );
+      const dlqMessages = yield* getCapturedMessages(pipeline.dlqOutput);
 
-      return { result, outputMessages } as const;
+      return { result, outputMessages, dlqMessages } as const;
     });
 
     const exit = yield* Effect.exit(buildAndRun);
@@ -207,7 +263,7 @@ const runTest = (test: Test, _fileName: string) =>
       } satisfies TestResult;
     }
 
-    const { result, outputMessages } = exit.value;
+    const { result, outputMessages, dlqMessages } = exit.value;
     const pipelineError = result.errors?.[0];
 
     if (test.expectError) {
@@ -231,6 +287,7 @@ const runTest = (test: Test, _fileName: string) =>
     if (test.assertions && test.assertions.length > 0) {
       const context: AssertionContext = {
         outputMessages,
+        dlqMessages,
         pipelineSuccess: result.success,
         pipelineError,
       };
@@ -379,13 +436,28 @@ export const runYamlTests = (pattern: string) =>
     const filePaths = yield* findTestFiles(pattern);
 
     if (filePaths.length === 0) {
-      yield* Effect.log(`No test files found matching pattern: ${pattern}`);
+      const error = `No test files found matching pattern: ${pattern}`;
+      yield* Effect.log(error);
       return {
-        files: [],
-        totalTests: 0,
+        files: [
+          {
+            fileName: pattern,
+            passed: false,
+            duration: 0,
+            tests: [
+              {
+                testName: "<no matching files>",
+                passed: false,
+                duration: 0,
+                error,
+              },
+            ],
+          },
+        ],
+        totalTests: 1,
         passedTests: 0,
-        failedTests: 0,
-        duration: 0,
+        failedTests: 1,
+        duration: Date.now() - startTime,
       } satisfies TestRunResult;
     }
 

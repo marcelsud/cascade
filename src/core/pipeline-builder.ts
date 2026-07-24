@@ -624,9 +624,10 @@ export const buildPipeline = (
 
     const primaryOutput = yield* buildOutput(config.output, registry);
     let output = primaryOutput;
+    let dlqOutput: Output<any> | undefined;
 
     if (config.dlq) {
-      const dlqOutput = yield* buildOutput(config.dlq.output, registry);
+      dlqOutput = yield* buildOutput(config.dlq.output, registry);
       output = withDLQ({
         output: primaryOutput,
         dlq: dlqOutput,
@@ -655,6 +656,8 @@ export const buildPipeline = (
       input,
       processors,
       output,
+      // Observation handles only when DLQ wrapping hides primary getMessages.
+      ...(dlqOutput ? { primaryOutput, dlqOutput } : {}),
       backpressure,
       shutdownTimeoutMs: config.shutdown_timeout_ms,
     };

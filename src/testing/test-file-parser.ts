@@ -162,13 +162,16 @@ const TestFileSchema = Schema.Struct({
               key: Schema.String,
               value: Schema.Unknown,
             }),
-            maxRetries: Schema.optional(Schema.Number),
-            retryDelay: Schema.optional(Schema.Number),
+            // Match core dlq.max_retries: non-negative integer.
+            maxRetries: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
+            // Match core dlq.retry_interval_ms: positive integer.
+            retryDelay: Schema.optional(Schema.Int.pipe(Schema.positive())),
           }),
         ),
         backpressure: Schema.optional(
           Schema.Struct({
-            concurrency: Schema.optional(Schema.Number),
+            // Match core max_concurrent_*: positive integer.
+            concurrency: Schema.optional(Schema.Int.pipe(Schema.positive())),
           }),
         ),
       }),
@@ -177,7 +180,20 @@ const TestFileSchema = Schema.Struct({
         Schema.Struct({
           type: Schema.optional(Schema.String),
           messageContains: Schema.optional(Schema.String),
-        }),
+        }).pipe(
+          Schema.filter((value) => {
+            const hasType =
+              typeof value.type === "string" && value.type.trim().length > 0;
+            const hasMessage =
+              typeof value.messageContains === "string" &&
+              value.messageContains.trim().length > 0;
+            return (
+              hasType ||
+              hasMessage ||
+              "expectError requires a non-empty type and/or messageContains discriminator"
+            );
+          }),
+        ),
       ),
     }),
   ),
