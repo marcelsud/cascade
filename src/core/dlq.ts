@@ -7,10 +7,10 @@ import type { Output, Message } from "./types.js";
 import {
   ComponentError,
   getErrorCategory,
+  isFatalError,
   isIntermittentError,
   type ErrorCategory,
 } from "./errors.js";
-
 export class DLQError extends ComponentError {
   readonly _tag = "DLQError";
 
@@ -122,7 +122,11 @@ export const withDLQ = <E>(config: DLQConfig<E>): Output<E | DLQError> => {
                       yield* Effect.logError(
                         `Failed to send message ${msg.id} to DLQ: ${dlqError}`,
                       );
-                      // Re-throw original error since DLQ also failed
+                      // Fatal DLQ failures must surface as fatal (not mask).
+                      if (isFatalError(dlqError)) {
+                        return yield* Effect.fail(dlqError as E);
+                      }
+                      // Nonfatal DLQ failure: keep the original primary error.
                       return yield* Effect.fail(error as E);
                     }),
                   ),

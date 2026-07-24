@@ -378,6 +378,86 @@ describe("Dead Letter Queue (DLQ)", () => {
       expect(dlqMessage.metadata.dlqAttempts).toBe(1);
     });
 
+    it("propagates a fatal DLQ send error instead of the primary logical error", async () => {
+      let attempts = 0;
+      const primary = new CategorizedTestError("bad data", "logical");
+      const dlqFatal = new CategorizedTestError("dlq unavailable", "fatal");
+      const mockOutput: Output<Error> = {
+        name: "mock-output",
+        send: vi.fn().mockReturnValue(
+          Effect.suspend(() => {
+            attempts++;
+            return Effect.fail(primary);
+          }),
+        ),
+      };
+      const dlqOutput: Output<Error> = {
+        name: "dlq-output",
+        send: vi.fn().mockReturnValue(Effect.fail(dlqFatal)),
+      };
+      const wrappedOutput = withDLQ({
+        output: mockOutput,
+        dlq: dlqOutput,
+        maxRetries: 5,
+        retrySchedule: Schedule.spaced(0),
+      });
+
+      const exit = await Effect.runPromiseExit(
+        wrappedOutput.send(createMessage({ test: "data" })),
+      );
+
+      expect(attempts).toBe(1);
+      expect(dlqOutput.send).toHaveBeenCalledTimes(1);
+      expect(exit._tag).toBe("Failure");
+      if (exit._tag === "Failure") {
+        expect(exit.cause._tag).toBe("Fail");
+        if (exit.cause._tag === "Fail") {
+          expect(exit.cause.error).toBe(dlqFatal);
+          expect(exit.cause.error).not.toBe(primary);
+        }
+      }
+    });
+
+    it("keeps the original primary error when DLQ send fails nonfatally", async () => {
+      let attempts = 0;
+      const primary = new CategorizedTestError("flaky", "intermittent");
+      const dlqLogical = new CategorizedTestError("dlq full", "logical");
+      const mockOutput: Output<Error> = {
+        name: "mock-output",
+        send: vi.fn().mockReturnValue(
+          Effect.suspend(() => {
+            attempts++;
+            return Effect.fail(primary);
+          }),
+        ),
+      };
+      const dlqOutput: Output<Error> = {
+        name: "dlq-output",
+        send: vi.fn().mockReturnValue(Effect.fail(dlqLogical)),
+      };
+      const wrappedOutput = withDLQ({
+        output: mockOutput,
+        dlq: dlqOutput,
+        maxRetries: 1,
+        retrySchedule: Schedule.spaced(0),
+      });
+
+      const exit = await Effect.runPromiseExit(
+        wrappedOutput.send(createMessage({ test: "data" })),
+      );
+
+      expect(attempts).toBe(2);
+      expect(dlqOutput.send).toHaveBeenCalledTimes(1);
+      expect(exit._tag).toBe("Failure");
+      if (exit._tag === "Failure") {
+        expect(exit.cause._tag).toBe("Fail");
+        if (exit.cause._tag === "Fail") {
+          expect(exit.cause.error).toBe(primary);
+          expect(exit.cause.error).not.toBe(dlqLogical);
+        }
+      }
+    });
+
     it("should close both primary and DLQ outputs", async () => {
       const mockOutput: Output<Error> = {
         name: "mock-output",
