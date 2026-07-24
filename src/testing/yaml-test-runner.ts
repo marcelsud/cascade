@@ -3,11 +3,12 @@
  *
  * Runs tests defined in YAML files using the testing utilities
  */
-import { Effect } from "effect";
+import { Cause, Effect, Exit, Option } from "effect";
 import { glob } from "glob";
 import { parseTestFile, type Test, type TestFile } from "./test-file-parser.js";
 import { buildPipeline } from "../core/pipeline-builder.js";
 import { run as runPipeline } from "../core/pipeline.js";
+import type { Message } from "../core/types.js";
 import { executeAssertions, type AssertionContext } from "./assertions.js";
 
 /**
@@ -45,6 +46,127 @@ export interface TestRunResult {
   readonly duration: number;
 }
 
+const formatUnknownError = (error: unknown): string => {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  if (error && typeof error === "object") {
+    const message =
+      "message" in error && typeof error.message === "string"
+        ? error.message
+        : undefined;
+    const tag =
+      "_tag" in error && typeof error._tag === "string" ? error._tag : undefined;
+
+    if (message !== undefined) {
+      return tag !== undefined ? `${tag}: ${message}` : message;
+    }
+    if (tag !== undefined) {
+      return tag;
+    }
+  }
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+};
+
+const getErrorType = (error: unknown): string | undefined => {
+  if (error && typeof error === "object" && "_tag" in error) {
+    if (typeof error._tag === "string") {
+      return error._tag;
+    }
+  }
+  if (error instanceof Error && error.name) {
+    return error.name;
+  }
+  return undefined;
+};
+
+const errorFromCause = (cause: Cause.Cause<unknown>): unknown => {
+  const failure = Cause.failureOption(cause);
+  if (Option.isSome(failure)) {
+    return failure.value;
+  }
+
+  const defect = Cause.dieOption(cause);
+  if (Option.isSome(defect)) {
+    return defect.value;
+  }
+
+  return new Error(Cause.pretty(cause));
+};
+
+const matchExpectError = (
+  test: Test,
+  error: unknown,
+  startTime: number,
+): TestResult => {
+  const expectError = test.expectError;
+  if (!expectError) {
+    return {
+      testName: test.name,
+      passed: false,
+      duration: Date.now() - startTime,
+      error: `Unexpected error: ${formatUnknownError(error)}`,
+    };
+  }
+
+  if (expectError.type) {
+    const errorType = getErrorType(error);
+    if (errorType !== expectError.type) {
+      return {
+        testName: test.name,
+        passed: false,
+        duration: Date.now() - startTime,
+        error: `Expected error type '${expectError.type}' but got '${errorType ?? "undefined"}'`,
+      };
+    }
+  }
+
+  if (expectError.messageContains) {
+    const errorMessage = formatUnknownError(error);
+    if (!errorMessage.includes(expectError.messageContains)) {
+      return {
+        testName: test.name,
+        passed: false,
+        duration: Date.now() - startTime,
+        error: `Expected error message to contain '${expectError.messageContains}' but got: ${errorMessage}`,
+      };
+    }
+  }
+
+  return {
+    testName: test.name,
+    passed: true,
+    duration: Date.now() - startTime,
+  };
+};
+
+const getCapturedMessages = (
+  output: unknown,
+): Effect.Effect<readonly Message[]> => {
+  if (
+    output &&
+    typeof output === "object" &&
+    "getMessages" in output &&
+    typeof output.getMessages === "function"
+  ) {
+    const getMessages = output.getMessages as () => Effect.Effect<
+      readonly Message[]
+    >;
+    // Capture-output testing sink is the only path that exposes getMessages.
+    return getMessages();
+  }
+
+  return Effect.succeed([]);
+};
+
 /**
  * Run a single test case
  */
@@ -52,25 +174,40 @@ const runTest = (test: Test, _fileName: string) =>
   Effect.gen(function* () {
     const startTime = Date.now();
 
-    // Build pipeline from test config
-    const pipeline = yield* buildPipeline({
-      input: test.pipeline.input,
-      pipeline: {
-        processors: test.pipeline.processors ?? [],
-      },
-      output: test.pipeline.output,
+    const buildAndRun = Effect.gen(function* () {
+      const pipeline = yield* buildPipeline({
+        input: test.pipeline.input,
+        pipeline: {
+          processors: test.pipeline.processors ?? [],
+        },
+        output: test.pipeline.output,
+      });
+
+      const result = yield* runPipeline(pipeline);
+      const outputMessages = yield* getCapturedMessages(pipeline.output);
+
+      return { result, outputMessages } as const;
     });
 
-    // Run pipeline
-    const result = yield* runPipeline(pipeline);
+    const exit = yield* Effect.exit(buildAndRun);
 
-    // Get captured messages
-    const output = pipeline.output as any;
-    const outputMessages = output.getMessages
-      ? yield* output.getMessages()
-      : [];
+    if (Exit.isFailure(exit)) {
+      const error = errorFromCause(exit.cause);
+      if (test.expectError) {
+        return matchExpectError(test, error, startTime);
+      }
 
-    // Check if test expects error
+      return {
+        testName: test.name,
+        passed: false,
+        duration: Date.now() - startTime,
+        error: `Unexpected error: ${formatUnknownError(error)}`,
+      } satisfies TestResult;
+    }
+
+    const { result, outputMessages } = exit.value;
+    const pipelineError = result.errors?.[0];
+
     if (test.expectError) {
       if (result.success) {
         return {
@@ -78,93 +215,83 @@ const runTest = (test: Test, _fileName: string) =>
           passed: false,
           duration: Date.now() - startTime,
           error: "Expected pipeline to fail but it succeeded",
-        };
+        } satisfies TestResult;
       }
 
-      // Verify error type if specified
-      if (test.expectError.type) {
-        const errorType = (result as any).error?._tag;
-        if (errorType !== test.expectError.type) {
-          return {
-            testName: test.name,
-            passed: false,
-            duration: Date.now() - startTime,
-            error: `Expected error type '${test.expectError.type}' but got '${errorType}'`,
-          };
-        }
-      }
-
-      // Verify error message contains expected string
-      if (test.expectError.messageContains) {
-        const errorMessage = String((result as any).error?.message ?? "");
-        if (!errorMessage.includes(test.expectError.messageContains)) {
-          return {
-            testName: test.name,
-            passed: false,
-            duration: Date.now() - startTime,
-            error: `Expected error message to contain '${test.expectError.messageContains}' but got: ${errorMessage}`,
-          };
-        }
-      }
-
-      return {
-        testName: test.name,
-        passed: true,
-        duration: Date.now() - startTime,
-      };
+      return matchExpectError(
+        test,
+        pipelineError ?? new Error("Pipeline failed without error details"),
+        startTime,
+      );
     }
 
-    // If no error expected, verify pipeline succeeded
-    if (!result.success) {
-      return {
-        testName: test.name,
-        passed: false,
-        duration: Date.now() - startTime,
-        error: `Pipeline failed: ${(result as any).error}`,
-      };
-    }
-
-    // Run assertions if provided
+    // Run assertions even when the pipeline failed so pipeline_failed can pass.
     if (test.assertions && test.assertions.length > 0) {
       const context: AssertionContext = {
         outputMessages,
         pipelineSuccess: result.success,
+        pipelineError,
       };
 
-      const assertionResults = yield* executeAssertions(
-        test.assertions,
-        context,
+      const assertionsExit = yield* Effect.exit(
+        executeAssertions(test.assertions, context),
       );
 
-      const allPassed = assertionResults.every((r) => r.passed);
+      if (Exit.isFailure(assertionsExit)) {
+        return {
+          testName: test.name,
+          passed: false,
+          duration: Date.now() - startTime,
+          error: `Assertion error: ${formatUnknownError(errorFromCause(assertionsExit.cause))}`,
+        } satisfies TestResult;
+      }
+
+      const assertionResults = assertionsExit.value;
+      const allAssertionsPassed = assertionResults.every((r) => r.passed);
+      const allowsFailedPipeline =
+        !result.success &&
+        test.assertions.some((assertion) => assertion.type === "pipeline_failed");
+
+      // Ordinary assertions must not mask an unexpected pipeline failure.
+      if (!result.success && !allowsFailedPipeline) {
+        return {
+          testName: test.name,
+          passed: false,
+          duration: Date.now() - startTime,
+          error: `Pipeline failed: ${formatUnknownError(pipelineError ?? "unknown error")}`,
+          assertionResults: assertionResults.map((r) => ({
+            passed: r.passed,
+            message: r.message,
+          })),
+        } satisfies TestResult;
+      }
 
       return {
         testName: test.name,
-        passed: allPassed,
+        passed: allAssertionsPassed,
         duration: Date.now() - startTime,
         assertionResults: assertionResults.map((r) => ({
           passed: r.passed,
           message: r.message,
         })),
-      };
+      } satisfies TestResult;
     }
 
-    // No assertions, just check if pipeline succeeded
+    if (!result.success) {
+      return {
+        testName: test.name,
+        passed: false,
+        duration: Date.now() - startTime,
+        error: `Pipeline failed: ${formatUnknownError(pipelineError ?? "unknown error")}`,
+      } satisfies TestResult;
+    }
+
     return {
       testName: test.name,
       passed: true,
       duration: Date.now() - startTime,
-    };
-  }).pipe(
-    Effect.catchAll((error) =>
-      Effect.succeed({
-        testName: test.name,
-        passed: false,
-        duration: Date.now(),
-        error: `Unexpected error: ${error}`,
-      }),
-    ),
-  );
+    } satisfies TestResult;
+  });
 
 /**
  * Run all tests in a test file
@@ -173,20 +300,47 @@ const runTestFile = (testFile: TestFile, fileName: string) =>
   Effect.gen(function* () {
     const startTime = Date.now();
 
-    const testResults = yield* Effect.all(
-      testFile.tests.map((test) => runTest(test, fileName)),
-      { concurrency: 1 }, // Run tests sequentially
-    );
-
-    const passed = testResults.every((r) => r.passed);
+    const testResults: TestResult[] = [];
+    for (const test of testFile.tests) {
+      const testStartTime = Date.now();
+      const testExit = yield* Effect.exit(runTest(test, fileName));
+      if (Exit.isFailure(testExit)) {
+        testResults.push({
+          testName: test.name,
+          passed: false,
+          duration: Date.now() - testStartTime,
+          error: `Unexpected error: ${formatUnknownError(errorFromCause(testExit.cause))}`,
+        });
+        continue;
+      }
+      testResults.push(testExit.value);
+    }
 
     return {
       fileName,
       tests: testResults,
-      passed,
+      passed: testResults.every((r) => r.passed),
       duration: Date.now() - startTime,
-    };
+    } satisfies TestFileResult;
   });
+
+const failedFileResult = (
+  filePath: string,
+  error: unknown,
+  startTime: number,
+): TestFileResult => ({
+  fileName: filePath,
+  tests: [
+    {
+      testName: "<file>",
+      passed: false,
+      duration: Date.now() - startTime,
+      error: formatUnknownError(error),
+    },
+  ],
+  passed: false,
+  duration: Date.now() - startTime,
+});
 
 /**
  * Find test files matching pattern
@@ -200,7 +354,12 @@ export const findTestFiles = (
         absolute: true,
         nodir: true,
       });
-      return files;
+      return files
+        .filter((filePath) => {
+          const lower = filePath.toLowerCase();
+          return lower.endsWith(".test.yaml") || lower.endsWith(".test.yml");
+        })
+        .sort((a, b) => a.localeCompare(b));
     },
     catch: (error) => new Error(`Failed to find test files: ${error}`),
   });
@@ -223,30 +382,46 @@ export const runYamlTests = (pattern: string) =>
         passedTests: 0,
         failedTests: 0,
         duration: 0,
-      };
+      } satisfies TestRunResult;
     }
 
     yield* Effect.log(`Found ${filePaths.length} test file(s)`);
 
-    // Parse test files
-    const testFiles = yield* Effect.all(
-      filePaths.map((filePath) =>
-        parseTestFile(filePath).pipe(
-          Effect.map((testFile) => ({ filePath, testFile })),
-          Effect.mapError((error) => new Error(error.message)),
-        ),
-      ),
-    );
+    // Isolate each file: parse/run failures become file results, never abort the suite.
+    const fileResults: TestFileResult[] = [];
+    for (const filePath of filePaths) {
+      const fileStartTime = Date.now();
+      const parseExit = yield* Effect.exit(parseTestFile(filePath));
 
-    // Run all test files
-    const fileResults = yield* Effect.all(
-      testFiles.map(({ filePath, testFile }) =>
-        runTestFile(testFile, filePath),
-      ),
-      { concurrency: 1 }, // Run files sequentially
-    );
+      if (Exit.isFailure(parseExit)) {
+        fileResults.push(
+          failedFileResult(
+            filePath,
+            errorFromCause(parseExit.cause),
+            fileStartTime,
+          ),
+        );
+        continue;
+      }
 
-    // Calculate totals
+      const fileResultExit = yield* Effect.exit(
+        runTestFile(parseExit.value, filePath),
+      );
+
+      if (Exit.isFailure(fileResultExit)) {
+        fileResults.push(
+          failedFileResult(
+            filePath,
+            errorFromCause(fileResultExit.cause),
+            fileStartTime,
+          ),
+        );
+        continue;
+      }
+
+      fileResults.push(fileResultExit.value);
+    }
+
     const totalTests = fileResults.reduce(
       (sum, file) => sum + file.tests.length,
       0,
@@ -255,15 +430,14 @@ export const runYamlTests = (pattern: string) =>
       (sum, file) => sum + file.tests.filter((t) => t.passed).length,
       0,
     );
-    const failedTests = totalTests - passedTests;
 
     return {
       files: fileResults,
       totalTests,
       passedTests,
-      failedTests,
+      failedTests: totalTests - passedTests,
       duration: Date.now() - startTime,
-    };
+    } satisfies TestRunResult;
   });
 
 /**

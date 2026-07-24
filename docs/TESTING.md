@@ -930,9 +930,11 @@ cascade test tests/processors/uppercase.test.yaml
 cascade test "tests/**/*.yaml" --debug
 ```
 
+Only files named `*.test.yaml` or `*.test.yml` are executed; other YAML matched by the glob is skipped.
+
 ### Writing YAML Tests
 
-Create a `.yaml` file with the following structure:
+Create a `*.test.yaml` or `*.test.yml` file with the following structure:
 
 ```yaml
 name: My Component Tests
