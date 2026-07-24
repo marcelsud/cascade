@@ -133,7 +133,7 @@ const evaluateTemplate = (
         for (const match of matches) {
           const expr = match[1].trim();
           const expression = jsonata(expr);
-          const value = await expression.evaluate(context);
+          const value = await expression.evaluate(context, context);
           result = result.replace(match[0], String(value));
         }
 
@@ -407,7 +407,7 @@ export const createHttpProcessor = (
           };
 
           const mappedContent = yield* Effect.tryPromise({
-            try: async () => compiledResultMapping!.evaluate(mappingContext),
+            try: async () => compiledResultMapping!.evaluate(mappingContext, mappingContext),
             catch: (error) =>
               new HttpProcessorError(
                 `Failed to map HTTP response: ${error instanceof Error ? error.message : String(error)}`,

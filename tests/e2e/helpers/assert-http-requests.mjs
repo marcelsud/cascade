@@ -58,6 +58,30 @@ function header(headers, name) {
   return undefined;
 }
 
+/**
+ * Take matching requests and ensure no leftovers remain.
+ * @param {Array<any>} remaining
+ * @param {(r: any) => boolean} pred
+ * @param {number} expectedCount
+ * @param {string} label
+ */
+function take(remaining, pred, expectedCount, label) {
+  const matched = [];
+  const next = [];
+  for (const r of remaining) {
+    if (pred(r)) matched.push(r);
+    else next.push(r);
+  }
+  assert.equal(
+    matched.length,
+    expectedCount,
+    `${label}: expected ${expectedCount} match(es), got ${matched.length}`,
+  );
+  remaining.length = 0;
+  remaining.push(...next);
+  return matched;
+}
+
 async function main() {
   const res = await fetch(`${baseUrl}/__requests`);
   if (!res.ok) {
@@ -65,24 +89,23 @@ async function main() {
   }
   const payload = await res.json();
   const requests = Array.isArray(payload?.requests) ? payload.requests : [];
+  /** @type {any[]} */
+  const remaining = [...requests];
 
   try {
     switch (scenario) {
       case "output": {
         for (let i = 0; i < 3; i++) {
           const messageId = `http-out-${i}`;
-          const matches = filter(
-            requests,
+          const matches = take(
+            remaining,
             (r) =>
               r.method === "POST" &&
               r.path === "/post" &&
               r.responseStatus === 200 &&
               r.body?.content?.messageId === messageId,
-          );
-          assert.equal(
-            matches.length,
             1,
-            `expected exactly one POST /post for ${messageId}`,
+            `POST /post for ${messageId}`,
           );
           const r = matches[0];
           assert.equal(header(r.headers, "x-test-header"), "e2e-test");
@@ -93,18 +116,15 @@ async function main() {
 
       case "processor-basic": {
         for (const i of [0, 1]) {
-          const matches = filter(
-            requests,
+          take(
+            remaining,
             (r) =>
               r.method === "GET" &&
               r.path === "/uuid" &&
               r.responseStatus === 200 &&
               String(r.query?.testId) === String(i),
-          );
-          assert.equal(
-            matches.length,
             1,
-            `expected exactly one GET /uuid?testId=${i}`,
+            `GET /uuid?testId=${i}`,
           );
         }
         break;
@@ -112,21 +132,17 @@ async function main() {
 
       case "processor-post": {
         for (let i = 0; i < 3; i++) {
-          const matches = filter(
-            requests,
+          const matches = take(
+            remaining,
             (r) =>
               r.method === "POST" &&
               r.path === "/post" &&
               r.responseStatus === 200 &&
               String(r.body?.order) === String(i),
-          );
-          assert.equal(
-            matches.length,
             1,
-            `expected exactly one POST /post for order ${i}`,
+            `POST /post for order ${i}`,
           );
-          const body = matches[0].body;
-          assert.deepEqual(body, {
+          assert.deepEqual(matches[0].body, {
             order: String(i),
             product: `widget-${i}`,
             qty: i + 1,
@@ -139,30 +155,28 @@ async function main() {
         for (let i = 0; i < 3; i++) {
           const tid = String(i);
 
-          const bearer = filter(
-            requests,
+          const bearer = take(
+            remaining,
             (r) =>
               r.method === "GET" &&
               r.path === "/bearer" &&
               r.responseStatus === 200 &&
               String(r.query?.testId) === tid,
+            1,
+            `bearer request for testId=${tid}`,
           );
-          assert.equal(bearer.length, 1, `bearer request for testId=${tid}`);
           assert.equal(
             header(bearer[0].headers, "authorization"),
             "Bearer test-secret-token-12345",
           );
 
-          const headersReq = filter(
-            requests,
+          const headersReq = take(
+            remaining,
             (r) =>
               r.method === "GET" &&
               r.path === "/headers" &&
               r.responseStatus === 200 &&
               String(r.query?.testId) === tid,
-          );
-          assert.equal(
-            headersReq.length,
             1,
             `headers request for testId=${tid}`,
           );
@@ -175,15 +189,16 @@ async function main() {
             `test-${tid}`,
           );
 
-          const basic = filter(
-            requests,
+          const basic = take(
+            remaining,
             (r) =>
               r.method === "GET" &&
               r.path === "/basic-auth/testuser/testpass" &&
               r.responseStatus === 200 &&
               String(r.query?.testId) === tid,
+            1,
+            `basic request for testId=${tid}`,
           );
-          assert.equal(basic.length, 1, `basic request for testId=${tid}`);
           assert.equal(
             header(basic[0].headers, "authorization"),
             "Basic dGVzdHVzZXI6dGVzdHBhc3M=",
@@ -194,12 +209,14 @@ async function main() {
 
       case "processor-errors": {
         for (const tid of ["0", "1"]) {
-          const flaky = filter(
-            requests,
+          const flaky = take(
+            remaining,
             (r) =>
               r.method === "GET" &&
               r.path === "/flaky/500" &&
               String(r.query?.testId) === tid,
+            2,
+            `/flaky/500 for testId=${tid}`,
           ).map((r) => r.responseStatus);
           assert.deepEqual(
             flaky,
@@ -207,17 +224,14 @@ async function main() {
             `/flaky/500 statuses for testId=${tid}`,
           );
 
-          const notFound = filter(
-            requests,
+          const notFound = take(
+            remaining,
             (r) =>
               r.method === "GET" &&
               r.path === "/status/404" &&
               String(r.query?.testId) === tid,
-          );
-          assert.equal(
-            notFound.length,
             1,
-            `exactly one /status/404 for testId=${tid}`,
+            `/status/404 for testId=${tid}`,
           );
           assert.equal(notFound[0].responseStatus, 404);
         }
@@ -226,18 +240,15 @@ async function main() {
 
       case "processor-retry": {
         for (const tid of ["0", "1"]) {
-          const statuses = filter(
-            requests,
+          const statuses = take(
+            remaining,
             (r) =>
               r.method === "GET" &&
               r.path === "/status/503" &&
               String(r.query?.testId) === tid,
-          ).map((r) => r.responseStatus);
-          assert.equal(
-            statuses.length,
             3,
-            `exactly three /status/503 for testId=${tid}`,
-          );
+            `/status/503 for testId=${tid}`,
+          ).map((r) => r.responseStatus);
           assert.ok(
             statuses.every((s) => s === 503),
             `all /status/503 responses are 503 for testId=${tid}`,
@@ -252,30 +263,32 @@ async function main() {
           const userName = `Test User ${i}`;
           const action = `action-${i}`;
 
-          const gets = filter(
-            requests,
+          const gets = take(
+            remaining,
             (r) =>
               r.method === "GET" &&
               r.path === "/get" &&
               r.responseStatus === 200 &&
               r.query?.userId === userId,
+            1,
+            `GET /get for ${userId}`,
           );
-          assert.equal(gets.length, 1, `GET /get for ${userId}`);
           assert.deepEqual(gets[0].query, {
             userId,
             action,
             index: userName,
           });
 
-          const posts = filter(
-            requests,
+          const posts = take(
+            remaining,
             (r) =>
               r.method === "POST" &&
               r.path === "/post" &&
               r.responseStatus === 200 &&
               r.body?.userId === userId,
+            1,
+            `POST /post for ${userId}`,
           );
-          assert.equal(posts.length, 1, `POST /post for ${userId}`);
           assert.deepEqual(posts[0].body, {
             userId,
             userName,
@@ -290,6 +303,12 @@ async function main() {
       default:
         throw new Error(`Unhandled scenario: ${scenario}`);
     }
+
+    assert.equal(
+      remaining.length,
+      0,
+      `unexpected extra HTTP requests remain after scenario ${scenario}`,
+    );
 
     console.log(`✓ HTTP request assertions passed for scenario: ${scenario}`);
   } catch (error) {

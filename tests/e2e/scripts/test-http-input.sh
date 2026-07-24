@@ -69,22 +69,50 @@ done
 echo "Waiting for messages to be processed..."
 seen=0
 for i in $(seq 1 10); do
-  # Match pretty or structured logs (escaped quotes)
-  c1=$(grep -cE '"messageId": "webhook-1"|\"messageId\": \"webhook-1\"' "$LOG_FILE" || true)
-  c2=$(grep -cE '"messageId": "webhook-2"|\"messageId\": \"webhook-2\"' "$LOG_FILE" || true)
-  c3=$(grep -cE '"messageId": "webhook-3"|\"messageId\": \"webhook-3\"' "$LOG_FILE" || true)
-  t1=$(grep -c 'Test webhook message 1' "$LOG_FILE" || true)
-  t2=$(grep -c 'Test webhook message 2' "$LOG_FILE" || true)
-  t3=$(grep -c 'Test webhook message 3' "$LOG_FILE" || true)
-  if [ "$c1" -ge 1 ] && [ "$c2" -ge 1 ] && [ "$c3" -ge 1 ] && \
-     [ "$t1" -ge 1 ] && [ "$t2" -ge 1 ] && [ "$t3" -ge 1 ]; then
+  if node --input-type=module -e '
+import fs from "node:fs";
+const log = fs.readFileSync(process.argv[1], "utf8");
+// Prefer pretty multi-line JSON blocks; fall back to escaped single-line logs.
+const pairs = new Map();
+const blockRe = /"content":\s*\{([\s\S]*?)\n\s*\}/g;
+let m;
+while ((m = blockRe.exec(log))) {
+  const block = m[1];
+  const id = block.match(/"messageId":\s*"(webhook-\d+)"/);
+  const content = block.match(/"content":\s*"(Test webhook message \d+)"/);
+  if (id && content) {
+    const key = `${id[1]}|${content[1]}`;
+    pairs.set(key, (pairs.get(key) || 0) + 1);
+  }
+}
+if (pairs.size === 0) {
+  const escRe = /\\"messageId\\":\s*\\"(webhook-\d+)\\"[\s\S]*?\\"content\\":\s*\\"(Test webhook message \d+)\\"/g;
+  while ((m = escRe.exec(log))) {
+    const key = `${m[1]}|${m[2]}`;
+    pairs.set(key, (pairs.get(key) || 0) + 1);
+  }
+}
+const expected = [
+  "webhook-1|Test webhook message 1",
+  "webhook-2|Test webhook message 2",
+  "webhook-3|Test webhook message 3",
+];
+for (const key of expected) {
+  if (pairs.get(key) !== 1) process.exit(1);
+}
+// No extra unexpected pairs
+for (const key of pairs.keys()) {
+  if (!expected.includes(key)) process.exit(1);
+}
+process.exit(0);
+' "$LOG_FILE"; then
     seen=1
     break
   fi
   sleep 1
 done
 if [ "$seen" -ne 1 ]; then
-  echo -e "${RED}Did not observe all messageId/content pairs within 10s${NC}"
+  echo -e "${RED}Did not observe each exact messageId/content pair once within 10s${NC}"
   cat "$LOG_FILE" || true
   exit 1
 fi
