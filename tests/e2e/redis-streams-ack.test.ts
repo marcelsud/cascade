@@ -29,6 +29,20 @@ const pendingCount = async (
 const redisEndpoint = new URL(REDIS_URL);
 const redisHost = redisEndpoint.hostname || "127.0.0.1";
 const redisPort = Number(redisEndpoint.port || "6379");
+const redisPassword = (() => {
+  if (!redisEndpoint.password) return undefined;
+  try {
+    return decodeURIComponent(redisEndpoint.password);
+  } catch {
+    return redisEndpoint.password;
+  }
+})();
+const redisDb = (() => {
+  const path = redisEndpoint.pathname.replace(/^\/+/, "");
+  if (!path) return undefined;
+  const db = Number(path.split("/")[0]);
+  return Number.isInteger(db) && db >= 0 ? db : undefined;
+})();
 
 describe("Redis Streams consumer-group acknowledgement", () => {
   let resources: E2EResources;
@@ -64,6 +78,8 @@ describe("Redis Streams consumer-group acknowledgement", () => {
     const input = createRedisStreamsInput({
       host: redisHost,
       port: redisPort,
+      ...(redisPassword !== undefined ? { password: redisPassword } : {}),
+      ...(redisDb !== undefined ? { db: redisDb } : {}),
       stream,
       mode: "consumer-group",
       consumerGroup: group,
