@@ -66,18 +66,17 @@ export const createSwitchProcessor = (
 
         // Find the first matching case
         for (const compiledCase of compiledCases) {
-          // Bind special variables
-          compiledCase.check.assign("message", {
-            id: msg.id,
-            timestamp: msg.timestamp,
-            correlationId: msg.correlationId,
-          });
-          compiledCase.check.assign("meta", msg.metadata);
-
-          // Evaluate the check expression
+          // Evaluate with call-local bindings (concurrency-safe)
           const matches = yield* Effect.tryPromise({
             try: async () => {
-              const result = await compiledCase.check.evaluate(context);
+              const result = await compiledCase.check.evaluate(context, {
+                message: {
+                  id: msg.id,
+                  timestamp: msg.timestamp,
+                  correlationId: msg.correlationId,
+                },
+                meta: msg.metadata,
+              });
               // Coerce to boolean
               return Boolean(result);
             },
