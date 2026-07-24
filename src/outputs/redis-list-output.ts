@@ -182,9 +182,16 @@ export const createRedisListOutput = (
                 length = await client.rpush(key, payload);
               }
 
-              // Trim list if maxLen is configured
+              // Trim list if maxLen is configured, keeping the newest entries
+              // for the producer direction:
+              // - RPUSH (right): oldest→newest; keep the tail via LTRIM -N -1
+              // - LPUSH (left): newest→oldest; keep the head via LTRIM 0 N-1
               if (config.maxLen && length > config.maxLen) {
-                await client.ltrim(key, 0, config.maxLen - 1);
+                if (direction === "left") {
+                  await client.ltrim(key, 0, config.maxLen - 1);
+                } else {
+                  await client.ltrim(key, -config.maxLen, -1);
+                }
                 return config.maxLen;
               }
 

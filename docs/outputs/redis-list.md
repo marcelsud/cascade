@@ -16,7 +16,8 @@ Pushes messages to Redis Lists using LPUSH or RPUSH commands. Provides simple, r
 - `direction`: Push direction - "left" or "right" (default: "right")
   - `"left"`: LPUSH - push to the head
   - `"right"`: RPUSH - push to the tail
-- `max_len`: Maximum list length (uses LTRIM to cap size)
+- `max_length`: Maximum list length (uses LTRIM to cap size)
+  - `max_len` is also accepted for compatibility with earlier documentation; `max_length` takes precedence when both are set.
 - `max_retries`: Number of retry attempts for failed pushes (default: 3)
 
 ### Connection Configuration Fields
@@ -94,7 +95,7 @@ output:
   redis_list:
     url: "redis://localhost:6379"
     key: "recent-events"
-    max_len: 1000  # Keep only last 1000 items
+    max_length: 1000  # Keep only last 1000 items
     direction: "right"
 ```
 
@@ -117,7 +118,7 @@ output:
     direction: "right"
 
     # Prevent unbounded growth
-    max_len: 10000
+    max_length: 10000
 
     # Reliability settings
     max_retries: 5
@@ -231,7 +232,7 @@ output:
   redis_list:
     url: "redis://localhost:6379"
     key: "event-buffer"
-    max_len: 5000  # Keep last 5000 events
+    max_length: 5000  # Keep last 5000 events
     direction: "right"
 ```
 
@@ -265,7 +266,7 @@ output:
   redis_list:
     url: "redis://localhost:6379"
     key: "api-requests"
-    max_len: 100  # Max 100 pending requests
+    max_length: 100  # Max 100 pending requests
 ```
 
 ## FIFO vs LIFO Patterns
@@ -298,7 +299,7 @@ direction: "right"  # BRPOP from tail
 
 ## List Length Management
 
-### Without max_len
+### Without max_length
 
 List grows indefinitely:
 ```yaml
@@ -310,7 +311,7 @@ output:
 
 Memory grows until Redis runs out of space.
 
-### With max_len
+### With max_length
 
 List is automatically trimmed:
 ```yaml
@@ -318,13 +319,16 @@ output:
   redis_list:
     url: "redis://localhost:6379"
     key: "events"
-    max_len: 1000
+    max_length: 1000
 ```
 
 After each push:
 1. RPUSH adds the item
 2. If list length > 1000, LTRIM keeps only last 1000 items
 3. Oldest items are discarded
+
+For `direction: "left"`, LPUSH adds at the head and LTRIM keeps the first
+`max_length` items instead. Both directions retain the newest entries.
 
 **Use cases:**
 - Recent event log (keep last N)
@@ -355,7 +359,7 @@ If keys aren't routing correctly:
 ### Memory Issues
 
 If Redis runs out of memory:
-1. **Add max_len**: Limit list size with LTRIM
+1. **Add max_length**: Limit list size with LTRIM
 2. **Monitor List Sizes**: Check with `redis-cli LLEN key`
 3. **Configure Redis Eviction**: Set maxmemory-policy in redis.conf
 4. **Increase Memory**: Allocate more RAM to Redis
@@ -371,7 +375,7 @@ For timeout issues:
 ## Performance Considerations
 
 - **Atomic Operations**: Each LPUSH/RPUSH is atomic
-- **LTRIM Overhead**: max_len adds LTRIM after each push (small overhead)
+- **LTRIM Overhead**: max_length adds LTRIM after each push (small overhead)
 - **Network Round-Trip**: Each message requires one network round-trip
 - **Pipelining**: Not yet implemented; consider for high throughput
 - **List Size**: Large lists (millions of items) may slow down operations
