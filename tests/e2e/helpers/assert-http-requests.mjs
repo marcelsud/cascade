@@ -273,10 +273,20 @@ async function main() {
             1,
             `GET /get for ${userId}`,
           );
-          assert.deepEqual(gets[0].query, {
+          const getReq = gets[0];
+          const messageId = getReq.query?.messageId;
+          assert.equal(typeof messageId, "string", `messageId type for ${userId}`);
+          assert.notEqual(messageId, "undefined", `messageId concrete for ${userId}`);
+          assert.ok(
+            typeof messageId === "string" && messageId.length > 0,
+            `messageId non-empty for ${userId}`,
+          );
+          assert.deepEqual(getReq.query, {
             userId,
             action,
             index: userName,
+            source: "generate-input",
+            messageId,
           });
 
           const posts = take(
@@ -289,13 +299,24 @@ async function main() {
             1,
             `POST /post for ${userId}`,
           );
-          assert.deepEqual(posts[0].body, {
+          const postReq = posts[0];
+          assert.deepEqual(postReq.body, {
             userId,
             userName,
             action,
             totalPrice: "60",
             itemCount: "3",
           });
+          assert.equal(header(postReq.headers, "x-user-id"), userId);
+          assert.equal(header(postReq.headers, "x-user-name"), userName);
+          assert.equal(header(postReq.headers, "x-action"), action);
+          assert.equal(header(postReq.headers, "x-source"), "generate-input");
+          assert.equal(header(postReq.headers, "x-message-id"), messageId);
+          assert.notEqual(
+            header(postReq.headers, "x-message-id"),
+            "undefined",
+            `POST x-message-id concrete for ${userId}`,
+          );
         }
         break;
       }

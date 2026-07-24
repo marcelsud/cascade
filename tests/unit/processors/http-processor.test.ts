@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createServer, type Server } from "node:http";
+import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import { Effect, Stream } from "effect";
 import {
   createHttpProcessor,
@@ -427,6 +427,174 @@ describe("HttpProcessor", () => {
           expect(result.content.responseToken).toBe(`token-${index}`);
           expect(result.metadata.httpProcessorApplied).toBe(true);
         }
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    });
+  });
+
+  describe("Documented template context", () => {
+    const startCaptureServer = async (): Promise<{
+      server: Server;
+      baseUrl: string;
+      getCaptured: () => {
+        method: string;
+        url: string;
+        headers: IncomingHttpHeaders;
+        bodyText: string;
+      } | null;
+    }> => {
+      let captured: {
+        method: string;
+        url: string;
+        headers: IncomingHttpHeaders;
+        bodyText: string;
+      } | null = null;
+
+      const server = createServer((req, res) => {
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk) => chunks.push(chunk));
+        req.on("end", () => {
+          captured = {
+            method: req.method ?? "GET",
+            url: req.url ?? "/",
+            headers: req.headers,
+            bodyText: Buffer.concat(chunks).toString("utf8"),
+          };
+
+          res.statusCode = 200;
+          res.setHeader("content-type", "application/json");
+          res.end(
+            JSON.stringify({
+              status: "ok",
+              echoUserId: "server-echo",
+              total: 42,
+            }),
+          );
+        });
+      });
+
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", () => resolve());
+      });
+
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Failed to bind local HTTP test server");
+      }
+
+      return {
+        server,
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        getCaptured: () => captured,
+      };
+    };
+
+    it("resolves unprefixed content/meta/message across URL body headers and result_mapping", async () => {
+      const { server, baseUrl, getCaptured } = await startCaptureServer();
+
+      try {
+        const msg: Message = {
+          ...createMessage(
+            {
+              orderId: "order-99",
+              user: { id: "user-7", name: "Ada" },
+              action: "checkout",
+            },
+            { source: "unit-template-test", region: "us-east-1" },
+          ),
+          correlationId: "corr-abc-123",
+        };
+
+        const processor = createHttpProcessor({
+          url: `${baseUrl}/orders/{{content.orderId}}?userId={{content.user.id}}&source={{meta.source}}&messageId={{message.id}}&correlationId={{message.correlationId}}`,
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-User-Id": "{{content.user.id}}",
+            "X-Source": "{{meta.source}}",
+            "X-Correlation-Id": "{{message.correlationId}}",
+          },
+          body: `{
+            "orderId": "{{content.orderId}}",
+            "userId": "{{content.user.id}}",
+            "userName": "{{content.user.name}}",
+            "action": "{{content.action}}",
+            "messageId": "{{message.id}}",
+            "source": "{{meta.source}}"
+          }`,
+          resultMapping: `{
+            "orderId": content.orderId,
+            "userId": content.user.id,
+            "userName": content.user.name,
+            "action": content.action,
+            "source": meta.source,
+            "region": meta.region,
+            "messageId": message.id,
+            "correlationId": message.correlationId,
+            "apiStatus": http_response.status,
+            "apiEchoUserId": http_response.echoUserId,
+            "apiTotal": http_response.total
+          }`,
+          timeout: 5000,
+          maxRetries: 0,
+        });
+
+        const result = await Effect.runPromise(processor.process(msg));
+        const captured = getCaptured();
+
+        expect(captured).not.toBeNull();
+        expect(captured!.method).toBe("POST");
+
+        const requestUrl = new URL(captured!.url, baseUrl);
+        expect(requestUrl.pathname).toBe("/orders/order-99");
+        expect(requestUrl.searchParams.get("userId")).toBe("user-7");
+        expect(requestUrl.searchParams.get("source")).toBe("unit-template-test");
+        expect(requestUrl.searchParams.get("messageId")).toBe(msg.id);
+        expect(requestUrl.searchParams.get("correlationId")).toBe(
+          "corr-abc-123",
+        );
+
+        // Exact header values — undefined/string "undefined" must fail
+        expect(captured!.headers["x-user-id"]).toBe("user-7");
+        expect(captured!.headers["x-source"]).toBe("unit-template-test");
+        expect(captured!.headers["x-correlation-id"]).toBe("corr-abc-123");
+
+        const requestBody: unknown = JSON.parse(captured!.bodyText);
+        expect(requestBody).toEqual({
+          orderId: "order-99",
+          userId: "user-7",
+          userName: "Ada",
+          action: "checkout",
+          messageId: msg.id,
+          source: "unit-template-test",
+        });
+
+        // Identity and metadata retained
+        expect(result.id).toBe(msg.id);
+        expect(result.correlationId).toBe("corr-abc-123");
+        expect(result.timestamp).toBe(msg.timestamp);
+        expect(result.metadata.source).toBe("unit-template-test");
+        expect(result.metadata.region).toBe("us-east-1");
+        expect(result.metadata.httpProcessorApplied).toBe(true);
+
+        // Mapped original fields + response fields (empty {} must fail)
+        const expectedContent = {
+          orderId: "order-99",
+          userId: "user-7",
+          userName: "Ada",
+          action: "checkout",
+          source: "unit-template-test",
+          region: "us-east-1",
+          messageId: msg.id,
+          correlationId: "corr-abc-123",
+          apiStatus: "ok",
+          apiEchoUserId: "server-echo",
+          apiTotal: 42,
+        };
+        expect(result.content).toEqual(expectedContent);
       } finally {
         await new Promise<void>((resolve, reject) => {
           server.close((error) => (error ? reject(error) : resolve()));
