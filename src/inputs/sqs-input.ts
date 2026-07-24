@@ -125,7 +125,7 @@ export const createSqsInput = (
         const command = new ReceiveMessageCommand({
           QueueUrl: config.queueUrl,
           MaxNumberOfMessages: config.maxMessages || 10,
-          WaitTimeSeconds: config.waitTimeSeconds || 20,
+          WaitTimeSeconds: config.waitTimeSeconds ?? 20,
         });
 
         const response = await client.send(command);

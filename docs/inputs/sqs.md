@@ -32,7 +32,7 @@ Reads messages from AWS SQS queues with support for LocalStack. Uses long pollin
 ### Optional Fields
 
 - `endpoint`: Custom endpoint URL (useful for LocalStack) - no default
-- `wait_time_seconds`: Long polling duration in seconds (default: 20)
+- `wait_time_seconds`: Long polling duration in seconds (0..20, default: 20). Set to 0 to disable long polling (short polling).
 - `max_number_of_messages`: Maximum messages to retrieve per batch (default: 10, max: 10)
 - `max_attempts`: Maximum retry attempts for failed operations (default: 3)
 - `request_timeout`: Request timeout in milliseconds (default: 0 = no timeout)
