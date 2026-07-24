@@ -5,7 +5,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as yaml from "yaml";
 import { loadConfig } from "../../../src/core/config-loader.js";
-import { buildPipeline } from "../../../src/core/pipeline-builder.js";
+import {
+  BuildError,
+  buildPipeline,
+} from "../../../src/core/pipeline-builder.js";
 import type { Input, Output } from "../../../src/core/types.js";
 
 const { createSqsInputMock } = vi.hoisted(() => ({
@@ -303,6 +306,40 @@ describe("reliability settings reach connector factories", () => {
     });
   });
 
+  it.each([
+    "%%%not-a-url%%%",
+    "http://streams.example:6379/2",
+    "redis:production.example:6380",
+  ])(
+    "rejects malformed Redis streams input URL %s without calling factory",
+    async (url) => {
+      const configPath = await writeTempYaml({
+        input: {
+          redis_streams: {
+            url,
+            stream: "inbound-events",
+          },
+        },
+        output: {
+          capture: {},
+        },
+      });
+
+      const config = await Effect.runPromise(loadConfig(configPath));
+      const result = await Effect.runPromise(
+        Effect.either(buildPipeline(config)),
+      );
+
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) {
+        expect(result.left).toBeInstanceOf(BuildError);
+        expect(result.left._tag).toBe("BuildError");
+        expect(result.left.message).toBe("Invalid Redis Streams input URL");
+      }
+      expect(createRedisStreamsInputMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("forwards SQS output reliability YAML to createSqsOutput", async () => {
     const configPath = await writeTempYaml({
       input: {
@@ -481,6 +518,43 @@ describe("reliability settings reach connector factories", () => {
       enableOfflineQueue: false,
     });
   });
+
+  it.each([
+    "%%%not-a-url%%%",
+    "http://streams.example:6379/2",
+    "redis:production.example:6380",
+  ])(
+    "rejects malformed Redis streams output URL %s without calling factory",
+    async (url) => {
+      const configPath = await writeTempYaml({
+        input: {
+          generate: {
+            count: 1,
+            template: { ok: true },
+          },
+        },
+        output: {
+          redis_streams: {
+            url,
+            stream: "events",
+          },
+        },
+      });
+
+      const config = await Effect.runPromise(loadConfig(configPath));
+      const result = await Effect.runPromise(
+        Effect.either(buildPipeline(config)),
+      );
+
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) {
+        expect(result.left).toBeInstanceOf(BuildError);
+        expect(result.left._tag).toBe("BuildError");
+        expect(result.left.message).toBe("Invalid Redis Streams output URL");
+      }
+      expect(createRedisStreamsOutputMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("loads configs/advanced-connection.yaml reliability values into factories", async () => {
     await loadAndBuild("configs/advanced-connection.yaml");

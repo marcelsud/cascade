@@ -58,6 +58,43 @@ const mapCustomBuildError = (name: string, error: unknown): BuildError =>
     `Failed to build registered component '${name}': ${error instanceof Error ? error.message : String(error)}`,
   );
 
+type RedisStreamsConnection = {
+  host: string;
+  port: number;
+  password: string | undefined;
+  db: number | undefined;
+};
+
+const parseRedisStreamsUrl = (
+  url: string,
+  context: "input" | "output",
+): Effect.Effect<RedisStreamsConnection, BuildError> => {
+  // Require authority-form redis:// so opaque paths like redis:host:port
+  // cannot silently resolve to localhost.
+  if (!/^redis:\/\//i.test(url)) {
+    return Effect.fail(new BuildError(`Invalid Redis Streams ${context} URL`));
+  }
+
+  let urlObj: URL;
+  try {
+    urlObj = new URL(url);
+  } catch {
+    return Effect.fail(new BuildError(`Invalid Redis Streams ${context} URL`));
+  }
+
+  if (urlObj.protocol !== "redis:") {
+    return Effect.fail(new BuildError(`Invalid Redis Streams ${context} URL`));
+  }
+
+  const pathMatch = urlObj.pathname.match(/^\/(\d+)/);
+  return Effect.succeed({
+    host: urlObj.hostname || "localhost",
+    port: urlObj.port ? parseInt(urlObj.port, 10) : 6379,
+    password: urlObj.password || undefined,
+    db: pathMatch ? parseInt(pathMatch[1], 10) : undefined,
+  });
+};
+
 /**
  * Build input from configuration (Bento style)
  */
@@ -97,49 +134,31 @@ const buildInputInternal = (
   }
 
   if (config.redis_streams) {
-    // Parse redis URL (redis://host:port or redis://localhost:6379)
-    const url = config.redis_streams.url;
-    let host = "localhost";
-    let port = 6379;
-    let password: string | undefined;
-    let db: number | undefined;
-
-    try {
-      const urlObj = new URL(url);
-      host = urlObj.hostname || "localhost";
-      port = urlObj.port ? parseInt(urlObj.port, 10) : 6379;
-      password = urlObj.password || undefined;
-      // Extract db from pathname if present (redis://host:port/2)
-      const pathMatch = urlObj.pathname.match(/^\/(\d+)/);
-      if (pathMatch) {
-        db = parseInt(pathMatch[1], 10);
-      }
-    } catch {
-      // If URL parsing fails, keep defaults
-    }
-
-    return Effect.succeed(
-      createRedisStreamsInput({
-        host,
-        port,
-        stream: config.redis_streams.stream,
-        password,
-        db,
-        mode: config.redis_streams.mode,
-        consumerGroup: config.redis_streams.consumer_group,
-        consumerName: config.redis_streams.consumer_name,
-        blockMs: config.redis_streams.block_ms,
-        count: config.redis_streams.count,
-        startId: config.redis_streams.start_id,
-        maxReconnectAttempts: config.redis_streams.max_reconnect_attempts,
-        reconnectBackoffMs: config.redis_streams.reconnect_backoff_ms,
-        connectTimeout: config.redis_streams.connect_timeout,
-        commandTimeout: config.redis_streams.command_timeout,
-        keepAlive: config.redis_streams.keep_alive,
-        lazyConnect: config.redis_streams.lazy_connect,
-        maxRetriesPerRequest: config.redis_streams.max_retries_per_request,
-        enableOfflineQueue: config.redis_streams.enable_offline_queue,
-      }),
+    const streams = config.redis_streams;
+    return parseRedisStreamsUrl(streams.url, "input").pipe(
+      Effect.map(({ host, port, password, db }) =>
+        createRedisStreamsInput({
+          host,
+          port,
+          stream: streams.stream,
+          password,
+          db,
+          mode: streams.mode,
+          consumerGroup: streams.consumer_group,
+          consumerName: streams.consumer_name,
+          blockMs: streams.block_ms,
+          count: streams.count,
+          startId: streams.start_id,
+          maxReconnectAttempts: streams.max_reconnect_attempts,
+          reconnectBackoffMs: streams.reconnect_backoff_ms,
+          connectTimeout: streams.connect_timeout,
+          commandTimeout: streams.command_timeout,
+          keepAlive: streams.keep_alive,
+          lazyConnect: streams.lazy_connect,
+          maxRetriesPerRequest: streams.max_retries_per_request,
+          enableOfflineQueue: streams.enable_offline_queue,
+        }),
+      ),
     );
   }
 
@@ -437,43 +456,25 @@ const buildOutput = (
   registry?: ComponentRegistry,
 ): Effect.Effect<Output<any>, BuildError> => {
   if (config.redis_streams) {
-    // Parse redis URL (redis://host:port or redis://localhost:6379)
-    const url = config.redis_streams.url;
-    let host = "localhost";
-    let port = 6379;
-    let password: string | undefined;
-    let db: number | undefined;
-
-    try {
-      const urlObj = new URL(url);
-      host = urlObj.hostname || "localhost";
-      port = urlObj.port ? parseInt(urlObj.port, 10) : 6379;
-      password = urlObj.password || undefined;
-      // Extract db from pathname if present (redis://host:port/2)
-      const pathMatch = urlObj.pathname.match(/^\/(\d+)/);
-      if (pathMatch) {
-        db = parseInt(pathMatch[1], 10);
-      }
-    } catch {
-      // If URL parsing fails, keep defaults
-    }
-
-    return Effect.succeed(
-      createRedisStreamsOutput({
-        host,
-        port,
-        stream: config.redis_streams.stream,
-        maxLen: config.redis_streams.max_length,
-        password,
-        db,
-        maxRetries: config.redis_streams.max_retries,
-        connectTimeout: config.redis_streams.connect_timeout,
-        commandTimeout: config.redis_streams.command_timeout,
-        keepAlive: config.redis_streams.keep_alive,
-        lazyConnect: config.redis_streams.lazy_connect,
-        maxRetriesPerRequest: config.redis_streams.max_retries_per_request,
-        enableOfflineQueue: config.redis_streams.enable_offline_queue,
-      }),
+    const streams = config.redis_streams;
+    return parseRedisStreamsUrl(streams.url, "output").pipe(
+      Effect.map(({ host, port, password, db }) =>
+        createRedisStreamsOutput({
+          host,
+          port,
+          stream: streams.stream,
+          maxLen: streams.max_length,
+          password,
+          db,
+          maxRetries: streams.max_retries,
+          connectTimeout: streams.connect_timeout,
+          commandTimeout: streams.command_timeout,
+          keepAlive: streams.keep_alive,
+          lazyConnect: streams.lazy_connect,
+          maxRetriesPerRequest: streams.max_retries_per_request,
+          enableOfflineQueue: streams.enable_offline_queue,
+        }),
+      ),
     );
   }
 
