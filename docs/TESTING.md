@@ -1093,6 +1093,15 @@ Use `expectError` to test failure cases:
     messageContains: "Condition evaluated to false"
 ```
 
+`expectError` must include at least one non-empty discriminator: `type` or
+`messageContains`. An empty object does not match arbitrary failures.
+
+YAML tests also honor pipeline-level reliability settings. Configure
+`pipeline.dlq` with `output`, `maxRetries`, and `retryDelay`, and configure
+`pipeline.backpressure.concurrency` to bound both message processing and output
+sends. Message and field assertions can set `target: dlq` to inspect messages
+captured by a DLQ `capture` output.
+
 ### Best Practices and Anti-Patterns
 
 #### ✅ DO: Test Business Logic

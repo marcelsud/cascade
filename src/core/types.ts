@@ -74,6 +74,16 @@ export interface Pipeline<E = never, R = never> {
   readonly input: Input<E, R>;
   readonly processors: ReadonlyArray<Processor<E, R>>;
   readonly output: Output<E, R>;
+  /**
+   * Unwrapped primary destination when buildPipeline installs withDLQ.
+   * Observation-only — pipeline.output remains the sole close owner.
+   */
+  readonly primaryOutput?: Output<E, R>;
+  /**
+   * Unwrapped DLQ destination when buildPipeline installs withDLQ.
+   * Observation-only — never closed separately from pipeline.output.
+   */
+  readonly dlqOutput?: Output<E, R>;
   readonly backpressure?: BackpressureConfig;
   /** Maximum time allowed for a graceful drain and resource close. */
   readonly shutdownTimeoutMs?: number;
