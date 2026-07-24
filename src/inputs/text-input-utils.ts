@@ -1,7 +1,7 @@
 import type { Message } from "../core/types.js";
 import { createMessage } from "../core/types.js";
 
-export const parseTextContent = (value: string): unknown => {
+const parseTextContent = (value: string): unknown => {
   try {
     return JSON.parse(value);
   } catch {

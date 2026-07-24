@@ -17,6 +17,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - name: Install (frozen lockfile)
         run: bun install --frozen-lockfile
+      - name: Dead code and dependency reachability
+        run: npm run lint:unused
       - name: Grading tool tests
         run: node --test .github/grading/checks.test.mjs
       - name: RT-1 type safety

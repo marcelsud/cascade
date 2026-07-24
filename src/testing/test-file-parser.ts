@@ -30,7 +30,7 @@ export interface Test {
 /**
  * Pipeline configuration in test
  */
-export interface PipelineConfig {
+interface PipelineConfig {
   readonly input: Record<string, unknown>;
   readonly processors?: readonly Record<string, unknown>[];
   readonly output: Record<string, unknown>;
@@ -41,7 +41,7 @@ export interface PipelineConfig {
 /**
  * DLQ configuration in test
  */
-export interface DLQConfig {
+interface DLQConfig {
   readonly output: Record<string, unknown>;
   readonly maxRetries?: number;
   readonly retryDelay?: number;
@@ -50,14 +50,14 @@ export interface DLQConfig {
 /**
  * Backpressure configuration
  */
-export interface BackpressureConfig {
+interface BackpressureConfig {
   readonly concurrency?: number;
 }
 
 /**
  * Expected error configuration
  */
-export interface ExpectError {
+interface ExpectError {
   readonly type?: string;
   readonly messageContains?: string;
 }
@@ -254,11 +254,3 @@ export const parseTestFile = (
 
     return decoded;
   });
-
-/**
- * Parse multiple test files
- */
-export const parseTestFiles = (
-  filePaths: readonly string[],
-): Effect.Effect<readonly TestFile[], TestFileParseError> =>
-  Effect.all(filePaths.map(parseTestFile));
