@@ -56,6 +56,12 @@ export interface Output<E = never, R = never> {
   readonly getMetrics?: () => OutputMetrics;
   /** Metrics for a distinct DLQ destination wrapped around this output. */
   readonly getDLQMetrics?: () => OutputMetrics;
+  /**
+   * Raw DLQ destination configured by a wrapper such as withDLQ.
+   * Lifecycle-observation/routing only — never closed separately;
+   * pipeline.output remains the sole close owner.
+   */
+  readonly getDLQOutput?: () => Output<E, R> | undefined;
 }
 
 /**

@@ -1,12 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Chunk, Duration, Effect, Schedule } from "effect";
+import { Chunk, Duration, Effect, Schedule, Stream } from "effect";
 import {
   createDLQRetrySchedule,
+  withBackpressure,
   withDLQ,
   DLQError,
 } from "../../../src/core/dlq.js";
+import { create, run } from "../../../src/core/pipeline.js";
 import { createMessage } from "../../../src/core/types.js";
 import type { Output, Message } from "../../../src/core/types.js";
+
 
 import {
   ComponentError,
@@ -531,6 +534,94 @@ describe("Dead Letter Queue (DLQ)", () => {
       });
 
       expect(wrappedOutput.close).toBeUndefined();
+    });
+  });
+
+  describe("getDLQOutput accessor", () => {
+    it("exposes the configured raw DLQ and forwards through withBackpressure", () => {
+      const primary: Output = {
+        name: "primary",
+        send: () => Effect.void,
+      };
+      const dlq: Output = {
+        name: "raw-dlq",
+        send: () => Effect.void,
+      };
+
+      const wrapped = withDLQ({ output: primary, dlq, maxRetries: 0 });
+      expect(wrapped.getDLQOutput?.()).toBe(dlq);
+
+      const withoutDlq = withDLQ({ output: primary, maxRetries: 0 });
+      expect(withoutDlq.getDLQOutput).toBeUndefined();
+
+      const pressurized = withBackpressure({ output: wrapped });
+      expect(pressurized.getDLQOutput?.()).toBe(dlq);
+    });
+
+    it("routes terminal processor failures for programmatic create({ output: withDLQ(...) })", async () => {
+      const primarySends: Message[] = [];
+      const dlqSends: Message[] = [];
+      let acked = false;
+
+      const primary: Output = {
+        name: "primary-capture",
+        send: (msg) =>
+          Effect.sync(() => {
+            primarySends.push(msg);
+          }),
+      };
+      const dlq: Output = {
+        name: "dlq-capture",
+        send: (msg) =>
+          Effect.sync(() => {
+            dlqSends.push(msg);
+          }),
+      };
+
+      const inputMessage: Message = {
+        ...createMessage({ orderId: "order-1" }, { source: "programmatic-dlq" }),
+        ack: () =>
+          Effect.sync(() => {
+            acked = true;
+          }),
+      };
+
+      const pipeline = create({
+        name: "programmatic-withdlq-processor-failure",
+        input: {
+          name: "one",
+          stream: Stream.make(inputMessage),
+        },
+        processors: [
+          {
+            name: "always-fail",
+            process: () => Effect.fail(new Error("processor boom")),
+          },
+        ],
+        output: withDLQ({
+          output: primary,
+          dlq,
+          maxRetries: 0,
+        }),
+      });
+
+      const result = await Effect.runPromise(run(pipeline));
+
+      expect(primarySends).toHaveLength(0);
+      expect(dlqSends).toHaveLength(1);
+      expect(acked).toBe(false);
+      expect(result.stats.failed).toBe(1);
+      expect(result.stats.processed).toBe(0);
+
+      const dlqMessage = dlqSends[0];
+      expect(dlqMessage.id).toBe(inputMessage.id);
+      expect(dlqMessage.content).toEqual({ orderId: "order-1" });
+      expect(dlqMessage.metadata.source).toBe("programmatic-dlq");
+      expect(dlqMessage.metadata.dlq).toBe(true);
+      expect(dlqMessage.metadata.originalMessageId).toBe(inputMessage.id);
+      expect(dlqMessage.metadata.dlqAttempts).toBe(1);
+      expect(String(dlqMessage.metadata.dlqReason)).toContain("processor boom");
+      expect(typeof dlqMessage.metadata.dlqTimestamp).toBe("number");
     });
   });
 });

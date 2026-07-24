@@ -252,6 +252,10 @@ export const run = <E, R>(
     const maxConcurrentOutputs =
       pipeline.backpressure?.maxConcurrentOutputs ?? 5;
 
+    // Explicit pipeline handle wins; else wrapper-configured raw DLQ.
+    const processorDlqOutput =
+      pipeline.dlqOutput ?? pipeline.output.getDLQOutput?.();
+
     const processMessage = (msg: Message) => {
       const recordMessageFailure = (
         error: unknown,
@@ -271,13 +275,13 @@ export const run = <E, R>(
           }
 
           // Processor-chain failures only. Output failures stay with withDLQ.
-          if (options.routeToDlq && pipeline.dlqOutput) {
+          if (options.routeToDlq && processorDlqOutput) {
             yield* Effect.logWarning(
               `Message ${msg.id} failed during processing, sending to DLQ: ${error}`,
             );
 
             const dlqMessage = createDLQMessage(msg, error, 1);
-            yield* pipeline.dlqOutput.send(dlqMessage).pipe(
+            yield* processorDlqOutput.send(dlqMessage).pipe(
               Effect.catchAll((dlqError) =>
                 Effect.gen(function* () {
                   yield* Effect.logError(
