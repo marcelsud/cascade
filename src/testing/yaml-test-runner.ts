@@ -233,16 +233,42 @@ const runTest = (test: Test, _fileName: string) =>
         pipelineError,
       };
 
-      const assertionResults = yield* executeAssertions(
-        test.assertions,
-        context,
+      const assertionsExit = yield* Effect.exit(
+        executeAssertions(test.assertions, context),
       );
 
-      const allPassed = assertionResults.every((r) => r.passed);
+      if (Exit.isFailure(assertionsExit)) {
+        return {
+          testName: test.name,
+          passed: false,
+          duration: Date.now() - startTime,
+          error: `Assertion error: ${formatUnknownError(errorFromCause(assertionsExit.cause))}`,
+        } satisfies TestResult;
+      }
+
+      const assertionResults = assertionsExit.value;
+      const allAssertionsPassed = assertionResults.every((r) => r.passed);
+      const allowsFailedPipeline =
+        !result.success &&
+        test.assertions.some((assertion) => assertion.type === "pipeline_failed");
+
+      // Ordinary assertions must not mask an unexpected pipeline failure.
+      if (!result.success && !allowsFailedPipeline) {
+        return {
+          testName: test.name,
+          passed: false,
+          duration: Date.now() - startTime,
+          error: `Pipeline failed: ${formatUnknownError(pipelineError ?? "unknown error")}`,
+          assertionResults: assertionResults.map((r) => ({
+            passed: r.passed,
+            message: r.message,
+          })),
+        } satisfies TestResult;
+      }
 
       return {
         testName: test.name,
-        passed: allPassed,
+        passed: allAssertionsPassed,
         duration: Date.now() - startTime,
         assertionResults: assertionResults.map((r) => ({
           passed: r.passed,
@@ -276,7 +302,18 @@ const runTestFile = (testFile: TestFile, fileName: string) =>
 
     const testResults: TestResult[] = [];
     for (const test of testFile.tests) {
-      testResults.push(yield* runTest(test, fileName));
+      const testStartTime = Date.now();
+      const testExit = yield* Effect.exit(runTest(test, fileName));
+      if (Exit.isFailure(testExit)) {
+        testResults.push({
+          testName: test.name,
+          passed: false,
+          duration: Date.now() - testStartTime,
+          error: `Unexpected error: ${formatUnknownError(errorFromCause(testExit.cause))}`,
+        });
+        continue;
+      }
+      testResults.push(testExit.value);
     }
 
     return {

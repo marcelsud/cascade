@@ -69,37 +69,31 @@ afterEach(async () => {
   );
 });
 
-const runCliTest = async (
+const runCliTest = (
   pattern: string,
-): Promise<{ code: number | null; output: string }> => {
-  const { promise, resolve, reject } = Promise.withResolvers<{
-    code: number | null;
-    output: string;
-  }>();
+): Promise<{ code: number | null; output: string }> =>
+  new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      ["--import", "tsx", path.join(repoRoot, "src/cli.ts"), "test", pattern],
+      {
+        cwd: repoRoot,
+        env: process.env,
+      },
+    );
 
-  const child = spawn(
-    process.execPath,
-    ["--import", "tsx", path.join(repoRoot, "src/cli.ts"), "test", pattern],
-    {
-      cwd: repoRoot,
-      env: process.env,
-    },
-  );
-
-  let output = "";
-  child.stdout.on("data", (chunk: Buffer | string) => {
-    output += String(chunk);
+    let output = "";
+    child.stdout.on("data", (chunk: Buffer | string) => {
+      output += String(chunk);
+    });
+    child.stderr.on("data", (chunk: Buffer | string) => {
+      output += String(chunk);
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      resolve({ code, output });
+    });
   });
-  child.stderr.on("data", (chunk: Buffer | string) => {
-    output += String(chunk);
-  });
-  child.on("error", reject);
-  child.on("close", (code) => {
-    resolve({ code, output });
-  });
-
-  return promise;
-};
 
 describe("YAML test runner", () => {
   it("findTestFiles keeps only sorted explicit YAML test files", async () => {
@@ -205,4 +199,105 @@ describe("YAML test runner", () => {
     expect(result.totalTests).toBe(1);
     expect(result.files[0]?.passed).toBe(true);
   });
+
+  it("isolates a bad assertion test without skipping later siblings", async () => {
+    const dir = await createTempDir();
+    await writeFile(
+      dir,
+      "assertion-isolation.test.yaml",
+      `name: Assertion Isolation
+tests:
+  - name: "bad assertion dies"
+    pipeline:
+      input:
+        generate:
+          count: 1
+          template:
+            value: 1
+      output:
+        capture: {}
+    assertions:
+      - type: all_match
+        condition: "{ invalid syntax ["
+  - name: "later valid test still runs"
+    pipeline:
+      input:
+        generate:
+          count: 1
+          template:
+            name: "bob"
+      processors:
+        - uppercase:
+            fields: [name]
+      output:
+        capture: {}
+    assertions:
+      - type: message_count
+        expected: 1
+      - type: field_value
+        message: 0
+        path: content.name
+        expected: "BOB"
+`,
+    );
+
+    const result = await Effect.runPromise(
+      runYamlTests(path.join(dir, "*.test.yaml")),
+    );
+
+    expect(result.files).toHaveLength(1);
+    expect(result.totalTests).toBe(2);
+    expect(result.failedTests).toBe(1);
+    expect(result.passedTests).toBe(1);
+
+    const tests = result.files[0]?.tests ?? [];
+    expect(tests.map((test) => test.testName)).toEqual([
+      "bad assertion dies",
+      "later valid test still runs",
+    ]);
+    expect(tests[0]?.passed).toBe(false);
+    expect(tests[0]?.error).toMatch(/Assertion error|JSONata/i);
+    expect(tests[1]?.passed).toBe(true);
+  });
+
+  it("does not let ordinary assertions mask an unexpected pipeline failure", async () => {
+    const dir = await createTempDir();
+    await writeFile(
+      dir,
+      "unexpected-failure.test.yaml",
+      `name: Unexpected Failure Masking
+tests:
+  - name: "failed pipeline with message_count zero"
+    pipeline:
+      input:
+        generate:
+          count: 1
+          template:
+            value: 1
+      processors:
+        - assert:
+            condition: content.value > 10
+      output:
+        capture: {}
+    assertions:
+      - type: message_count
+        expected: 0
+`,
+    );
+
+    const result = await Effect.runPromise(
+      runYamlTests(path.join(dir, "*.test.yaml")),
+    );
+
+    expect(result.totalTests).toBe(1);
+    expect(result.failedTests).toBe(1);
+    expect(result.passedTests).toBe(0);
+    expect(result.files[0]?.tests[0]?.passed).toBe(false);
+    expect(result.files[0]?.tests[0]?.error).toMatch(/Pipeline failed/i);
+
+    const { code, output } = await runCliTest(path.join(dir, "*.test.yaml"));
+    expect(code).toBe(1);
+    expect(output).toContain("failed pipeline with message_count zero");
+    expect(output).toMatch(/Tests: 0 passed, 1 failed, 1 total/);
+  }, 30_000);
 });

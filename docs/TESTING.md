@@ -934,7 +934,7 @@ Only files named `*.test.yaml` or `*.test.yml` are executed; other YAML matched 
 
 ### Writing YAML Tests
 
-Create a `.yaml` file with the following structure:
+Create a `*.test.yaml` or `*.test.yml` file with the following structure:
 
 ```yaml
 name: My Component Tests
