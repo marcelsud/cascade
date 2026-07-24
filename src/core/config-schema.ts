@@ -48,6 +48,9 @@ const AwsSqsInputSchema = S.Struct({
   endpoint: S.optional(S.String),
   wait_time_seconds: S.optional(S.Number),
   max_number_of_messages: S.optional(S.Number),
+  max_attempts: S.optional(S.Number),
+  request_timeout: S.optional(S.Number),
+  connection_timeout: S.optional(S.Number),
 });
 
 /**
@@ -64,6 +67,12 @@ const RedisStreamsInputSchema = S.Struct({
   start_id: S.optional(S.String),
   max_reconnect_attempts: S.optional(S.Int.pipe(S.nonNegative())),
   reconnect_backoff_ms: S.optional(S.Int.pipe(S.positive())),
+  connect_timeout: S.optional(S.Number),
+  command_timeout: S.optional(S.Number),
+  keep_alive: S.optional(S.Number),
+  lazy_connect: S.optional(S.Boolean),
+  max_retries_per_request: S.optional(S.Number),
+  enable_offline_queue: S.optional(S.Boolean),
 });
 
 /**
@@ -368,6 +377,13 @@ const RedisStreamsOutputSchema = S.Struct({
   url: S.String,
   stream: S.String,
   max_length: S.optional(S.Number),
+  max_retries: S.optional(S.Number),
+  connect_timeout: S.optional(S.Number),
+  command_timeout: S.optional(S.Number),
+  keep_alive: S.optional(S.Number),
+  lazy_connect: S.optional(S.Boolean),
+  max_retries_per_request: S.optional(S.Number),
+  enable_offline_queue: S.optional(S.Boolean),
 });
 
 /**
@@ -379,6 +395,11 @@ const AwsSqsOutputSchema = S.Struct({
   endpoint: S.optional(S.String),
   max_batch_size: S.optional(S.Number),
   delay_seconds: S.optional(S.Number),
+  batch_timeout: S.optional(S.Number),
+  max_retries: S.optional(S.Number),
+  max_attempts: S.optional(S.Number),
+  request_timeout: S.optional(S.Number),
+  connection_timeout: S.optional(S.Number),
 });
 
 /**
