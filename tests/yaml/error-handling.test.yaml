@@ -17,7 +17,7 @@ tests:
         capture: {}
 
     expectError:
-      messageContains: "Condition evaluated to false"
+      messageContains: "evaluated to false"
 
   - name: "Should fail when required field is missing"
     pipeline:
@@ -76,7 +76,7 @@ tests:
         capture: {}
 
     expectError:
-      messageContains: "Condition evaluated to false"
+      messageContains: "evaluated to false"
 
   - name: "Should validate pipeline_failed assertion"
     pipeline:

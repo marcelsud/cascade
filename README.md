@@ -377,6 +377,8 @@ Run YAML tests with:
 cascade test "tests/**/*.yaml"
 ```
 
+Only files named `*.test.yaml` or `*.test.yml` are executed; other YAML matched by the glob is skipped.
+
 **See [docs/TESTING.md](./docs/TESTING.md) for complete testing guide.**
 
 ### Run Tests
