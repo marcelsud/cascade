@@ -1,7 +1,17 @@
 /**
  * Pipeline orchestration using Effect.js
  */
-import { Deferred, Effect, Fiber, FiberSet, Ref, Stream, pipe } from "effect";
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  FiberSet,
+  Ref,
+  Stream,
+  pipe,
+} from "effect";
 import type {
   Message,
   Pipeline,
@@ -9,6 +19,7 @@ import type {
   PipelineStats,
 } from "./types.js";
 import { runProcessorChain } from "./processor-chain.js";
+import { isFatalError } from "./errors.js";
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -31,6 +42,28 @@ export class PipelineShutdownError extends PipelineError {
         : "Pipeline graceful shutdown timed out",
     );
     this.shutdown = shutdown;
+  }
+}
+
+/**
+ * Internal signal: a processor/output failure classified as fatal.
+ * Halts further intake without using the external shutdown controller.
+ */
+export class PipelineFatalHaltError extends PipelineError {
+  constructor(readonly cause: unknown) {
+    super(
+      cause instanceof Error
+        ? `Pipeline halted on fatal error: ${cause.message}`
+        : `Pipeline halted on fatal error: ${String(cause)}`,
+      cause,
+    );
+  }
+}
+
+/** Drain/close exceeded shutdownTimeoutMs after a fatal halt. */
+export class PipelineFatalDrainTimeoutError extends PipelineError {
+  constructor() {
+    super("Pipeline drain timed out after fatal error");
   }
 }
 
@@ -88,6 +121,7 @@ export const run = <E, R>(
       options.shutdownTimeoutMs ??
       pipeline.shutdownTimeoutMs ??
       DEFAULT_SHUTDOWN_TIMEOUT_MS;
+    const finishCurrentPull = pipeline.input.shutdownMode === "finish-current";
 
     const statsRef = yield* Ref.make({
       processed: 0,
@@ -95,6 +129,11 @@ export const run = <E, R>(
       startTime: Date.now(),
     });
     const errorsRef = yield* Ref.make<unknown[]>([]);
+    // Internal halt channel — distinct from external graceful shutdown.
+    const fatalHalt = yield* Deferred.make<unknown>();
+    // Ensure input/output close runs at most once across fatal/normal paths.
+    const closedRef = yield* Ref.make(false);
+
     const snapshotMetrics = () => {
       const input = pipeline.input.getMetrics?.();
       const output = pipeline.output.getMetrics?.();
@@ -127,6 +166,68 @@ export const run = <E, R>(
           metrics: snapshotMetrics(),
         };
       });
+    /**
+     * Build a non-graceful fatal failure from errors already recorded in
+     * `errorsRef`, optionally appending cleanup/drain failures.
+     */
+    const fatalFailedResult = (
+      additionalErrors: readonly unknown[] = [],
+    ): Effect.Effect<PipelineResult> =>
+      Effect.gen(function* () {
+        const stats = yield* snapshotStats();
+        const prior = yield* Ref.get(errorsRef);
+        const errors: unknown[] = [];
+        const pushUnique = (error: unknown) => {
+          if (error !== undefined && !errors.includes(error)) {
+            errors.push(error);
+          }
+        };
+
+        // Prefer the original fatal halt cause first when present.
+        const polledFatal = yield* Deferred.poll(fatalHalt);
+        if (polledFatal._tag === "Some") {
+          pushUnique(yield* polledFatal.value);
+        }
+        for (const error of prior) {
+          pushUnique(error);
+        }
+        for (const error of additionalErrors) {
+          pushUnique(error);
+        }
+
+        return {
+          success: false,
+          stats,
+          errors: errors.length > 0 ? errors : undefined,
+          metrics: snapshotMetrics(),
+        } satisfies PipelineResult;
+      });
+    const recordError = (error: unknown) =>
+      Ref.update(errorsRef, (errors) =>
+        errors.includes(error) ? errors : [...errors, error],
+      );
+
+    // Close once across normal completion and fatal-timeout interrupt paths.
+    // If the fatal watchdog interrupts a close already in progress, leave it
+    // unclaimed so the watchdog can retry cleanup after execution stops.
+    const ensureClose = Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        if (yield* Ref.get(closedRef)) {
+          return;
+        }
+        const exit = yield* Effect.exit(
+          restore(closePipeline(pipeline, shutdownTimeoutMs)),
+        );
+        if (!Exit.isInterrupted(exit)) {
+          yield* Ref.set(closedRef, true);
+        }
+        return yield* Exit.matchEffect(exit, {
+          onSuccess: () => Effect.void,
+          onFailure: Effect.failCause,
+        });
+      }),
+    );
+
     const maxConcurrentMessages =
       pipeline.backpressure?.maxConcurrentMessages ?? 10;
     const maxConcurrentOutputs =
@@ -158,8 +259,13 @@ export const run = <E, R>(
               ...stats,
               failed: stats.failed + 1,
             }));
-            yield* Ref.update(errorsRef, (errors) => [...errors, error]);
+            yield* recordError(error);
             yield* Effect.logError(`Message processing failed: ${error}`);
+
+            if (isFatalError(error)) {
+              // Signal internal halt; already-accepted workers may still drain.
+              yield* Deferred.succeed(fatalHalt, error).pipe(Effect.asVoid);
+            }
           }),
         ),
         Effect.withSpan("process-message", {
@@ -172,17 +278,40 @@ export const run = <E, R>(
         yield* Effect.log(`Starting pipeline: ${pipeline.name}`);
         const workers = yield* FiberSet.make<void, never>();
         const permits = yield* Effect.makeSemaphore(maxConcurrentMessages);
-        const stoppedInput =
-          pipeline.input.shutdownMode === "finish-current"
-            ? pipeline.input.stream.pipe(Stream.haltWhenDeferred(shutdown.stop))
-            : pipeline.input.stream.pipe(
-                Stream.interruptWhenDeferred(shutdown.stop),
-              );
+        // Stop intake on external shutdown OR internal fatal halt.
+        const intakeStop = yield* Deferred.make<void>();
+        yield* Effect.forkScoped(
+          Deferred.await(shutdown.stop).pipe(
+            Effect.zipRight(Deferred.succeed(intakeStop, undefined)),
+            Effect.asVoid,
+          ),
+        );
+        yield* Effect.forkScoped(
+          Deferred.await(fatalHalt).pipe(
+            Effect.zipRight(Deferred.succeed(intakeStop, undefined)),
+            Effect.asVoid,
+          ),
+        );
+
+        const stoppedInput = finishCurrentPull
+          ? pipeline.input.stream.pipe(Stream.haltWhenDeferred(intakeStop))
+          : pipeline.input.stream.pipe(
+              Stream.interruptWhenDeferred(intakeStop),
+            );
 
         yield* stoppedInput.pipe(
           Stream.runForEach((message) =>
             Effect.gen(function* () {
+              // Interruptible inputs may drop post-fatal emissions.
+              // finish-current emissions were already removed upstream — drain them.
+              if (!finishCurrentPull && (yield* Deferred.isDone(fatalHalt))) {
+                return;
+              }
               yield* permits.take(1);
+              if (!finishCurrentPull && (yield* Deferred.isDone(fatalHalt))) {
+                yield* permits.release(1);
+                return;
+              }
               yield* FiberSet.run(
                 workers,
                 processMessage(message).pipe(
@@ -198,16 +327,31 @@ export const run = <E, R>(
                 ...stats,
                 failed: stats.failed + 1,
               }));
-              yield* Ref.update(errorsRef, (errors) => [...errors, error]);
+              yield* recordError(error);
+              if (isFatalError(error)) {
+                yield* Deferred.succeed(fatalHalt, error).pipe(Effect.asVoid);
+              }
             }),
           ),
         );
 
         yield* FiberSet.awaitEmpty(workers);
-        yield* closePipeline(pipeline, shutdownTimeoutMs);
+
+        const closeResult = yield* Effect.either(ensureClose);
+        if (closeResult._tag === "Left") {
+          yield* recordError(closeResult.left);
+          if (!(yield* Deferred.isDone(fatalHalt))) {
+            // Non-fatal path: preserve prior external close-failure behavior.
+            return yield* Effect.fail(closeResult.left);
+          }
+        }
 
         const stats = yield* Ref.get(statsRef);
         const errors = yield* Ref.get(errorsRef);
+        const polledFatal = yield* Deferred.poll(fatalHalt);
+        const resolvedFatal =
+          polledFatal._tag === "Some" ? yield* polledFatal.value : undefined;
+
         const finalStats: PipelineStats = {
           processed: stats.processed,
           failed: stats.failed,
@@ -215,6 +359,13 @@ export const run = <E, R>(
           startTime: stats.startTime,
           endTime: Date.now(),
         };
+
+        if (resolvedFatal !== undefined) {
+          yield* Effect.log(
+            `Pipeline halted on fatal error: ${finalStats.processed} processed, ${finalStats.failed} failed in ${finalStats.duration}ms`,
+          );
+          return yield* Effect.fail(new PipelineFatalHaltError(resolvedFatal));
+        }
 
         yield* Effect.log(
           `Pipeline completed: ${finalStats.processed} processed, ${finalStats.failed} failed in ${finalStats.duration}ms`,
@@ -229,6 +380,19 @@ export const run = <E, R>(
     );
 
     const executionFiber = yield* Effect.forkDaemon(execution);
+    const awaitExecution = Fiber.await(executionFiber).pipe(
+      Effect.flatMap((exit) =>
+        Exit.matchEffect(exit, {
+          onSuccess: Effect.succeed,
+          // A controlled timeout/force path interrupts execution itself. Do
+          // not let that interruption win the surrounding completion race.
+          onFailure: (cause) =>
+            Cause.isInterruptedOnly(cause)
+              ? Effect.never
+              : Effect.failCause(cause),
+        }),
+      ),
+    );
     const interruptedResult = (
       reason: "timed-out" | "forced",
     ): Effect.Effect<PipelineResult> =>
@@ -237,37 +401,81 @@ export const run = <E, R>(
         return yield* failedResult(new PipelineShutdownError(reason), reason);
       });
 
+    const interruptFatalDrain = (): Effect.Effect<PipelineResult, never, R> =>
+      Effect.gen(function* () {
+        // Interrupt stuck workers / blocked finish-current pulls, then close.
+        // Await interruption so FiberSet/scope finalizers settle before close.
+        yield* Fiber.interrupt(executionFiber);
+        const closeResult = yield* Effect.either(ensureClose);
+        const drainTimeout = new PipelineFatalDrainTimeoutError();
+        yield* recordError(drainTimeout);
+        if (closeResult._tag === "Left") {
+          yield* recordError(closeResult.left);
+        }
+        return yield* fatalFailedResult();
+      });
+
     const result: PipelineResult = yield* Effect.raceFirst(
-      Fiber.join(executionFiber),
-      Deferred.await(shutdown.stop).pipe(
-        Effect.flatMap(() =>
-          Effect.raceFirst(
-            Effect.raceFirst(
-              Fiber.join(executionFiber).pipe(
-                Effect.map((result) => ({
-                  ...result,
-                  shutdown: "graceful" as const,
-                })),
-              ),
-              Effect.sleep(`${shutdownTimeoutMs} millis`).pipe(
-                Effect.flatMap(() => interruptedResult("timed-out")),
-              ),
+      awaitExecution,
+      Effect.raceFirst(
+        // Bound remaining work after an internal fatal halt.
+        Deferred.await(fatalHalt).pipe(
+          Effect.flatMap(() =>
+            Effect.sleep(`${shutdownTimeoutMs} millis`).pipe(
+              Effect.flatMap(() => interruptFatalDrain()),
             ),
-            Deferred.await(shutdown.force).pipe(
-              Effect.flatMap(() => interruptedResult("forced")),
+          ),
+        ),
+        Deferred.await(shutdown.stop).pipe(
+          Effect.flatMap(() =>
+            Effect.raceFirst(
+              Effect.raceFirst(
+                awaitExecution.pipe(
+                  Effect.map((result) => ({
+                    ...result,
+                    shutdown: "graceful" as const,
+                  })),
+                ),
+                Effect.sleep(`${shutdownTimeoutMs} millis`).pipe(
+                  Effect.flatMap(() => interruptedResult("timed-out")),
+                ),
+              ),
+              Deferred.await(shutdown.force).pipe(
+                Effect.flatMap(() => interruptedResult("forced")),
+              ),
             ),
           ),
         ),
       ),
     ).pipe(
       Effect.catchAll((error: unknown) =>
-        failedResult(
-          error,
-          error instanceof PipelineShutdownError ? error.shutdown : undefined,
-        ),
+        Effect.gen(function* () {
+          const fatalRequested = yield* Deferred.isDone(fatalHalt);
+          if (fatalRequested || error instanceof PipelineFatalHaltError) {
+            // Preserve original fatal cause(s); append cleanup failures.
+            const additional =
+              error instanceof PipelineFatalHaltError ? [] : [error];
+            return yield* fatalFailedResult(additional);
+          }
+          return yield* failedResult(
+            error,
+            error instanceof PipelineShutdownError ? error.shutdown : undefined,
+          );
+        }),
       ),
     );
+    // Only external stop requests count as graceful shutdown.
     const shutdownRequested = yield* Deferred.isDone(shutdown.stop);
+    const fatalRequested = yield* Deferred.isDone(fatalHalt);
+    if (fatalRequested) {
+      // External timeout/force may win after fatal was recorded. Rebuild from
+      // the fatal channel so shutdown metadata cannot replace the fatal cause.
+      const fatalResult = yield* fatalFailedResult(result.errors ?? []);
+      return {
+        ...fatalResult,
+        shutdown: result.shutdown === "graceful" ? undefined : result.shutdown,
+      };
+    }
     return shutdownRequested && result.shutdown === undefined
       ? { ...result, shutdown: "graceful" as const }
       : result;

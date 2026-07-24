@@ -120,3 +120,31 @@ export function detectCategory(cause: unknown): ErrorCategory {
   // Default to intermittent (safe default - will retry)
   return "intermittent";
 }
+
+const isErrorCategory = (value: unknown): value is ErrorCategory =>
+  value === "intermittent" || value === "logical" || value === "fatal";
+
+/**
+ * Resolve the handling category for any thrown/failed value.
+ * Explicit `category` on the error object wins; otherwise fall back to
+ * {@link detectCategory}.
+ */
+export function getErrorCategory(error: unknown): ErrorCategory {
+  if (error !== null && typeof error === "object" && "category" in error) {
+    const category = error.category;
+    if (isErrorCategory(category)) {
+      return category;
+    }
+  }
+  return detectCategory(error);
+}
+
+/** True when the error should be retried (intermittent only). */
+export function isIntermittentError(error: unknown): boolean {
+  return getErrorCategory(error) === "intermittent";
+}
+
+/** True when the error should halt pipeline intake. */
+export function isFatalError(error: unknown): boolean {
+  return getErrorCategory(error) === "fatal";
+}

@@ -5,7 +5,7 @@ destination is rerouted to SQS with failure metadata and separate DLQ metrics.
 
 ## Overview
 
-Send failed messages to a separate queue after exhausting retries. DLQ support helps handle failures gracefully, prevents data loss, and allows for manual intervention or reprocessing of problematic messages.
+Send failed messages to a separate queue after category-aware primary handling. DLQ support helps handle failures gracefully, prevents data loss, and allows for manual intervention or reprocessing of problematic messages.
 
 ## Configuration
 
@@ -15,7 +15,7 @@ Exactly one destination must be configured under `dlq.output`.
 
 ### Optional Fields
 
-- `max_retries`: Number of retry attempts before sending to the DLQ (default: 3). Set it to `0` to send to the DLQ immediately after the initial failure.
+- `max_retries`: Number of retry attempts for intermittent failures before sending to the DLQ (default: 3). Set it to `0` to send to the DLQ immediately after the initial failure.
 - `retry_schedule`: `exponential`, `fixed`, or `linear` (default: `exponential`)
 - `retry_interval_ms`: Positive base interval in milliseconds (default: `1000`)
 
@@ -24,11 +24,20 @@ retry by `1×`, `2×`, `4×`, and so on. A linear schedule delays by `1×`, `2×
 `3×`, and so on. A fixed schedule waits the configured interval after each
 attempt completes.
 
+Retry eligibility follows the error category:
+
+- `intermittent`: retry up to `max_retries`, then send to the DLQ.
+- `logical`: skip retries and send to the DLQ after the initial failure.
+- `fatal`: skip retries, copy to the DLQ when configured, and keep the
+  original failure fatal so the pipeline stops intake.
+
+Errors without an explicit category use Cascade's existing category detection.
+
 DLQ retries wrap the primary output's complete `send` operation. Outputs with
 their own retry behavior, such as HTTP and Redis outputs, therefore retry
-internally during each DLQ-level attempt. For an HTTP output configured with
-`X` retries and a DLQ configured with `Y` retries, the destination may receive
-up to `(X + 1) × (Y + 1)` send attempts.
+internally during each DLQ-level attempt. When the final output failure is
+intermittent, an HTTP output configured with `X` retries and a DLQ configured
+with `Y` retries may make up to `(X + 1) × (Y + 1)` destination attempts.
 
 ## Examples
 
@@ -98,7 +107,7 @@ dlq:
 
 ## Features
 
-- **Automatic Retry**: Exponential, fixed, or linear backoff with configurable attempts and interval
+- **Category-Aware Retry**: Configurable backoff for intermittent failures; logical and fatal failures skip retries
 - **Comprehensive Error Details**: Full error information preserved in metadata
 - **Data Loss Prevention**: Ensures no messages are lost due to transient failures
 - **Manual Inspection**: Failed messages can be reviewed and debugged
@@ -107,12 +116,13 @@ dlq:
 
 ## How It Works
 
-1. **Initial Send**: Message is sent to primary output
-2. **Failure**: If send fails, retry logic kicks in
-3. **Configured Backoff**: Retries using the selected schedule and interval
-4. **Max Retries Reached**: After exhausting retries, message goes to DLQ
-5. **DLQ Enrichment**: Message metadata enhanced with failure details
-6. **DLQ Send**: Message sent to DLQ output
+1. **Initial Send**: Message is sent to the primary output
+2. **Classification**: The failure is classified as intermittent, logical, or fatal
+3. **Eligible Retry**: Only intermittent failures use the configured retry schedule
+4. **DLQ Enrichment**: Failure metadata records the actual primary attempt count
+5. **DLQ Send**: The failed message is sent to the configured DLQ output
+6. **Resolution**: Logical and exhausted intermittent failures resolve after a successful DLQ copy
+7. **Fatal Halt**: Fatal failures remain failed after the DLQ copy, stopping pipeline intake
 
 ## DLQ Message Metadata
 
