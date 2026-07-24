@@ -75,7 +75,11 @@ const resolveDotPath = (
   const parts = dotPath.split(".");
   let current: unknown = obj;
   for (const part of parts) {
-    if (current && typeof current === "object" && part in (current as Record<string, unknown>)) {
+    if (
+      current &&
+      typeof current === "object" &&
+      part in (current as Record<string, unknown>)
+    ) {
       current = (current as Record<string, unknown>)[part];
     } else {
       return undefined;
@@ -93,7 +97,10 @@ const resolveDotPath = (
  *
  * Returns the stringified key value, or undefined if the path resolves to undefined/null.
  */
-export const extractKey = (keyPath: string, msg: Message): string | undefined => {
+export const extractKey = (
+  keyPath: string,
+  msg: Message,
+): string | undefined => {
   if (keyPath.startsWith("metadata.")) {
     const metaPath = keyPath.slice("metadata.".length);
     if (metaPath.length === 0) return undefined;
@@ -200,7 +207,9 @@ export const createDedupeProcessor = (
   return {
     name: "dedupe-processor",
     getMetrics,
-    process: (msg: Message): Effect.Effect<Message | Message[], DedupeKeyExtractionError> => {
+    process: (
+      msg: Message,
+    ): Effect.Effect<Message | Message[], DedupeKeyExtractionError> => {
       return Effect.gen(function* () {
         const now = Date.now();
 
@@ -235,10 +244,11 @@ export const createDedupeProcessor = (
             ...c,
             hits: c.hits + 1,
           }));
-          yield* Effect.logDebug(
-            `Dedupe hit: duplicate suppressed`,
-            { keyPath, dedupeKey, messageId: msg.id },
-          );
+          yield* Effect.logDebug(`Dedupe hit: duplicate suppressed`, {
+            keyPath,
+            dedupeKey,
+            messageId: msg.id,
+          });
           return [] as Message[];
         }
 
@@ -254,10 +264,11 @@ export const createDedupeProcessor = (
           misses: c.misses + 1,
         }));
 
-        yield* Effect.logDebug(
-          `Dedupe miss: first-seen key accepted`,
-          { keyPath, dedupeKey, messageId: msg.id },
-        );
+        yield* Effect.logDebug(`Dedupe miss: first-seen key accepted`, {
+          keyPath,
+          dedupeKey,
+          messageId: msg.id,
+        });
 
         return msg;
       });

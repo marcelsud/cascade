@@ -83,7 +83,7 @@ fi
 
 # Run the consumer pipeline with timeout
 echo -e "\n${YELLOW}Running consumer pipeline (receiving from SQS)...${NC}"
-timeout 15s node dist/cli.js run tests/e2e/configs/sqs-consumer.yaml > /tmp/sqs-consumer.log 2>&1 &
+timeout -k 5s 15s node dist/cli.js run tests/e2e/configs/sqs-consumer.yaml > /tmp/sqs-consumer.log 2>&1 &
 CONSUMER_PID=$!
 
 # Wait for consumer to process messages

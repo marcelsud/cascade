@@ -303,11 +303,13 @@ describe("Dead Letter Queue (DLQ)", () => {
       const dlqOutput: Output<Error> = {
         name: "dlq-output",
         send: vi.fn().mockReturnValue(Effect.void),
-        close: vi.fn().mockReturnValue(
-          Effect.sleep("20 millis").pipe(
-            Effect.tap(() => Effect.sync(() => (dlqClosed = true))),
+        close: vi
+          .fn()
+          .mockReturnValue(
+            Effect.sleep("20 millis").pipe(
+              Effect.tap(() => Effect.sync(() => (dlqClosed = true))),
+            ),
           ),
-        ),
       };
 
       const wrappedOutput = withDLQ({

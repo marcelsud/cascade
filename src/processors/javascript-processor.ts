@@ -45,7 +45,9 @@ export const createJavaScriptProcessor = (
 
   return {
     name: "javascript-processor",
-    process: (msg: Message): Effect.Effect<Message | Message[], JavaScriptProcessorError> => {
+    process: (
+      msg: Message,
+    ): Effect.Effect<Message | Message[], JavaScriptProcessorError> => {
       return Effect.tryPromise({
         try: async () => {
           const QuickJS = await getQuickJS();

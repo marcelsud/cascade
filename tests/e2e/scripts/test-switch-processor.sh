@@ -1,53 +1,47 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
+
+ROOT_DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
+cd "$ROOT_DIR"
+
+LOG_FILE="/tmp/switch-processor.log"
 
 echo -e "${YELLOW}=== Switch Processor E2E Test ===${NC}\n"
 
-# Run the switch processor pipeline
 echo -e "${YELLOW}Running switch processor pipeline...${NC}"
-timeout 20s node dist/cli.js run tests/e2e/configs/switch-processor-test.yaml > /tmp/switch-processor.log 2>&1 &
-PIPELINE_PID=$!
+set +e
+timeout -k 5s 20s node dist/cli.js run tests/e2e/configs/switch-processor-test.yaml >"$LOG_FILE" 2>&1
+CLI_STATUS=$?
+set -e
 
-# Wait for pipeline to complete
-sleep 15
+cat "$LOG_FILE"
 
-# Kill if still running
-kill $PIPELINE_PID 2>/dev/null || true
-wait $PIPELINE_PID 2>/dev/null || true
+if [ "$CLI_STATUS" -ne 0 ]; then
+  echo -e "${RED}Pipeline failed (exit $CLI_STATUS)${NC}"
+  exit 1
+fi
 
-# Show pipeline output
-cat /tmp/switch-processor.log
-
-# Check if switch processor correctly routed messages
-# Should have different metadata based on message type
-ORDER_ROUTE=$(grep '"orderRoute"' /tmp/switch-processor.log | grep -c 'true' || echo "0")
-REFUND_ROUTE=$(grep '"refundRoute"' /tmp/switch-processor.log | grep -c 'true' || echo "0")
-DEFAULT_ROUTE=$(grep '"defaultRoute"' /tmp/switch-processor.log | grep -c 'true' || echo "0")
-SUCCESS_COUNT=$(grep -c "Processed: 6 messages" /tmp/switch-processor.log || echo "0")
+ORDER_ROUTE=$(grep -c '"orderRoute"' "$LOG_FILE" || true)
+REFUND_ROUTE=$(grep -c '"refundRoute"' "$LOG_FILE" || true)
+DEFAULT_ROUTE=$(grep -c '"defaultRoute"' "$LOG_FILE" || true)
+SUCCESS_COUNT=$(grep -c "Processed: 6 messages" "$LOG_FILE" || true)
 
 echo -e "\n${YELLOW}Results:${NC}"
 echo -e "Order routes: ${ORDER_ROUTE}"
 echo -e "Refund routes: ${REFUND_ROUTE}"
 echo -e "Default routes: ${DEFAULT_ROUTE}"
-echo -e "Pipeline completed: ${SUCCESS_COUNT}"
+echo -e "Pipeline completed summaries: ${SUCCESS_COUNT}"
 
-# Test passes if messages were routed correctly (2 orders, 2 refunds, 2 others)
-if [ "$ORDER_ROUTE" -ge "1" ] && [ "$REFUND_ROUTE" -ge "1" ] && [ "$DEFAULT_ROUTE" -ge "1" ]; then
-    echo -e "\n${GREEN}✓ Switch Processor test PASSED${NC}"
-    echo -e "  - Orders routed correctly"
-    echo -e "  - Refunds routed correctly"
-    echo -e "  - Default case handled"
-    echo -e "  - Pipeline completed successfully"
-    exit 0
-else
-    echo -e "\n${RED}✗ Switch Processor test FAILED${NC}"
-    echo -e "  - Expected routing for orders, refunds, and defaults"
-    echo -e "  - Orders: ${ORDER_ROUTE}, Refunds: ${REFUND_ROUTE}, Defaults: ${DEFAULT_ROUTE}"
-    exit 1
+if [ "$ORDER_ROUTE" -eq 2 ] && [ "$REFUND_ROUTE" -eq 2 ] && [ "$DEFAULT_ROUTE" -eq 2 ] && [ "$SUCCESS_COUNT" -eq 1 ]; then
+  echo -e "\n${GREEN}✓ Switch Processor test PASSED${NC}"
+  exit 0
 fi
+
+echo -e "\n${RED}✗ Switch Processor test FAILED${NC}"
+echo -e "  - Expected order/refund/default = 2/2/2 and one 6-message summary"
+exit 1

@@ -1,5 +1,3 @@
-name: http-processor-complex-templates
-
 input:
   generate:
     count: 3
@@ -27,6 +25,8 @@ pipeline:
     - http:
         url: "http://localhost:8081/post"
         method: "POST"
+        headers:
+          Content-Type: "application/json"
         body: |
           {
             "userId": "{{content.user.id}}",
@@ -37,6 +37,10 @@ pipeline:
           }
         result_key: "bodyTemplateResponse"
         timeout: 5000
+
+    - assert:
+        condition: metadata.urlTemplateResponse.args.userId = content.user.id and metadata.urlTemplateResponse.args.action = content.action and metadata.urlTemplateResponse.args.index = content.user.name and metadata.bodyTemplateResponse.json.userId = content.user.id and metadata.bodyTemplateResponse.json.userName = content.user.name and metadata.bodyTemplateResponse.json.action = content.action and metadata.bodyTemplateResponse.json.totalPrice = "60" and metadata.bodyTemplateResponse.json.itemCount = "3"
+        error: HTTP template response mismatch
 
     - log:
         level: "info"

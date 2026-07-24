@@ -1,4 +1,3 @@
-name: redis-streams-consumer
 
 input:
   redis_streams:

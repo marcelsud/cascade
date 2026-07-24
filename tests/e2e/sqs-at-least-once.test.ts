@@ -111,7 +111,9 @@ describe("SQS at-least-once delivery", () => {
       "failed SQS messages to become visible again",
     );
 
-    const capture: CaptureOutput = await Effect.runPromise(createCaptureOutput());
+    const capture: CaptureOutput = await Effect.runPromise(
+      createCaptureOutput(),
+    );
     const healthyRun = await startPipeline(
       create({
         name: "sqs-successful-redelivery",

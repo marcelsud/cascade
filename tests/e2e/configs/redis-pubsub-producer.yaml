@@ -1,27 +1,23 @@
 # Redis Pub/Sub Producer - Generates messages and publishes to Redis channel
-name: redis-pubsub-producer
-
 input:
-  type: generate
-  count: 5
-  interval: 100
-  template:
-    orderId: "order-{{index}}"
-    productId: "prod-{{random}}"
-    timestamp: "{{timestamp}}"
-    customer:
-      name: "Customer {{index}}"
-      email: "customer{{index}}@test.com"
+  generate:
+    count: 5
+    interval: 100
+    template:
+      orderId: "order-{{index}}"
+      productId: "prod-{{index}}"
+      timestamp: "{{timestamp}}"
+      customer:
+        name: "Customer {{index}}"
+        email: "customer{{index}}@test.com"
 
-processors:
-  - type: metadata
-    addTimestamp: true
-    fields:
-      testRun: "redis-pubsub-e2e"
-      source: "producer"
+pipeline:
+  processors:
+    - metadata:
+        add_timestamp: true
 
 output:
-  type: redis_pubsub
-  host: localhost
-  port: 6380
-  channel: "test-channel"
+  redis_pubsub:
+    host: localhost
+    port: 6380
+    channel: "test-channel"

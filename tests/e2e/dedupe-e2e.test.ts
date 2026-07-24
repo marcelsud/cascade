@@ -78,7 +78,9 @@ describe("Dedupe Processor E2E — Duplicate Suppression", () => {
     ];
 
     const input = inputFromMessages(messages);
-    const dedupeProcessor = createDedupeProcessor({ key: "metadata.requestId" });
+    const dedupeProcessor = createDedupeProcessor({
+      key: "metadata.requestId",
+    });
     const output = await Effect.runPromise(createCaptureOutput());
 
     const pipeline = create({
@@ -222,9 +224,8 @@ describe("Dedupe Processor E2E — Duplicate Suppression", () => {
 
   it("should work correctly with dedupe processor combined with other processors", async () => {
     // Import uppercase processor for chaining
-    const { createUppercaseProcessor } = await import(
-      "../../src/processors/uppercase-processor.js"
-    );
+    const { createUppercaseProcessor } =
+      await import("../../src/processors/uppercase-processor.js");
 
     const messages = [
       createMessage({ orderId: "order-1", name: "alice" }),

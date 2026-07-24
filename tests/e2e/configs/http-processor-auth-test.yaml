@@ -1,5 +1,3 @@
-name: http-processor-auth-and-headers
-
 input:
   generate:
     count: 3
@@ -12,15 +10,17 @@ pipeline:
   processors:
     # Test 1: Bearer token authentication
     - http:
-        url: "http://localhost:8081/bearer"
+        url: "http://localhost:8081/bearer?testId={{content.testId}}"
         method: "GET"
-        bearer_token: "test-secret-token-12345"
+        auth:
+          type: bearer
+          token: "test-secret-token-12345"
         result_key: "bearerAuth"
         timeout: 5000
 
     # Test 2: Custom headers
     - http:
-        url: "http://localhost:8081/headers"
+        url: "http://localhost:8081/headers?testId={{content.testId}}"
         method: "GET"
         headers:
           X-Api-Key: "my-api-key-67890"
@@ -30,13 +30,18 @@ pipeline:
 
     # Test 3: Basic authentication
     - http:
-        url: "http://localhost:8081/basic-auth/testuser/testpass"
+        url: "http://localhost:8081/basic-auth/testuser/testpass?testId={{content.testId}}"
         method: "GET"
-        basic_auth:
+        auth:
+          type: basic
           username: "testuser"
           password: "testpass"
         result_key: "basicAuth"
         timeout: 5000
+
+    - assert:
+        condition: metadata.bearerAuth.authenticated = true and metadata.bearerAuth.token = "test-secret-token-12345" and metadata.bearerAuth.testId = content.testId and $lookup(metadata.customHeaders.headers, "x-api-key") = "my-api-key-67890" and $lookup(metadata.customHeaders.headers, "x-request-id") = ("test-" & content.testId) and metadata.customHeaders.testId = content.testId and metadata.basicAuth.authenticated = true and metadata.basicAuth.user = "testuser" and metadata.basicAuth.testId = content.testId
+        error: HTTP authentication response mismatch
 
     - log:
         level: "info"

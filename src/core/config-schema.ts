@@ -298,8 +298,10 @@ const JavaScriptProcessorSchema = S.Struct({
  * Schema for Assert Processor (testing utility)
  */
 const AssertProcessorSchema = S.Struct({
-  expression: S.String,
-  expected: S.Unknown,
+  condition: S.optional(S.String),
+  hasFields: S.optional(S.Array(S.String)),
+  error: S.optional(S.String),
+  logPassing: S.optional(S.Boolean),
 });
 
 /**
@@ -626,7 +628,9 @@ export type ProcessorConfig = {
   };
   // Testing utilities
   readonly assert?: {
-    readonly expression: string;
-    readonly expected: unknown;
+    readonly condition?: string;
+    readonly hasFields?: readonly string[];
+    readonly error?: string;
+    readonly logPassing?: boolean;
   };
 };

@@ -95,11 +95,7 @@ describe("graceful drain", () => {
     expect(firstMessages.length + remaining).toBe(count);
 
     const secondCapture = await Effect.runPromise(createCaptureOutput());
-    const secondResult = await runUntilCaptured(
-      key,
-      secondCapture,
-      remaining,
-    );
+    const secondResult = await runUntilCaptured(key, secondCapture, remaining);
     const secondMessages = await Effect.runPromise(secondCapture.getMessages());
     const delivered = [...firstMessages, ...secondMessages].map(
       (message) => message.content.id,

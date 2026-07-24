@@ -17,16 +17,12 @@ const withDedupeProcessor = (dedupeConfig: Record<string, unknown>) => ({
  * Helper: attempt schema decode and return success/failure.
  */
 const decodeConfig = (raw: unknown) =>
-  Effect.runSync(
-    Effect.either(S.decodeUnknown(PipelineConfigSchema)(raw)),
-  );
+  Effect.runSync(Effect.either(S.decodeUnknown(PipelineConfigSchema)(raw)));
 
 describe("Dedupe Processor Config Validation", () => {
   describe("valid configurations", () => {
     it("should accept minimal config with only required key", () => {
-      const result = decodeConfig(
-        withDedupeProcessor({ key: "messageId" }),
-      );
+      const result = decodeConfig(withDedupeProcessor({ key: "messageId" }));
       expect(result._tag).toBe("Right");
     });
 
@@ -72,39 +68,29 @@ describe("Dedupe Processor Config Validation", () => {
 
   describe("missing required fields", () => {
     it("should reject config without key", () => {
-      const result = decodeConfig(
-        withDedupeProcessor({}),
-      );
+      const result = decodeConfig(withDedupeProcessor({}));
       expect(result._tag).toBe("Left");
     });
 
     it("should reject empty key string", () => {
-      const result = decodeConfig(
-        withDedupeProcessor({ key: "" }),
-      );
+      const result = decodeConfig(withDedupeProcessor({ key: "" }));
       expect(result._tag).toBe("Left");
     });
   });
 
   describe("invalid key values", () => {
     it("should reject key as number", () => {
-      const result = decodeConfig(
-        withDedupeProcessor({ key: 123 }),
-      );
+      const result = decodeConfig(withDedupeProcessor({ key: 123 }));
       expect(result._tag).toBe("Left");
     });
 
     it("should reject key as boolean", () => {
-      const result = decodeConfig(
-        withDedupeProcessor({ key: true }),
-      );
+      const result = decodeConfig(withDedupeProcessor({ key: true }));
       expect(result._tag).toBe("Left");
     });
 
     it("should reject key as null", () => {
-      const result = decodeConfig(
-        withDedupeProcessor({ key: null }),
-      );
+      const result = decodeConfig(withDedupeProcessor({ key: null }));
       expect(result._tag).toBe("Left");
     });
 

@@ -61,6 +61,8 @@ run_test "HTTP Processor Auth" "tests/e2e/scripts/test-http-processor-auth.sh"
 run_test "HTTP Processor Errors" "tests/e2e/scripts/test-http-processor-errors.sh"
 run_test "HTTP Processor Retry" "tests/e2e/scripts/test-http-processor-retry.sh"
 run_test "HTTP Processor Templates" "tests/e2e/scripts/test-http-processor-templates.sh"
+run_test "Branch Processor" "tests/e2e/scripts/test-branch-processor.sh"
+run_test "Switch Processor" "tests/e2e/scripts/test-switch-processor.sh"
 
 # Print summary
 echo -e "${BLUE}╔════════════════════════════════════════════════════════╗${NC}"

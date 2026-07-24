@@ -59,7 +59,9 @@ const formatUnknownError = (error: unknown): string => {
         ? error.message
         : undefined;
     const tag =
-      "_tag" in error && typeof error._tag === "string" ? error._tag : undefined;
+      "_tag" in error && typeof error._tag === "string"
+        ? error._tag
+        : undefined;
 
     if (message !== undefined) {
       return tag !== undefined ? `${tag}: ${message}` : message;
@@ -250,7 +252,9 @@ const runTest = (test: Test, _fileName: string) =>
       const allAssertionsPassed = assertionResults.every((r) => r.passed);
       const allowsFailedPipeline =
         !result.success &&
-        test.assertions.some((assertion) => assertion.type === "pipeline_failed");
+        test.assertions.some(
+          (assertion) => assertion.type === "pipeline_failed",
+        );
 
       // Ordinary assertions must not mask an unexpected pipeline failure.
       if (!result.success && !allowsFailedPipeline) {
