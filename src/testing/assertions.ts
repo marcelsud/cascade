@@ -31,25 +31,25 @@ export type Assertion =
   | PipelineSuccessAssertion
   | PipelineFailedAssertion;
 
-export interface MessageCountAssertion {
+interface MessageCountAssertion {
   readonly type: "message_count";
   readonly expected: number;
   readonly target?: "output" | "dlq";
 }
 
-export interface MessageCountLessThanAssertion {
+interface MessageCountLessThanAssertion {
   readonly type: "message_count_less_than";
   readonly expected: number;
   readonly target?: "output" | "dlq";
 }
 
-export interface MessageCountGreaterThanAssertion {
+interface MessageCountGreaterThanAssertion {
   readonly type: "message_count_greater_than";
   readonly expected: number;
   readonly target?: "output" | "dlq";
 }
 
-export interface FieldValueAssertion {
+interface FieldValueAssertion {
   readonly type: "field_value";
   readonly message: number; // Message index
   readonly path: string; // Dot notation: "content.user.name"
@@ -57,36 +57,36 @@ export interface FieldValueAssertion {
   readonly target?: "output" | "dlq";
 }
 
-export interface FieldExistsAssertion {
+interface FieldExistsAssertion {
   readonly type: "field_exists";
   readonly message: number;
   readonly path: string;
   readonly target?: "output" | "dlq";
 }
 
-export interface AllMatchAssertion {
+interface AllMatchAssertion {
   readonly type: "all_match";
   readonly condition: string; // JSONata expression
   readonly target?: "output" | "dlq";
 }
 
-export interface SomeMatchAssertion {
+interface SomeMatchAssertion {
   readonly type: "some_match";
   readonly condition: string;
   readonly target?: "output" | "dlq";
 }
 
-export interface NoneMatchAssertion {
+interface NoneMatchAssertion {
   readonly type: "none_match";
   readonly condition: string;
   readonly target?: "output" | "dlq";
 }
 
-export interface PipelineSuccessAssertion {
+interface PipelineSuccessAssertion {
   readonly type: "pipeline_success";
 }
 
-export interface PipelineFailedAssertion {
+interface PipelineFailedAssertion {
   readonly type: "pipeline_failed";
 }
 
@@ -149,7 +149,7 @@ const deepEqual = (a: any, b: any): boolean => {
 /**
  * Execute a single assertion
  */
-export const executeAssertion = (
+const executeAssertion = (
   assertion: Assertion,
   context: AssertionContext,
 ): Effect.Effect<AssertionResult, Error> =>

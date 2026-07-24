@@ -15,7 +15,7 @@ import { executeAssertions, type AssertionContext } from "./assertions.js";
 /**
  * Test result for a single test case
  */
-export interface TestResult {
+interface TestResult {
   readonly testName: string;
   readonly passed: boolean;
   readonly duration: number;

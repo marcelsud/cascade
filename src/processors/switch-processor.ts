@@ -12,7 +12,7 @@ import jsonata from "jsonata";
 import type { Processor, Message } from "../core/types.js";
 import { runProcessorChain } from "../core/processor-chain.js";
 
-export interface SwitchCase {
+interface SwitchCase {
   readonly check: string; // JSONata boolean expression
   readonly processors: readonly Processor<any, any>[];
 }

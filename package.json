@@ -30,6 +30,7 @@
     "docker:logs": "docker-compose logs -f",
     "docker:ps": "docker-compose ps",
     "lint": "tsc --noEmit",
+    "lint:unused": "knip",
     "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\""
   },
   "author": "Marcelo Santos (@marcelsud)",
@@ -48,6 +49,7 @@
     "@effect/platform-node": "^0.100.0",
     "@smithy/node-http-handler": "^4.4.5",
     "effect": "^3.19.3",
+    "glob": "^10.5.0",
     "ioredis": "^5.4.2",
     "jsonata": "^2.1.0",
     "quickjs-emscripten": "^0.32.0",
@@ -56,6 +58,7 @@
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@vitest/coverage-v8": "^2.1.8",
+    "knip": "^6.29.0",
     "prettier": "^3.4.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
