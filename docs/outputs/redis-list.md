@@ -17,6 +17,7 @@ Pushes messages to Redis Lists using LPUSH or RPUSH commands. Provides simple, r
   - `"left"`: LPUSH - push to the head
   - `"right"`: RPUSH - push to the tail
 - `max_length`: Maximum list length (uses LTRIM to cap size)
+  - `max_len` is also accepted for compatibility with earlier documentation; `max_length` takes precedence when both are set.
 - `max_retries`: Number of retry attempts for failed pushes (default: 3)
 
 ### Connection Configuration Fields

@@ -429,6 +429,8 @@ const RedisListOutputSchema = S.Struct({
   db: S.optional(S.Number),
   direction: S.optional(S.Union(S.Literal("left"), S.Literal("right"))),
   max_length: S.optional(S.Number),
+  // Compatibility alias for the documented YAML key; canonical is max_length.
+  max_len: S.optional(S.Number),
   max_retries: S.optional(S.Number),
   connect_timeout: S.optional(S.Number),
   command_timeout: S.optional(S.Number),

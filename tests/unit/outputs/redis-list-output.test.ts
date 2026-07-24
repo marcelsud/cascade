@@ -1,8 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Effect, Either } from "effect";
-import * as Schema from "effect/Schema";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { Effect } from "effect";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import * as yaml from "yaml";
 import Redis from "ioredis";
-import { PipelineConfigSchema } from "../../../src/core/config-loader.js";
+import { loadConfig } from "../../../src/core/config-loader.js";
 import { buildPipeline } from "../../../src/core/pipeline-builder.js";
 import { createRedisListOutput } from "../../../src/outputs/redis-list-output.js";
 import type { Message } from "../../../src/core/types.js";
@@ -129,10 +132,26 @@ const latestClient = (): MockRedisClient => {
   return result.value as MockRedisClient;
 };
 
+const tempDirs: string[] = [];
+
+const writeTempYaml = async (config: unknown): Promise<string> => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cascade-redis-list-"));
+  tempDirs.push(dir);
+  const configPath = path.join(dir, "config.yaml");
+  await fs.writeFile(configPath, yaml.stringify(config), "utf8");
+  return configPath;
+};
+
 describe("RedisListOutput", () => {
   beforeEach(() => {
     stores.length = 0;
     vi.clearAllMocks();
+  });
+
+  afterEach(async () => {
+    await Promise.all(
+      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true })),
+    );
   });
 
   describe("Configuration Validation", () => {
@@ -387,37 +406,73 @@ describe("RedisListOutput", () => {
       }
     });
 
-    it("YAML max_length decodes via PipelineConfigSchema and retains newest via buildPipeline", async () => {
+    it("YAML max_length decodes via loadConfig and retains newest via buildPipeline", async () => {
       const key = "tasks-yaml-max-length";
-      const decoded = Effect.runSync(
-        Effect.either(
-          Schema.decodeUnknown(PipelineConfigSchema)({
-            input: {
-              generate: {
-                count: 1,
-                template: { value: "seed" },
-              },
-            },
-            output: {
-              redis_list: {
-                host: "localhost",
-                port: 6379,
-                key,
-                max_length: 2,
-              },
-            },
-          }),
-        ),
-      );
+      const configPath = await writeTempYaml({
+        input: {
+          generate: {
+            count: 1,
+            template: { value: "seed" },
+          },
+        },
+        output: {
+          redis_list: {
+            host: "localhost",
+            port: 6379,
+            key,
+            max_length: 2,
+          },
+        },
+      });
 
-      expect(Either.isRight(decoded)).toBe(true);
-      if (Either.isLeft(decoded)) {
-        throw decoded.left;
+      const config = await Effect.runPromise(loadConfig(configPath));
+      expect(config.output.redis_list?.max_length).toBe(2);
+
+      const pipeline = await Effect.runPromise(buildPipeline(config));
+      expect(pipeline.output.name).toBe("redis-list-output");
+
+      await Effect.runPromise(pipeline.output.send(createMessage("A")));
+      await Effect.runPromise(pipeline.output.send(createMessage("B")));
+      await Effect.runPromise(pipeline.output.send(createMessage("C")));
+
+      const store = stores[stores.length - 1]!;
+      expect(listIds(store, key)).toEqual(["B", "C"]);
+
+      const client = latestClient();
+      expect(client.rpush).toHaveBeenCalled();
+      expect(client.ltrim).toHaveBeenCalledWith(key, -2, -1);
+
+      if (pipeline.output.close) {
+        await Effect.runPromise(pipeline.output.close());
       }
+      if (pipeline.input.close) {
+        await Effect.runPromise(pipeline.input.close());
+      }
+    });
 
-      expect(decoded.right.output.redis_list?.max_length).toBe(2);
+    it("loadConfig accepts legacy max_len alias and retains newest entries", async () => {
+      const key = "tasks-yaml-max-len";
+      const configPath = await writeTempYaml({
+        input: {
+          generate: {
+            count: 1,
+            template: { value: "seed" },
+          },
+        },
+        output: {
+          redis_list: {
+            host: "localhost",
+            port: 6379,
+            key,
+            max_len: 2,
+          },
+        },
+      });
 
-      const pipeline = await Effect.runPromise(buildPipeline(decoded.right));
+      const config = await Effect.runPromise(loadConfig(configPath));
+      expect(config.output.redis_list?.max_len).toBe(2);
+
+      const pipeline = await Effect.runPromise(buildPipeline(config));
       expect(pipeline.output.name).toBe("redis-list-output");
 
       await Effect.runPromise(pipeline.output.send(createMessage("A")));

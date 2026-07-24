@@ -480,7 +480,7 @@ const buildOutput = (
         port: config.redis_list.port || 6379,
         key: config.redis_list.key,
         direction: config.redis_list.direction,
-        maxLen: config.redis_list.max_length,
+        maxLen: config.redis_list.max_length ?? config.redis_list.max_len,
         password: config.redis_list.password,
         db: config.redis_list.db,
       }),
