@@ -41,12 +41,15 @@ const runOneSqsMessage = (
     readonly name: string;
     readonly send: (message: Message) => Effect.Effect<void, unknown>;
   },
+  options: {
+    readonly waitTimeSeconds?: number;
+  } = { waitTimeSeconds: 0 },
 ) => {
   const sqsInput = createSqsInput(
     {
       queueUrl: "http://localhost:4566/000000000000/test-queue",
       endpoint: "http://localhost:4566",
-      waitTimeSeconds: 0,
+      ...options,
     },
     client,
   );
@@ -58,6 +61,49 @@ const runOneSqsMessage = (
     output,
   });
 };
+
+const receiveWaitTimeSeconds = (
+  command: ReceiveMessageCommand | DeleteMessageCommand | undefined,
+) => {
+  expect(command).toBeInstanceOf(ReceiveMessageCommand);
+  return (command as ReceiveMessageCommand).input.WaitTimeSeconds;
+};
+
+describe("SQS ReceiveMessage wait time", () => {
+  it("sends WaitTimeSeconds 0 when waitTimeSeconds is explicitly 0", async () => {
+    const { client, commands } = createMockClient();
+
+    await Effect.runPromise(
+      runOneSqsMessage(
+        client,
+        {
+          name: "success-output",
+          send: () => Effect.void,
+        },
+        { waitTimeSeconds: 0 },
+      ),
+    );
+
+    expect(receiveWaitTimeSeconds(commands[0])).toBe(0);
+  });
+
+  it("defaults WaitTimeSeconds to 20 when waitTimeSeconds is omitted", async () => {
+    const { client, commands } = createMockClient();
+
+    await Effect.runPromise(
+      runOneSqsMessage(
+        client,
+        {
+          name: "success-output",
+          send: () => Effect.void,
+        },
+        {},
+      ),
+    );
+
+    expect(receiveWaitTimeSeconds(commands[0])).toBe(20);
+  });
+});
 
 describe("SQS at-least-once acknowledgement", () => {
   it("deletes a message only after downstream output succeeds", async () => {
