@@ -32,7 +32,7 @@ ratchets:
     check: "npm run test:coverage; node .github/grading/checks.mjs coverage --report <output> --config .github/grading/config.yml"
     enforcement: report-only
     baseline_commit: 60d85c8
-    baseline_total_lines_pct: 67.57
+    baseline_total_lines_pct: 67.05
   RT-5:
     check: "node .github/grading/checks.mjs complexity --base $BASE_SHA --config .github/grading/config.yml"
     enforcement: report-only

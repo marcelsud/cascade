@@ -129,20 +129,20 @@ const coverageReport = (lines) => `
 -------------------|---------|----------|---------|---------|-------------------
 File               | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
 -------------------|---------|----------|---------|---------|-------------------
-All files          |   67.57 |    88.95 |   79.41 |   ${lines} |
+All files          |   67.05 |    88.95 |   79.41 |   ${lines} |
 `
 
 test("RT-4 accepts the versioned floor", () => {
-  assert.deepEqual(checkCoverage({ report: coverageReport("67.57"), baseline: 67.57 }), {
-    baseline: 67.57,
-    current: 67.57,
+  assert.deepEqual(checkCoverage({ report: coverageReport("67.05"), baseline: 67.05 }), {
+    baseline: 67.05,
+    current: 67.05,
     delta: 0,
   })
 })
 
 test("RT-4 rejects a coverage regression", () => {
   assert.throws(
-    () => checkCoverage({ report: coverageReport("67.56"), baseline: 67.57 }),
+    () => checkCoverage({ report: coverageReport("67.04"), baseline: 67.05 }),
     /coverage regression/,
   )
 })
