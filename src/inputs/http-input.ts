@@ -75,15 +75,75 @@ export const validateHttpInputConfig = (
   );
 
 /**
- * Read request body as string
+ * Private error used to distinguish request-body read timeouts from other failures.
  */
-const readBody = (request: IncomingMessage): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    request.on("data", (chunk) => chunks.push(chunk));
-    request.on("end", () => resolve(Buffer.concat(chunks).toString()));
-    request.on("error", reject);
+class RequestBodyTimeoutError extends Error {
+  readonly _tag = "RequestBodyTimeoutError" as const;
+
+  constructor(timeoutMs: number) {
+    super(`Request body timed out after ${timeoutMs}ms`);
+    this.name = "RequestBodyTimeoutError";
+  }
+}
+
+const isRequestBodyTimeoutError = (
+  error: unknown,
+): error is RequestBodyTimeoutError =>
+  error instanceof RequestBodyTimeoutError;
+
+/**
+ * Read request body as string, enforcing an absolute timeout from the start of reading.
+ */
+const readBody = (
+  request: IncomingMessage,
+  timeoutMs: number,
+): Promise<string> => {
+  let resolve!: (value: string) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<string>((res, rej) => {
+    resolve = res;
+    reject = rej;
   });
+  const chunks: Buffer[] = [];
+  let settled = false;
+
+  const onData = (chunk: Buffer | string) => {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  };
+
+  const cleanup = () => {
+    clearTimeout(timer);
+    request.removeListener("data", onData);
+    request.removeListener("end", onEnd);
+    request.removeListener("error", onError);
+  };
+
+  const settle = (action: () => void) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    cleanup();
+    action();
+  };
+
+  const onEnd = () => {
+    settle(() => resolve(Buffer.concat(chunks).toString()));
+  };
+
+  const onError = (error: Error) => {
+    settle(() => reject(error));
+  };
+
+  const timer = setTimeout(() => {
+    settle(() => reject(new RequestBodyTimeoutError(timeoutMs)));
+  }, timeoutMs);
+
+  request.on("data", onData);
+  request.on("end", onEnd);
+  request.on("error", onError);
+
+  return promise;
 };
 
 /**
@@ -140,6 +200,7 @@ export const createHttpInput = (
 
   const host = config.host ?? "0.0.0.0";
   const path = config.path ?? "/webhook";
+  const timeout = config.timeout ?? 30_000;
   const queueSize = config.queueSize ?? 1_000;
   const overflow = config.overflow ?? "block";
 
@@ -164,8 +225,8 @@ export const createHttpInput = (
         return;
       }
 
-      // Read request body
-      const body = await readBody(req);
+      // Read request body with configured absolute timeout
+      const body = await readBody(req, timeout);
 
       // Convert to message and measure duration
       const result = await Effect.runPromise(
@@ -197,8 +258,28 @@ export const createHttpInput = (
       res.end("OK");
     } catch (error) {
       metrics.recordError();
-      res.writeHead(500, { "Content-Type": "text/plain" });
-      res.end("Internal Server Error");
+
+      const canWrite = !res.headersSent && !res.writableEnded && !res.destroyed;
+      if (isRequestBodyTimeoutError(error)) {
+        if (canWrite) {
+          res.writeHead(408, {
+            "Content-Type": "text/plain",
+            Connection: "close",
+          });
+          res.end("Request Timeout", () => {
+            // Ensure the request/socket is terminated after the response flushes.
+            if (!req.destroyed) {
+              req.destroy();
+            }
+          });
+        } else if (!req.destroyed) {
+          req.destroy();
+        }
+      } else if (canWrite) {
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("Internal Server Error");
+      }
+
       await Effect.runPromise(
         Effect.logError(`HTTP Input error: ${error}`),
       ).catch(() => undefined);

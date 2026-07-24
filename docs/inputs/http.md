@@ -14,7 +14,7 @@ Receives HTTP POST requests as a webhook server. Each incoming request is conver
 
 - `host`: Host address to bind to (default: "0.0.0.0")
 - `path`: URL path to listen on (default: "/webhook")
-- `timeout`: Request timeout in milliseconds (default: 30000)
+- `timeout`: Absolute deadline in milliseconds for reading an accepted POST request body (default: 30000). Incomplete bodies receive `408 Request Timeout` and the connection closes.
 - `queue_size`: Maximum messages buffered in memory (default: `1000`)
 - `overflow`: `block`, `drop_new`, or `drop_old` (default: `block`)
 
@@ -212,6 +212,7 @@ fetch('http://localhost:8080/webhook', {
 
 - `200 OK`: Request successfully received and queued for processing
 - `404 Not Found`: Wrong URL path or HTTP method
+- `408 Request Timeout`: The configured request-body deadline elapsed before the complete body arrived; the connection is closed
 - `500 Internal Server Error`: Server error during request processing
 
 ## Security Considerations
