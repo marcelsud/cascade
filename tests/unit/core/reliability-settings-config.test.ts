@@ -306,7 +306,11 @@ describe("reliability settings reach connector factories", () => {
     });
   });
 
-  it.each(["%%%not-a-url%%%", "http://streams.example:6379/2"])(
+  it.each([
+    "%%%not-a-url%%%",
+    "http://streams.example:6379/2",
+    "redis:production.example:6380",
+  ])(
     "rejects malformed Redis streams input URL %s without calling factory",
     async (url) => {
       const configPath = await writeTempYaml({
@@ -515,7 +519,11 @@ describe("reliability settings reach connector factories", () => {
     });
   });
 
-  it.each(["%%%not-a-url%%%", "http://streams.example:6379/2"])(
+  it.each([
+    "%%%not-a-url%%%",
+    "http://streams.example:6379/2",
+    "redis:production.example:6380",
+  ])(
     "rejects malformed Redis streams output URL %s without calling factory",
     async (url) => {
       const configPath = await writeTempYaml({

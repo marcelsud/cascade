@@ -69,6 +69,12 @@ const parseRedisStreamsUrl = (
   url: string,
   context: "input" | "output",
 ): Effect.Effect<RedisStreamsConnection, BuildError> => {
+  // Require authority-form redis:// so opaque paths like redis:host:port
+  // cannot silently resolve to localhost.
+  if (!/^redis:\/\//i.test(url)) {
+    return Effect.fail(new BuildError(`Invalid Redis Streams ${context} URL`));
+  }
+
   let urlObj: URL;
   try {
     urlObj = new URL(url);
