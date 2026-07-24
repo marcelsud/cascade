@@ -50,7 +50,7 @@ export const createDLQRetrySchedule = (
 /**
  * Create a DLQ message with failure information
  */
-const createDLQMessage = (
+export const createDLQMessage = (
   originalMessage: Message,
   error: unknown,
   attemptCount: number,

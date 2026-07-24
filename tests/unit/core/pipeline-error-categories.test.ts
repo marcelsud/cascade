@@ -320,6 +320,153 @@ describe("pipeline error categories", () => {
     expect(outputClosed).toBeGreaterThanOrEqual(1);
   });
 
+  it("starts fatal drain timeout before blocked processor DLQ send completes", async () => {
+    const originalFatal = new CategorizedTestError("processor poison", "fatal");
+    const primarySends: unknown[] = [];
+    let dlqAttempts = 0;
+
+    const result = await Effect.runPromise(
+      run(
+        {
+          name: "fatal-before-blocked-dlq",
+          input: {
+            name: "three",
+            stream: Stream.fromIterable(messages(0, 1, 2)),
+          },
+          processors: [
+            {
+              name: "fatal-on-first",
+              process: (msg) =>
+                msg.content === 0
+                  ? Effect.fail(originalFatal)
+                  : Effect.succeed(msg),
+            },
+          ],
+          output: {
+            name: "primary",
+            send: (msg) =>
+              Effect.sync(() => {
+                primarySends.push(msg.content);
+              }),
+          },
+          dlqOutput: {
+            name: "blocked-dlq",
+            send: () => {
+              dlqAttempts += 1;
+              return Effect.never;
+            },
+          },
+          backpressure: { maxConcurrentMessages: 1 },
+        },
+        { shutdownTimeoutMs: 25 },
+      ).pipe(Effect.timeout("1 second")),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.shutdown).toBeUndefined();
+    expect(primarySends).toEqual([]);
+    expect(dlqAttempts).toBe(1);
+    expect(result.stats.processed).toBe(0);
+    expect(result.stats.failed).toBe(1);
+    expect(
+      result.errors?.some(
+        (error) =>
+          error instanceof CategorizedTestError &&
+          error.message === "processor poison",
+      ),
+    ).toBe(true);
+    expect(
+      result.errors?.some(
+        (error) => error instanceof PipelineFatalDrainTimeoutError,
+      ),
+    ).toBe(true);
+  });
+
+  it("records fatal DLQ send failure after intake already halted", async () => {
+    const originalFatal = new CategorizedTestError("processor poison", "fatal");
+    const dlqFatal = new CategorizedTestError("dlq unavailable", "fatal");
+    const primarySends: unknown[] = [];
+    let dlqAttempts = 0;
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const dlqStarted = yield* Deferred.make<void>();
+        const releaseDlq = yield* Deferred.make<void>();
+
+        const fiber = yield* Effect.fork(
+          run({
+            name: "fatal-dlq-after-halt",
+            input: {
+              name: "three",
+              stream: Stream.fromIterable(messages(0, 1, 2)),
+            },
+            processors: [
+              {
+                name: "fatal-on-first",
+                process: (msg) =>
+                  msg.content === 0
+                    ? Effect.fail(originalFatal)
+                    : Effect.succeed(msg),
+              },
+            ],
+            output: {
+              name: "primary",
+              send: (msg) =>
+                Effect.sync(() => {
+                  primarySends.push(msg.content);
+                }),
+            },
+            dlqOutput: {
+              name: "fatal-dlq",
+              send: () =>
+                Effect.gen(function* () {
+                  dlqAttempts += 1;
+                  yield* Deferred.succeed(dlqStarted, undefined);
+                  yield* Deferred.await(releaseDlq);
+                  return yield* Effect.fail(dlqFatal);
+                }),
+            },
+            backpressure: { maxConcurrentMessages: 1 },
+          }),
+        );
+
+        yield* Deferred.await(dlqStarted);
+        yield* Effect.sleep("30 millis");
+        expect(primarySends).toEqual([]);
+        expect(dlqAttempts).toBe(1);
+
+        yield* Deferred.succeed(releaseDlq, undefined);
+        return yield* Fiber.join(fiber);
+      }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.shutdown).toBeUndefined();
+    expect(primarySends).toEqual([]);
+    expect(dlqAttempts).toBe(1);
+    expect(result.stats.processed).toBe(0);
+    expect(result.stats.failed).toBe(1);
+    // Fatal DLQ cause takes precedence for the reported halt cause.
+    expect(
+      result.errors?.[0] instanceof CategorizedTestError &&
+        result.errors[0].message === "dlq unavailable",
+    ).toBe(true);
+    expect(
+      result.errors?.some(
+        (error) =>
+          error instanceof CategorizedTestError &&
+          error.message === "processor poison",
+      ),
+    ).toBe(true);
+    expect(
+      result.errors?.some(
+        (error) =>
+          error instanceof CategorizedTestError &&
+          error.message === "dlq unavailable",
+      ),
+    ).toBe(true);
+  });
+
   it("preserves original fatal when close fails after halt", async () => {
     const fatal = new CategorizedTestError("poison", "fatal");
     const closeError = new Error("close blew up");

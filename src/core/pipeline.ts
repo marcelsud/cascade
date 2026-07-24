@@ -20,6 +20,7 @@ import type {
 } from "./types.js";
 import { runProcessorChain } from "./processor-chain.js";
 import { isFatalError } from "./errors.js";
+import { createDLQMessage } from "./dlq.js";
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -130,7 +131,10 @@ export const run = <E, R>(
     });
     const errorsRef = yield* Ref.make<unknown[]>([]);
     // Internal halt channel — distinct from external graceful shutdown.
-    const fatalHalt = yield* Deferred.make<unknown>();
+    // Signal (void) stops intake immediately; cause may be updated later
+    // (e.g. fatal DLQ send replaces the reported original fatal).
+    const fatalHalt = yield* Deferred.make<void>();
+    const fatalCauseRef = yield* Ref.make<unknown | undefined>(undefined);
     // Ensure input/output close runs at most once across fatal/normal paths.
     const closedRef = yield* Ref.make(false);
 
@@ -183,10 +187,10 @@ export const run = <E, R>(
           }
         };
 
-        // Prefer the original fatal halt cause first when present.
-        const polledFatal = yield* Deferred.poll(fatalHalt);
-        if (polledFatal._tag === "Some") {
-          pushUnique(yield* polledFatal.value);
+        // Prefer the recorded fatal cause first when present.
+        const fatalCause = yield* Ref.get(fatalCauseRef);
+        if (fatalCause !== undefined) {
+          pushUnique(fatalCause);
         }
         for (const error of prior) {
           pushUnique(error);
@@ -206,6 +210,21 @@ export const run = <E, R>(
       Ref.update(errorsRef, (errors) =>
         errors.includes(error) ? errors : [...errors, error],
       );
+    /** Record/replace fatal cause and stop intake (first signal wins stop). */
+    const signalFatalHalt = (
+      cause: unknown,
+      mode: "first" | "replace" = "first",
+    ) =>
+      Effect.gen(function* () {
+        yield* Ref.update(fatalCauseRef, (current) => {
+          if (current === undefined || mode === "replace") {
+            return cause;
+          }
+          return current;
+        });
+        yield* Deferred.succeed(fatalHalt, undefined).pipe(Effect.asVoid);
+      });
+
 
     // Close once across normal completion and fatal-timeout interrupt paths.
     // If the fatal watchdog interrupts a close already in progress, leave it
@@ -233,45 +252,82 @@ export const run = <E, R>(
     const maxConcurrentOutputs =
       pipeline.backpressure?.maxConcurrentOutputs ?? 5;
 
-    const processMessage = (msg: Message) =>
-      pipe(
+    const processMessage = (msg: Message) => {
+      const recordMessageFailure = (
+        error: unknown,
+        options: { readonly routeToDlq: boolean },
+      ) =>
+        Effect.gen(function* () {
+          yield* Ref.update(statsRef, (stats) => ({
+            ...stats,
+            failed: stats.failed + 1,
+          }));
+          yield* recordError(error);
+          yield* Effect.logError(`Message processing failed: ${error}`);
+
+          // Stop intake immediately on original fatal — do not wait for DLQ.
+          if (isFatalError(error)) {
+            yield* signalFatalHalt(error, "first");
+          }
+
+          // Processor-chain failures only. Output failures stay with withDLQ.
+          if (options.routeToDlq && pipeline.dlqOutput) {
+            yield* Effect.logWarning(
+              `Message ${msg.id} failed during processing, sending to DLQ: ${error}`,
+            );
+
+            const dlqMessage = createDLQMessage(msg, error, 1);
+            yield* pipeline.dlqOutput.send(dlqMessage).pipe(
+              Effect.catchAll((dlqError) =>
+                Effect.gen(function* () {
+                  yield* Effect.logError(
+                    `Failed to send message ${msg.id} to DLQ: ${dlqError}`,
+                  );
+                  // Preserve original failure accounting; also record DLQ failure.
+                  yield* recordError(dlqError);
+                  // Fatal DLQ failures replace the reported halt cause.
+                  if (isFatalError(dlqError)) {
+                    yield* signalFatalHalt(dlqError, "replace");
+                  }
+                }),
+              ),
+            );
+          }
+        });
+
+      return pipe(
         runProcessorChain(msg, pipeline.processors),
         Effect.flatMap((messages) =>
-          Effect.forEach(
-            messages,
-            (message) =>
-              pipe(
-                pipeline.output.send(message),
-                Effect.tap(() =>
-                  Ref.update(statsRef, (stats) => ({
-                    ...stats,
-                    processed: stats.processed + 1,
-                  })),
+          pipe(
+            Effect.forEach(
+              messages,
+              (message) =>
+                pipe(
+                  pipeline.output.send(message),
+                  Effect.tap(() =>
+                    Ref.update(statsRef, (stats) => ({
+                      ...stats,
+                      processed: stats.processed + 1,
+                    })),
+                  ),
                 ),
-              ),
-            { concurrency: maxConcurrentOutputs },
+              { concurrency: maxConcurrentOutputs },
+            ),
+            // Ack only after processors + primary output succeed.
+            Effect.tap(() => (msg.ack ? msg.ack() : Effect.void)),
+            Effect.catchAll((error) =>
+              recordMessageFailure(error, { routeToDlq: false }),
+            ),
           ),
         ),
-        Effect.tap(() => (msg.ack ? msg.ack() : Effect.void)),
         Effect.catchAll((error) =>
-          Effect.gen(function* () {
-            yield* Ref.update(statsRef, (stats) => ({
-              ...stats,
-              failed: stats.failed + 1,
-            }));
-            yield* recordError(error);
-            yield* Effect.logError(`Message processing failed: ${error}`);
-
-            if (isFatalError(error)) {
-              // Signal internal halt; already-accepted workers may still drain.
-              yield* Deferred.succeed(fatalHalt, error).pipe(Effect.asVoid);
-            }
-          }),
+          recordMessageFailure(error, { routeToDlq: true }),
         ),
         Effect.withSpan("process-message", {
           attributes: { messageId: msg.id },
         }),
       );
+    };
 
     const execution = Effect.scoped(
       Effect.gen(function* () {
@@ -329,7 +385,7 @@ export const run = <E, R>(
               }));
               yield* recordError(error);
               if (isFatalError(error)) {
-                yield* Deferred.succeed(fatalHalt, error).pipe(Effect.asVoid);
+                yield* signalFatalHalt(error, "first");
               }
             }),
           ),
@@ -348,9 +404,10 @@ export const run = <E, R>(
 
         const stats = yield* Ref.get(statsRef);
         const errors = yield* Ref.get(errorsRef);
-        const polledFatal = yield* Deferred.poll(fatalHalt);
-        const resolvedFatal =
-          polledFatal._tag === "Some" ? yield* polledFatal.value : undefined;
+        const fatalDone = yield* Deferred.isDone(fatalHalt);
+        const resolvedFatal = fatalDone
+          ? yield* Ref.get(fatalCauseRef)
+          : undefined;
 
         const finalStats: PipelineStats = {
           processed: stats.processed,

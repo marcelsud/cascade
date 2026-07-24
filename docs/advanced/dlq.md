@@ -39,6 +39,12 @@ internally during each DLQ-level attempt. When the final output failure is
 intermittent, an HTTP output configured with `X` retries and a DLQ configured
 with `Y` retries may make up to `(X + 1) × (Y + 1)` destination attempts.
 
+Terminal processor-chain failures bypass the primary output and are copied
+directly to the configured DLQ once, after any retry behavior owned by that
+processor has finished. `dlq.max_retries` applies only to primary output sends;
+it does not re-run processors. The failed input remains failed for pipeline
+accounting and is not acknowledged, even when the DLQ copy succeeds.
+
 ## Examples
 
 ### Basic DLQ Configuration
@@ -116,13 +122,15 @@ dlq:
 
 ## How It Works
 
-1. **Initial Send**: Message is sent to the primary output
-2. **Classification**: The failure is classified as intermittent, logical, or fatal
-3. **Eligible Retry**: Only intermittent failures use the configured retry schedule
-4. **DLQ Enrichment**: Failure metadata records the actual primary attempt count
-5. **DLQ Send**: The failed message is sent to the configured DLQ output
-6. **Resolution**: Logical and exhausted intermittent failures resolve after a successful DLQ copy
-7. **Fatal Halt**: Fatal failures remain failed after the DLQ copy, stopping pipeline intake
+1. **Processing**: Processors transform the input message
+2. **Processor Failure**: A terminal processor-chain failure skips the primary output and acknowledgement, then sends one enriched copy directly to the DLQ
+3. **Initial Output Send**: A successfully processed message is sent to the primary output
+4. **Classification**: An output failure is classified as intermittent, logical, or fatal
+5. **Eligible Output Retry**: Only intermittent output failures use the configured DLQ retry schedule
+6. **DLQ Enrichment**: Failure metadata records the applicable operation attempt count
+7. **DLQ Send**: The failed message is sent to the configured DLQ output
+8. **Resolution**: Logical and exhausted intermittent output failures resolve after a successful DLQ copy; processor failures remain failed in pipeline accounting
+9. **Fatal Halt**: Fatal failures remain failed after the DLQ copy, stopping pipeline intake
 
 ## DLQ Message Metadata
 
@@ -134,7 +142,7 @@ When a message fails and is sent to the DLQ, it includes additional metadata:
 | `dlqReason` | string | Error message that caused the failure |
 | `dlqStack` | string | Full error stack trace for debugging |
 | `dlqTimestamp` | number | Unix timestamp when failure occurred |
-| `dlqAttempts` | number | Total send attempts, including the initial attempt and all retries |
+| `dlqAttempts` | number | Operation attempt count: `1` for processor-chain failures, or total primary output send attempts including retries |
 | `originalMessageId` | string | ID of the original message |
 
 ### Example DLQ Message
