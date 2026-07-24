@@ -50,7 +50,7 @@ export const createDLQRetrySchedule = (
 /**
  * Create a DLQ message with failure information
  */
-const createDLQMessage = (
+export const createDLQMessage = (
   originalMessage: Message,
   error: unknown,
   attemptCount: number,
@@ -162,6 +162,7 @@ export const withDLQ = <E>(config: DLQConfig<E>): Output<E | DLQError> => {
         : undefined,
     getMetrics: config.output.getMetrics,
     getDLQMetrics: config.dlq?.getMetrics,
+    getDLQOutput: config.dlq ? () => config.dlq : undefined,
   };
 };
 
@@ -191,5 +192,6 @@ export const withBackpressure = <E>(
     close: config.output.close,
     getMetrics: config.output.getMetrics,
     getDLQMetrics: config.output.getDLQMetrics,
+    getDLQOutput: config.output.getDLQOutput,
   };
 };

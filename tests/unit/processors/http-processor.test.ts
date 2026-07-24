@@ -1,8 +1,16 @@
 import { describe, it, expect } from "vitest";
 import { createServer, type Server } from "node:http";
-import { Effect } from "effect";
-import { createHttpProcessor } from "../../../src/processors/http-processor.js";
-import { createMessage } from "../../../src/core/types.js";
+import { Effect, Stream } from "effect";
+import {
+  createHttpProcessor,
+  HttpProcessorError,
+} from "../../../src/processors/http-processor.js";
+import { run } from "../../../src/core/pipeline.js";
+import {
+  createMessage,
+  type Message,
+  type Output,
+} from "../../../src/core/types.js";
 describe("HttpProcessor", () => {
   describe("Configuration Validation", () => {
     it("should create processor with valid GET configuration", () => {
@@ -423,6 +431,202 @@ describe("HttpProcessor", () => {
         await new Promise<void>((resolve, reject) => {
           server.close((error) => (error ? reject(error) : resolve()));
         });
+      }
+    });
+  });
+
+  describe("HTTP status classification and retry", () => {
+    const startStatusServer = async (
+      statusCode: number,
+    ): Promise<{
+      server: Server;
+      baseUrl: string;
+      getRequestCount: () => number;
+    }> => {
+      let requestCount = 0;
+      const server = createServer((_req, res) => {
+        requestCount += 1;
+        res.statusCode = statusCode;
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ status: statusCode }));
+      });
+
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", () => resolve());
+      });
+
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Failed to bind local HTTP test server");
+      }
+
+      return {
+        server,
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        getRequestCount: () => requestCount,
+      };
+    };
+
+    const closeServer = async (server: Server): Promise<void> => {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    };
+
+    it("succeeds on 200 and retains message/result behavior", async () => {
+      const { server, baseUrl, getRequestCount } = await startStatusServer(200);
+
+      try {
+        const processor = createHttpProcessor({
+          url: `${baseUrl}/ok`,
+          method: "GET",
+          resultKey: "http_response",
+          timeout: 2000,
+          maxRetries: 1,
+        });
+
+        const msg = createMessage({ id: "ok-1" }, { source: "status-test" });
+        const result = await Effect.runPromise(processor.process(msg));
+
+        expect(result.id).toBe(msg.id);
+        expect(result.content).toEqual({ id: "ok-1" });
+        expect(result.metadata.source).toBe("status-test");
+        expect(result.metadata.httpProcessorApplied).toBe(true);
+        expect(result.metadata.http_response).toEqual({ status: 200 });
+        expect(getRequestCount()).toBe(1);
+      } finally {
+        await closeServer(server);
+      }
+    });
+
+    it("fails 404 as logical after exactly one request despite retries", async () => {
+      const { server, baseUrl, getRequestCount } = await startStatusServer(404);
+
+      try {
+        const processor = createHttpProcessor({
+          url: `${baseUrl}/missing`,
+          method: "GET",
+          timeout: 2000,
+          maxRetries: 1,
+        });
+
+        const error = await Effect.runPromise(
+          processor.process(createMessage({ id: "missing" })).pipe(Effect.flip),
+        );
+
+        expect(error).toBeInstanceOf(HttpProcessorError);
+        expect(error.category).toBe("logical");
+        expect(error.shouldRetry).toBe(false);
+        expect(getRequestCount()).toBe(1);
+      } finally {
+        await closeServer(server);
+      }
+    });
+
+    it.each([
+      [429, "intermittent"],
+      [503, "intermittent"],
+    ] as const)(
+      "fails %i as %s and makes maxRetries + 1 requests",
+      async (statusCode, category) => {
+        const { server, baseUrl, getRequestCount } =
+          await startStatusServer(statusCode);
+
+        try {
+          const maxRetries = 1;
+          const processor = createHttpProcessor({
+            url: `${baseUrl}/retry`,
+            method: "GET",
+            timeout: 2000,
+            maxRetries,
+          });
+
+          const error = await Effect.runPromise(
+            processor
+              .process(createMessage({ id: `status-${statusCode}` }))
+              .pipe(Effect.flip),
+          );
+
+          expect(error).toBeInstanceOf(HttpProcessorError);
+          expect(error.category).toBe(category);
+          expect(error.shouldRetry).toBe(true);
+          expect(getRequestCount()).toBe(maxRetries + 1);
+        } finally {
+          await closeServer(server);
+        }
+      },
+    );
+
+    it("routes terminal HTTP processor failure through pipeline DLQ once", async () => {
+      const { server, baseUrl, getRequestCount } = await startStatusServer(404);
+
+      try {
+        const primarySends: Message[] = [];
+        const dlqSends: Message[] = [];
+        const inputMessage = createMessage(
+          { orderId: "order-404" },
+          { source: "http-dlq-test" },
+        );
+
+        const primaryOutput: Output = {
+          name: "primary-capture",
+          send: (msg) =>
+            Effect.sync(() => {
+              primarySends.push(msg);
+            }),
+        };
+
+        const dlqOutput: Output = {
+          name: "dlq-capture",
+          send: (msg) =>
+            Effect.sync(() => {
+              dlqSends.push(msg);
+            }),
+        };
+
+        const result = await Effect.runPromise(
+          run({
+            name: "http-processor-dlq",
+            input: {
+              name: "one",
+              stream: Stream.make(inputMessage),
+            },
+            processors: [
+              createHttpProcessor({
+                url: `${baseUrl}/missing`,
+                method: "GET",
+                timeout: 2000,
+                maxRetries: 1,
+              }),
+            ],
+            output: primaryOutput,
+            dlqOutput,
+            backpressure: { maxConcurrentMessages: 1 },
+          }),
+        );
+
+        expect(result.stats.processed).toBe(0);
+        expect(result.stats.failed).toBe(1);
+        expect(primarySends).toHaveLength(0);
+        expect(dlqSends).toHaveLength(1);
+
+        const dlqMessage = dlqSends[0];
+        expect(dlqMessage.id).toBe(inputMessage.id);
+        expect(dlqMessage.content).toEqual({ orderId: "order-404" });
+        expect(dlqMessage.metadata.source).toBe("http-dlq-test");
+        expect(dlqMessage.metadata.dlq).toBe(true);
+        expect(dlqMessage.metadata.originalMessageId).toBe(inputMessage.id);
+        expect(dlqMessage.metadata.dlqAttempts).toBe(1);
+        expect(String(dlqMessage.metadata.dlqReason)).toContain(
+          "HTTP request failed",
+        );
+        expect(typeof dlqMessage.metadata.dlqTimestamp).toBe("number");
+        expect(getRequestCount()).toBe(1);
+        expect(
+          result.errors?.some((error) => error instanceof HttpProcessorError),
+        ).toBe(true);
+      } finally {
+        await closeServer(server);
       }
     });
   });

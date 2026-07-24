@@ -56,6 +56,12 @@ export interface Output<E = never, R = never> {
   readonly getMetrics?: () => OutputMetrics;
   /** Metrics for a distinct DLQ destination wrapped around this output. */
   readonly getDLQMetrics?: () => OutputMetrics;
+  /**
+   * Raw DLQ destination configured by a wrapper such as withDLQ.
+   * Lifecycle-observation/routing only — never closed separately;
+   * pipeline.output remains the sole close owner.
+   */
+  readonly getDLQOutput?: () => Output<E, R> | undefined;
 }
 
 /**
@@ -80,8 +86,11 @@ export interface Pipeline<E = never, R = never> {
    */
   readonly primaryOutput?: Output<E, R>;
   /**
-   * Unwrapped DLQ destination when buildPipeline installs withDLQ.
-   * Observation-only — never closed separately from pipeline.output.
+   * DLQ destination for terminal failures.
+   * Pipeline routes processor-chain failures here (enriched via createDLQMessage);
+   * withDLQ still owns output-send failure routing when installed.
+   * Observation-only for lifecycle — never closed separately; pipeline.output
+   * remains the sole close owner.
    */
   readonly dlqOutput?: Output<E, R>;
   readonly backpressure?: BackpressureConfig;
