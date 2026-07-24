@@ -457,6 +457,14 @@ input:
     endpoint: "${AWS_ENDPOINT:-}"  # Empty in production
 ```
 
+Environment interpolation is fail-closed for required references:
+
+- `${NAME}` requires a non-empty value. Unset or empty values fail config load with an error that names `NAME`.
+- `${NAME:-}` explicitly defaults to an empty string when unset or empty.
+- `${NAME:-fallback}` uses `fallback` when unset or empty; otherwise the environment value is used (including values like `0`).
+
+Malformed expressions (for example `${123INVALID}`) also fail config load instead of remaining unresolved.
+
 **Local .env:**
 ```
 SQS_QUEUE_URL=http://localhost:4566/000000000000/input-queue
