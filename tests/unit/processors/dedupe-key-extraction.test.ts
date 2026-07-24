@@ -83,7 +83,7 @@ describe("Dedupe Key Extraction", () => {
       expect(extractKey("0", msg)).toBeUndefined();
     });
 
-    it("should extract empty string value as ''" , () => {
+    it("should extract empty string value as ''", () => {
       const msg = createMessage({ key: "" });
       expect(extractKey("key", msg)).toBe("");
     });
@@ -91,10 +91,7 @@ describe("Dedupe Key Extraction", () => {
 
   describe("metadata attribute paths", () => {
     it("should extract top-level metadata field", () => {
-      const msg = createMessage(
-        { value: "payload" },
-        { requestId: "req-789" },
-      );
+      const msg = createMessage({ value: "payload" }, { requestId: "req-789" });
       expect(extractKey("metadata.requestId", msg)).toBe("req-789");
     });
 
@@ -117,58 +114,37 @@ describe("Dedupe Key Extraction", () => {
     });
 
     it("should return undefined for non-existent metadata field", () => {
-      const msg = createMessage(
-        { value: "payload" },
-        { requestId: "req-789" },
-      );
+      const msg = createMessage({ value: "payload" }, { requestId: "req-789" });
       expect(extractKey("metadata.nonExistent", msg)).toBeUndefined();
     });
 
     it("should return undefined for partially valid nested metadata path", () => {
-      const msg = createMessage(
-        { value: "payload" },
-        { headers: {} },
-      );
+      const msg = createMessage({ value: "payload" }, { headers: {} });
       expect(extractKey("metadata.headers.contentType", msg)).toBeUndefined();
     });
 
     it("should return undefined when metadata field is null", () => {
-      const msg = createMessage(
-        { value: "payload" },
-        { requestId: null },
-      );
+      const msg = createMessage({ value: "payload" }, { requestId: null });
       expect(extractKey("metadata.requestId", msg)).toBeUndefined();
     });
 
     it("should stringify numeric metadata values", () => {
-      const msg = createMessage(
-        { value: "payload" },
-        { retryCount: 3 },
-      );
+      const msg = createMessage({ value: "payload" }, { retryCount: 3 });
       expect(extractKey("metadata.retryCount", msg)).toBe("3");
     });
 
     it("should stringify boolean metadata values", () => {
-      const msg = createMessage(
-        { value: "payload" },
-        { isRetry: true },
-      );
+      const msg = createMessage({ value: "payload" }, { isRetry: true });
       expect(extractKey("metadata.isRetry", msg)).toBe("true");
     });
 
     it("should return undefined for bare 'metadata.' with no field name", () => {
-      const msg = createMessage(
-        { value: "payload" },
-        { anything: "value" },
-      );
+      const msg = createMessage({ value: "payload" }, { anything: "value" });
       expect(extractKey("metadata.", msg)).toBeUndefined();
     });
 
     it("should extract empty string metadata value as ''", () => {
-      const msg = createMessage(
-        { value: "payload" },
-        { tag: "" },
-      );
+      const msg = createMessage({ value: "payload" }, { tag: "" });
       expect(extractKey("metadata.tag", msg)).toBe("");
     });
   });

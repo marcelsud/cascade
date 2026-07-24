@@ -1,22 +1,19 @@
-# Redis Pub/Sub Consumer - Subscribes to channel and writes to file
-name: redis-pubsub-consumer
-
+# Redis Pub/Sub Consumer - Subscribes to channel and captures messages
 input:
-  type: redis_pubsub
-  host: localhost
-  port: 6380
-  channels:
-    - "test-channel"
+  redis_pubsub:
+    host: localhost
+    port: 6380
+    channels:
+      - "test-channel"
 
-processors:
-  - type: logging
-    level: info
-
-  - type: metadata
-    fields:
-      consumed: true
-      consumedAt: "{{timestamp}}"
+pipeline:
+  processors:
+    - log:
+        level: "info"
+        include_content: true
+    - metadata:
+        add_timestamp: true
 
 output:
-  type: capture
-  file: "tmp-e2e-tests/results/redis-pubsub-received.json"
+  capture:
+    max_messages: 5

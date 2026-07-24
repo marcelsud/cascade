@@ -1,5 +1,3 @@
-name: http-processor-error-handling
-
 input:
   generate:
     count: 2
@@ -10,21 +8,21 @@ input:
 
 pipeline:
   processors:
-    # Test HTTP 500 error (intermittent, should retry)
+    # Flaky 500 once then 200 per testId (proves retryable 5xx recovery)
     - http:
-        url: "http://localhost:8081/status/500"
+        url: "http://localhost:8081/flaky/500?testId={{content.testId}}"
         method: "GET"
         result_key: "error500Response"
         timeout: 5000
-        maxRetries: 1
+        max_retries: 1
 
-    # Test HTTP 404 error (logical error, should NOT retry)
+    # Logical 404 must fail without retry after flaky recovery
     - http:
-        url: "http://localhost:8081/status/404"
+        url: "http://localhost:8081/status/404?testId={{content.testId}}"
         method: "GET"
         result_key: "error404Response"
         timeout: 5000
-        maxRetries: 1
+        max_retries: 1
 
     - log:
         level: "info"

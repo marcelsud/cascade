@@ -129,9 +129,7 @@ export const withDLQ = <E>(config: DLQConfig<E>): Output<E | DLQError> => {
                 closeOutputs.map((close) => Effect.either(close())),
                 { concurrency: "unbounded" },
               );
-              const failure = results.find(
-                (result) => result._tag === "Left",
-              );
+              const failure = results.find((result) => result._tag === "Left");
               if (failure?._tag === "Left") {
                 return yield* Effect.fail(failure.left);
               }

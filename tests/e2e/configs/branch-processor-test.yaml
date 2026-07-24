@@ -1,5 +1,3 @@
-name: branch-processor-test
-
 input:
   generate:
     count: 3
@@ -19,6 +17,11 @@ pipeline:
           - log:
               level: "info"
               include_content: true
+
+    # Assert original content is preserved alongside branch metadata
+    - assert:
+        condition: content.orderId = metadata.branchResult.content.orderId
+        error: Branch did not preserve original content
 
     # Log the final message with branch result
     - log:

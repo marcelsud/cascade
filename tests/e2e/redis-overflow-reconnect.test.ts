@@ -46,13 +46,13 @@ describe("Redis overflow and reconnect behavior", () => {
       queueSize: 3,
       overflow: "drop_old",
     });
-    const capture: CaptureOutput = await Effect.runPromise(createCaptureOutput());
+    const capture: CaptureOutput = await Effect.runPromise(
+      createCaptureOutput(),
+    );
     const slowOutput: Output = {
       name: "slow-capture-output",
       send: (message) =>
-        Effect.sleep("100 millis").pipe(
-          Effect.zipRight(capture.send(message)),
-        ),
+        Effect.sleep("100 millis").pipe(Effect.zipRight(capture.send(message))),
       close: capture.close,
       getMetrics: capture.getMetrics,
     };
@@ -68,9 +68,9 @@ describe("Redis overflow and reconnect behavior", () => {
     activeRun = running;
     await waitFor(
       async () =>
-        ((await resources.redis.pubsub("channels", channel)) as string[]).includes(
-          channel,
-        ),
+        (
+          (await resources.redis.pubsub("channels", channel)) as string[]
+        ).includes(channel),
       "Redis pub/sub subscription",
     );
 
@@ -91,7 +91,9 @@ describe("Redis overflow and reconnect behavior", () => {
     const delivered = await Effect.runPromise(capture.getMessages());
     expect(result.shutdown).toBe("graceful");
     expect(result.metrics?.input?.messagesDropped).toBeGreaterThan(0);
-    expect(delivered.some((message) => message.content.index === 19)).toBe(true);
+    expect(delivered.some((message) => message.content.index === 19)).toBe(
+      true,
+    );
     expect(delivered.length).toBeLessThan(20);
   }, 20_000);
 

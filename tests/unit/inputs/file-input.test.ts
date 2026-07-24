@@ -33,9 +33,9 @@ const waitUntil = async (
 
 afterEach(async () => {
   await Promise.all(
-    createdPaths.splice(0).map((target) =>
-      fs.rm(target, { recursive: true, force: true }),
-    ),
+    createdPaths
+      .splice(0)
+      .map((target) => fs.rm(target, { recursive: true, force: true })),
   );
 });
 

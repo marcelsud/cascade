@@ -1,33 +1,29 @@
-version: '3.8'
+version: "3.8"
 
 services:
-  # HTTP server that can receive webhooks and respond to requests
-  httpbin:
-    image: kennethreitz/httpbin
-    container_name: e2e-httpbin
+  http-observer:
+    image: node:22-alpine
+    container_name: e2e-http-observer
+    command: ["node", "/app/http-test-server.mjs"]
+    volumes:
+      - ../../helpers/http-test-server.mjs:/app/http-test-server.mjs:ro
     ports:
-      - "8081:80"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost/status/200"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-    networks:
-      - e2e-network
-
-  # Simple HTTP echo server for testing
-  echo-server:
-    image: ealen/echo-server:latest
-    container_name: e2e-echo
-    ports:
-      - "8082:80"
+      - "8081:8081"
     environment:
-      - PORT=80
+      - PORT=8081
+      - HOST=0.0.0.0
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost/"]
-      interval: 5s
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8081/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 2s
       timeout: 3s
-      retries: 5
+      retries: 15
+      start_period: 2s
     networks:
       - e2e-network
 

@@ -1,72 +1,73 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
+
+ROOT_DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
+cd "$ROOT_DIR"
+
+COMPOSE_FILE="tests/e2e/infrastructure/http/docker-compose.yml"
+LOG_FILE="/tmp/http-processor-retry.log"
+CONFIG_PATH="${CASCADE_E2E_CONFIG:-tests/e2e/configs/http-processor-retry-test.yaml}"
+
+cleanup() {
+  docker-compose -f "$COMPOSE_FILE" down -v >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
 
 echo -e "${YELLOW}=== HTTP Processor Retry & Timeout E2E Test ===${NC}\n"
+echo -e "Config: ${CONFIG_PATH}"
 
-# Start HTTP test servers
-echo -e "${YELLOW}Starting HTTP test servers...${NC}"
-cd tests/e2e/infrastructure/http
-docker-compose down -v 2>/dev/null || true
-docker-compose up -d
-echo "Waiting for HTTP servers to be ready..."
-sleep 5
+echo -e "${YELLOW}Starting HTTP observer...${NC}"
+docker-compose -f "$COMPOSE_FILE" down -v >/dev/null 2>&1 || true
+docker-compose -f "$COMPOSE_FILE" up -d --force-recreate
 
-# Check if httpbin is ready
-if ! curl -s http://localhost:8081/status/200 > /dev/null 2>&1; then
-    echo -e "${RED}HTTP test server is not ready${NC}"
-    docker-compose logs
-    exit 1
+echo "Waiting for HTTP observer health..."
+ready=0
+for i in $(seq 1 30); do
+  if curl --fail --silent "http://127.0.0.1:8081/health" >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+if [ "$ready" -ne 1 ]; then
+  echo -e "${RED}HTTP observer is not ready${NC}"
+  docker-compose -f "$COMPOSE_FILE" logs || true
+  exit 1
 fi
-echo -e "${GREEN}HTTP test servers ready${NC}\n"
+echo -e "${GREEN}HTTP observer ready${NC}\n"
 
-# Go back to project root
-cd ../../../..
-
-# Run the HTTP processor retry pipeline
 echo -e "${YELLOW}Running HTTP processor retry pipeline...${NC}"
-timeout 60s node dist/cli.js run tests/e2e/configs/http-processor-retry-test.yaml > /tmp/http-processor-retry.log 2>&1 &
-PIPELINE_PID=$!
+set +e
+# max_retries:2 with exponential 1s schedule can take several seconds per message
+timeout -k 5s 30s node dist/cli.js run "$CONFIG_PATH" >"$LOG_FILE" 2>&1
+CLI_STATUS=$?
+set -e
 
-# Wait for pipeline to complete (needs time for delays and retries)
-sleep 50
+cat "$LOG_FILE"
 
-# Kill if still running
-kill $PIPELINE_PID 2>/dev/null || true
-wait $PIPELINE_PID 2>/dev/null || true
+if [ "$CLI_STATUS" -ne 1 ]; then
+  echo -e "${RED}Expected CLI exit 1, got ${CLI_STATUS}${NC}"
+  curl -s "http://127.0.0.1:8081/__requests" || true
+  exit 1
+fi
 
-# Show pipeline output
-cat /tmp/http-processor-retry.log
+node tests/e2e/helpers/assert-http-requests.mjs processor-retry
 
-# Check retry behavior
-# /status/503 should trigger retries
-RETRY_RESPONSE_COUNT=$(grep -c '"retryResponse"' /tmp/http-processor-retry.log || echo "0")
-RETRY_ATTEMPT_COUNT=$(grep -c "Retrying" /tmp/http-processor-retry.log || echo "0")
-SUCCESS_COUNT=$(grep -c "Processed: 2 messages" /tmp/http-processor-retry.log || echo "0")
+SUMMARY=$(grep -c "Pipeline completed: 0 processed, 2 failed" "$LOG_FILE" || true)
 
 echo -e "\n${YELLOW}Results:${NC}"
-echo -e "503 retry responses: ${RETRY_RESPONSE_COUNT}"
-echo -e "Retry attempts: ${RETRY_ATTEMPT_COUNT}"
-echo -e "Pipeline completed: ${SUCCESS_COUNT}"
+echo -e "CLI exit: ${CLI_STATUS}"
+echo -e "Failure summary lines: ${SUMMARY}"
 
-# Cleanup
-docker-compose -f tests/e2e/infrastructure/http/docker-compose.yml down -v
-
-# We expect HTTP 503 errors to be handled and retry attempts to be made
-if [ "$RETRY_RESPONSE_COUNT" -ge "1" ]; then
-    echo -e "\n${GREEN}✓ HTTP Processor Retry test PASSED${NC}"
-    echo -e "  - HTTP 503 errors handled"
-    echo -e "  - Retry mechanism configured correctly"
-    echo -e "  - Pipeline completed successfully"
-    exit 0
-else
-    echo -e "\n${RED}✗ HTTP Processor Retry test FAILED${NC}"
-    echo -e "  - Expected 503 retry responses, got ${RETRY_RESPONSE_COUNT}"
-    echo -e "  - Retry attempts: ${RETRY_ATTEMPT_COUNT}"
-    exit 1
+if [ "$SUMMARY" -eq 1 ]; then
+  echo -e "\n${GREEN}✓ HTTP Processor Retry test PASSED${NC}"
+  exit 0
 fi
+
+echo -e "\n${RED}✗ HTTP Processor Retry test FAILED${NC}"
+exit 1

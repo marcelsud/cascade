@@ -1,5 +1,3 @@
-name: http-processor-enrichment
-
 input:
   generate:
     count: 2
@@ -11,10 +9,13 @@ input:
 pipeline:
   processors:
     - http:
-        url: "http://localhost:8081/uuid"
+        url: "http://localhost:8081/uuid?testId={{content.userId}}"
         method: "GET"
         result_key: "enrichment"
         timeout: 5000
+    - assert:
+        condition: metadata.enrichment.uuid = "e2e-uuid" and metadata.enrichment.testId = content.userId
+        error: HTTP enrichment response mismatch
     - log:
         level: "info"
         include_content: true

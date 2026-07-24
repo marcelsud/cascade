@@ -20,9 +20,7 @@ export const observeRedisClientErrors = (
   });
 };
 
-export const closeRedisClient = async (
-  client: RedisClient,
-): Promise<void> => {
+export const closeRedisClient = async (client: RedisClient): Promise<void> => {
   if (client.status === "ready") {
     await client.quit();
   } else {

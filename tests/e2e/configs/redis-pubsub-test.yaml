@@ -1,4 +1,3 @@
-name: redis-pubsub-e2e-test
 
 input:
   generate:

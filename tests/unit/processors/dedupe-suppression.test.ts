@@ -26,10 +26,7 @@ const makeMsg = (
 const runProcess = (
   processor: ReturnType<typeof createDedupeProcessor>,
   msg: Message,
-) =>
-  Effect.runPromise(
-    Effect.either(processor.process(msg)),
-  );
+) => Effect.runPromise(Effect.either(processor.process(msg)));
 
 describe("Dedupe Suppression, First-Seen Pass-Through, and Expiry", () => {
   afterEach(() => {

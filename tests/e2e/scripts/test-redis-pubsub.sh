@@ -32,6 +32,7 @@ cd ../../../..
 # Subscribe to the channel and capture messages
 echo -e "${YELLOW}Starting Redis subscriber in background...${NC}"
 RECEIVED_FILE="tests/e2e/results/redis-pubsub-received.txt"
+mkdir -p tests/e2e/results
 > "$RECEIVED_FILE"  # Clear file
 
 # Use redis-cli to subscribe and save messages

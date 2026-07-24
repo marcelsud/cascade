@@ -23,15 +23,15 @@ const makeMsg = (
 const runProcess = (
   processor: ReturnType<typeof createDedupeProcessor>,
   msg: Message,
-) =>
-  Effect.runPromise(
-    Effect.either(processor.process(msg)),
-  );
+) => Effect.runPromise(Effect.either(processor.process(msg)));
 
 /**
  * Helper: assert that result is Right and the message passed through.
  */
-const expectPassThrough = (result: { _tag: string; right?: unknown }, msgId: string) => {
+const expectPassThrough = (
+  result: { _tag: string; right?: unknown },
+  msgId: string,
+) => {
   expect(result._tag).toBe("Right");
   if (result._tag === "Right") {
     expect(result.right).toEqual(expect.objectContaining({ id: msgId }));
@@ -208,8 +208,8 @@ describe("Dedupe Eviction Behavior", () => {
 
       const metrics = await Effect.runPromise(processor.getMetrics());
       expect(metrics.dedupeMisses).toBe(4); // A, B, C, A (re-insert)
-      expect(metrics.dedupeHits).toBe(1);   // A duplicate
-      expect(metrics.activeKeys).toBe(2);   // C, A
+      expect(metrics.dedupeHits).toBe(1); // A duplicate
+      expect(metrics.activeKeys).toBe(2); // C, A
     });
 
     it("should evict by insertion order, not by access order", async () => {
@@ -301,21 +301,36 @@ describe("Dedupe Eviction Behavior", () => {
       });
 
       // Insert req-1, req-2. State: {req-1, req-2}
-      await runProcess(processor, makeMsg("m1", { data: "a" }, { requestId: "req-1" }));
-      await runProcess(processor, makeMsg("m2", { data: "b" }, { requestId: "req-2" }));
+      await runProcess(
+        processor,
+        makeMsg("m1", { data: "a" }, { requestId: "req-1" }),
+      );
+      await runProcess(
+        processor,
+        makeMsg("m2", { data: "b" }, { requestId: "req-2" }),
+      );
 
       // Third key evicts req-1. State: {req-2, req-3}
-      await runProcess(processor, makeMsg("m3", { data: "c" }, { requestId: "req-3" }));
+      await runProcess(
+        processor,
+        makeMsg("m3", { data: "c" }, { requestId: "req-3" }),
+      );
 
       const metrics = await Effect.runPromise(processor.getMetrics());
       expect(metrics.activeKeys).toBe(2);
 
       // req-1 was evicted — passes through
-      const r = await runProcess(processor, makeMsg("m4", { data: "d" }, { requestId: "req-1" }));
+      const r = await runProcess(
+        processor,
+        makeMsg("m4", { data: "d" }, { requestId: "req-1" }),
+      );
       expectPassThrough(r, "m4");
 
       // req-3 still tracked (newest, not evicted by req-1 re-insert since req-2 is oldest)
-      const r3 = await runProcess(processor, makeMsg("m5", { data: "e" }, { requestId: "req-3" }));
+      const r3 = await runProcess(
+        processor,
+        makeMsg("m5", { data: "e" }, { requestId: "req-3" }),
+      );
       expectSuppressed(r3);
     });
 
@@ -338,10 +353,16 @@ describe("Dedupe Eviction Behavior", () => {
       expect(metrics.dedupeHits).toBe(0);
 
       // Only the last 2 keys (key-8 and key-9) should be tracked
-      const rOld = await runProcess(processor, makeMsg("check-old", { id: "key-0" }));
+      const rOld = await runProcess(
+        processor,
+        makeMsg("check-old", { id: "key-0" }),
+      );
       expectPassThrough(rOld, "check-old"); // evicted long ago
 
-      const rRecent = await runProcess(processor, makeMsg("check-recent", { id: "key-9" }));
+      const rRecent = await runProcess(
+        processor,
+        makeMsg("check-recent", { id: "key-9" }),
+      );
       expectSuppressed(rRecent); // still tracked
     });
   });

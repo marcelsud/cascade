@@ -257,9 +257,7 @@ describe("SQSOutput", () => {
 
       const first = Effect.runFork(output.send(createMessage({ id: 1 })));
       await new Promise((resolve) => setTimeout(resolve, 5));
-      const coordinator = Effect.runFork(
-        output.send(createMessage({ id: 2 })),
-      );
+      const coordinator = Effect.runFork(output.send(createMessage({ id: 2 })));
       await vi.waitFor(() => expect(batchCalls(mockClient)).toHaveLength(1));
 
       await Effect.runPromise(Fiber.interrupt(coordinator));

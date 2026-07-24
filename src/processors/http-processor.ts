@@ -83,19 +83,49 @@ export const HttpProcessorConfigSchema = Schema.Struct({
   ),
 });
 
+type MessageContext = {
+  readonly content: unknown;
+  readonly meta: Record<string, unknown>;
+  readonly message: {
+    readonly id: string;
+    readonly timestamp: number;
+    readonly correlationId?: string;
+  };
+};
+
+type TaggedHttpError = {
+  readonly _tag: string;
+  readonly reason?: string;
+  readonly response?: { readonly status?: number };
+  readonly status?: number;
+  readonly message?: unknown;
+};
+
+/**
+ * Build the exact JSONata evaluation context for one message.
+ * Returned object is immutable per evaluation — no shared .assign() state.
+ */
+const buildMessageContext = (msg: Message): MessageContext => ({
+  content: msg.content,
+  meta: msg.metadata,
+  message: {
+    id: msg.id,
+    timestamp: msg.timestamp,
+    correlationId: msg.correlationId,
+  },
+});
+
 /**
  * Evaluate JSONata template with message context
  * Templates use {{ }} syntax: "https://api.com/users/{{ content.userId }}"
  */
 const evaluateTemplate = (
   template: string,
-  msg: Message,
+  context: MessageContext,
 ): Effect.Effect<string, HttpProcessorError> =>
   Effect.gen(function* () {
-    // Extract JSONata expressions from {{ }} and evaluate each one
     const evaluatedTemplate = yield* Effect.tryPromise({
       try: async () => {
-        // Replace {{ expr }} with evaluated values
         let result = template;
         const regex = /\{\{(.+?)\}\}/g;
         const matches = [...template.matchAll(regex)];
@@ -103,18 +133,7 @@ const evaluateTemplate = (
         for (const match of matches) {
           const expr = match[1].trim();
           const expression = jsonata(expr);
-          const value = await expression.evaluate(
-            {},
-            {
-              content: msg.content,
-              meta: msg.metadata,
-              message: {
-                id: msg.id,
-                timestamp: msg.timestamp,
-                correlationId: msg.correlationId,
-              },
-            },
-          );
+          const value = await expression.evaluate(context);
           result = result.replace(match[0], String(value));
         }
 
@@ -129,6 +148,21 @@ const evaluateTemplate = (
     });
 
     return evaluatedTemplate;
+  });
+
+/**
+ * Evaluate header values that may contain {{ }} templates.
+ */
+const evaluateHeaders = (
+  headers: Record<string, string>,
+  context: MessageContext,
+): Effect.Effect<Record<string, string>, HttpProcessorError> =>
+  Effect.gen(function* () {
+    const evaluated: Record<string, string> = {};
+    for (const [key, value] of Object.entries(headers)) {
+      evaluated[key] = yield* evaluateTemplate(value, context);
+    }
+    return evaluated;
   });
 
 /**
@@ -169,29 +203,76 @@ const buildAuthHeaders = (
   return {};
 };
 
+const classifyStatus = (status: number): ErrorCategory | undefined => {
+  if (status >= 500 || status === 429) return "intermittent";
+  if (status >= 400) return "logical";
+  return undefined;
+};
+
 /**
- * Detect error category from HTTP response
+ * Detect error category from HTTP / Effect errors.
+ * Recognizes Effect platform ResponseError with reason "StatusCode".
  */
 const detectHttpErrorCategory = (error: unknown): ErrorCategory => {
   if (error && typeof error === "object" && "_tag" in error) {
-    const tag = (error as any)._tag;
+    const tagged = error as TaggedHttpError;
+    const tag = tagged._tag;
 
     // Network/transport errors - retry
     if (tag === "RequestError" || tag === "Transport") {
       return "intermittent";
     }
 
-    // Status code errors
+    // Effect timeout
+    if (tag === "TimeoutException") {
+      return "intermittent";
+    }
+
+    // Effect platform ResponseError: { _tag: "ResponseError", reason: "StatusCode", response.status }
+    if (tag === "ResponseError") {
+      if (tagged.reason === "StatusCode") {
+        const status = tagged.response?.status;
+        if (typeof status === "number") {
+          const category = classifyStatus(status);
+          if (category) return category;
+        }
+      }
+      // Decode / EmptyBody are logical
+      return "logical";
+    }
+
+    // Legacy / direct status shapes
     if (tag === "StatusCode") {
-      const status = (error as any).status;
-      if (status >= 500) return "intermittent"; // 5xx - retry
-      if (status === 429) return "intermittent"; // Rate limit - retry
-      if (status >= 400) return "logical"; // 4xx - don't retry
+      const status = tagged.status;
+      if (typeof status === "number") {
+        const category = classifyStatus(status);
+        if (category) return category;
+      }
     }
   }
 
   // Use default detection
   return detectCategory(error);
+};
+
+const errorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object" && "message" in error) {
+    const message = (error as TaggedHttpError).message;
+    if (typeof message === "string") return message;
+  }
+  return String(error);
+};
+
+const toHttpProcessorError = (error: unknown): HttpProcessorError => {
+  if (error instanceof HttpProcessorError) {
+    return error;
+  }
+  return new HttpProcessorError(
+    `HTTP request failed: ${errorMessage(error)}`,
+    detectHttpErrorCategory(error),
+    error,
+  );
 };
 
 /**
@@ -220,16 +301,12 @@ export const createHttpProcessor = (
   const maxRetries = config.maxRetries ?? 3;
   const resultKey = config.resultKey ?? "http_response";
 
-  // Build static headers (auth + custom)
+  // Build static auth headers (custom headers may be templated per message)
   const authHeaders = buildAuthHeaders(config.auth);
   const customHeaders = config.headers ?? {};
-  const staticHeaders = {
-    ...authHeaders,
-    ...customHeaders,
-  };
 
   // Compile result mapping if provided
-  let compiledResultMapping: ReturnType<typeof jsonata> | undefined;
+  let compiledResultMapping: jsonata.Expression | undefined;
   if (config.resultMapping) {
     try {
       compiledResultMapping = jsonata(config.resultMapping);
@@ -246,8 +323,10 @@ export const createHttpProcessor = (
     name: "http-processor",
     process: (msg: Message): Effect.Effect<Message, HttpProcessorError> => {
       return Effect.gen(function* () {
+        const context = buildMessageContext(msg);
+
         // Evaluate URL template
-        const url = yield* evaluateTemplate(config.url, msg);
+        const url = yield* evaluateTemplate(config.url, context);
 
         yield* Effect.logDebug(`HTTP Processor: ${method} ${url}`);
 
@@ -257,16 +336,27 @@ export const createHttpProcessor = (
           config.body &&
           (method === "POST" || method === "PUT" || method === "PATCH")
         ) {
-          requestBody = yield* evaluateTemplate(config.body, msg);
+          requestBody = yield* evaluateTemplate(config.body, context);
         }
 
-        // Build HTTP request
-        const client = yield* HttpClient.HttpClient.pipe(
+        // Evaluate custom header templates
+        const evaluatedCustomHeaders = yield* evaluateHeaders(
+          customHeaders,
+          context,
+        );
+        const requestHeaders = {
+          ...authHeaders,
+          ...evaluatedCustomHeaders,
+        };
+
+        // Build HTTP client with 2xx filter inside the retried attempt
+        const rawClient = yield* HttpClient.HttpClient.pipe(
           Effect.provide(NodeHttpClient.layer),
         );
+        const client = HttpClient.filterStatusOk(rawClient);
 
         const baseRequest = HttpClientRequest.make(method)(url).pipe(
-          HttpClientRequest.setHeaders(staticHeaders),
+          HttpClientRequest.setHeaders(requestHeaders),
         );
 
         // Add body if present
@@ -274,35 +364,26 @@ export const createHttpProcessor = (
           ? HttpClientRequest.bodyText(baseRequest, requestBody)
           : baseRequest;
 
-        // Execute HTTP request with retry
+        // Execute HTTP request with classified retry
         const response = yield* client.execute(request).pipe(
           Effect.timeout(timeout),
+          Effect.mapError(toHttpProcessorError),
           Effect.retry({
             times: maxRetries,
             schedule: Schedule.exponential("1 second"),
-          }),
-          Effect.catchAll((error) => {
-            const category = detectHttpErrorCategory(error);
-            return Effect.fail(
-              new HttpProcessorError(
-                `HTTP request failed: ${error instanceof Error ? error.message : String(error)}`,
-                category,
-                error,
-              ),
-            );
+            while: (error) => error.shouldRetry,
           }),
         );
 
         // Parse response body
         const responseText = yield* response.text.pipe(
-          Effect.catchAll((error) =>
-            Effect.fail(
+          Effect.mapError(
+            (error) =>
               new HttpProcessorError(
                 `Failed to read HTTP response: ${error instanceof Error ? error.message : String(error)}`,
                 "logical",
                 error,
               ),
-            ),
           ),
         );
 
@@ -320,21 +401,13 @@ export const createHttpProcessor = (
 
         // Mode 1: Direct mapping (if result_mapping provided)
         if (compiledResultMapping) {
+          const mappingContext = {
+            ...context,
+            http_response: responseData,
+          };
+
           const mappedContent = yield* Effect.tryPromise({
-            try: async () =>
-              compiledResultMapping!.evaluate(
-                {},
-                {
-                  http_response: responseData,
-                  content: msg.content,
-                  meta: msg.metadata,
-                  message: {
-                    id: msg.id,
-                    timestamp: msg.timestamp,
-                    correlationId: msg.correlationId,
-                  },
-                },
-              ),
+            try: async () => compiledResultMapping!.evaluate(mappingContext),
             catch: (error) =>
               new HttpProcessorError(
                 `Failed to map HTTP response: ${error instanceof Error ? error.message : String(error)}`,

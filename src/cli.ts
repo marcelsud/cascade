@@ -3,7 +3,6 @@
  * CLI entry point for running pipelines
  */
 import { Effect, Logger, LogLevel } from "effect";
-import { NodeRuntime } from "@effect/platform-node";
 import { makeShutdownController, run } from "./core/pipeline.js";
 import {
   loadAndBuildPipeline,
@@ -309,10 +308,26 @@ const main = Effect.gen(function* () {
   ),
 );
 
-// Run the CLI
+// Run the CLI.
+// Avoid NodeRuntime.runMain: it installs SIGINT/SIGTERM handlers that interrupt
+// the root fiber immediately, which races the CLI's graceful drain path and
+// exits before processed/failed summaries are written (HTTP input E2E).
 const debugMode = process.argv.includes("--debug");
-NodeRuntime.runMain(
-  main.pipe(
-    Logger.withMinimumLogLevel(debugMode ? LogLevel.Debug : LogLevel.Info),
-  ) as Effect.Effect<void>,
+const program = main.pipe(
+  Logger.withMinimumLogLevel(debugMode ? LogLevel.Debug : LogLevel.Info),
+  Effect.provide(
+    Logger.replace(Logger.defaultLogger, Logger.prettyLoggerDefault),
+  ),
+);
+
+// Force process exit after the pipeline finishes. Component transports
+// (Redis, HTTP servers, SQS clients) can leave handles open that would
+// otherwise keep Node alive after a graceful drain summary is written.
+Effect.runPromise(program as Effect.Effect<void>).then(
+  () => {
+    process.exit(0);
+  },
+  () => {
+    process.exit(1);
+  },
 );

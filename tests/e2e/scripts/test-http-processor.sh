@@ -1,68 +1,71 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
+
+ROOT_DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
+cd "$ROOT_DIR"
+
+COMPOSE_FILE="tests/e2e/infrastructure/http/docker-compose.yml"
+LOG_FILE="/tmp/http-processor.log"
+
+cleanup() {
+  docker-compose -f "$COMPOSE_FILE" down -v >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
 
 echo -e "${YELLOW}=== HTTP Processor (API Enrichment) E2E Test ===${NC}\n"
 
-# Start HTTP test servers
-echo -e "${YELLOW}Starting HTTP test servers...${NC}"
-cd tests/e2e/infrastructure/http
-docker-compose down -v 2>/dev/null || true
-docker-compose up -d
-echo "Waiting for HTTP servers to be ready..."
-sleep 5
+echo -e "${YELLOW}Starting HTTP observer...${NC}"
+docker-compose -f "$COMPOSE_FILE" down -v >/dev/null 2>&1 || true
+docker-compose -f "$COMPOSE_FILE" up -d --force-recreate
 
-# Check if httpbin is ready
-if ! curl -s http://localhost:8081/status/200 > /dev/null 2>&1; then
-    echo -e "${RED}HTTP test server is not ready${NC}"
-    docker-compose logs
-    exit 1
+echo "Waiting for HTTP observer health..."
+ready=0
+for i in $(seq 1 30); do
+  if curl --fail --silent "http://127.0.0.1:8081/health" >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+if [ "$ready" -ne 1 ]; then
+  echo -e "${RED}HTTP observer is not ready${NC}"
+  docker-compose -f "$COMPOSE_FILE" logs || true
+  exit 1
 fi
-echo -e "${GREEN}HTTP test servers ready${NC}\n"
+echo -e "${GREEN}HTTP observer ready${NC}\n"
 
-# Go back to project root
-cd ../../../..
-
-# Run the HTTP processor pipeline
 echo -e "${YELLOW}Running HTTP processor pipeline...${NC}"
-timeout 30s node dist/cli.js run tests/e2e/configs/http-processor-test.yaml > /tmp/http-processor.log 2>&1 &
-PIPELINE_PID=$!
+set +e
+timeout -k 5s 30s node dist/cli.js run tests/e2e/configs/http-processor-test.yaml >"$LOG_FILE" 2>&1
+CLI_STATUS=$?
+set -e
 
-# Wait for pipeline to complete
-sleep 10
+cat "$LOG_FILE"
 
-# Kill if still running
-kill $PIPELINE_PID 2>/dev/null || true
-wait $PIPELINE_PID 2>/dev/null || true
+if [ "$CLI_STATUS" -ne 0 ]; then
+  echo -e "${RED}Pipeline failed (exit $CLI_STATUS)${NC}"
+  curl -s "http://127.0.0.1:8081/__requests" || true
+  exit 1
+fi
 
-# Show pipeline output
-cat /tmp/http-processor.log
+node tests/e2e/helpers/assert-http-requests.mjs processor-basic
 
-# Check if enrichment happened
-ENRICHED_COUNT=$(grep -c '"enrichment"' /tmp/http-processor.log || echo "0")
-SUCCESS_COUNT=$(grep -c "Processed: 2 messages" /tmp/http-processor.log || echo "0")
+PROCESSED=$(grep -c "Processed: 2 messages" "$LOG_FILE" || true)
+FAILED=$(grep -c "Failed: 0 messages" "$LOG_FILE" || true)
 
 echo -e "\n${YELLOW}Results:${NC}"
-echo -e "Enriched messages: ${ENRICHED_COUNT}"
-echo -e "Pipeline success: ${SUCCESS_COUNT}"
+echo -e "Processed summary lines: ${PROCESSED}"
+echo -e "Failed summary lines: ${FAILED}"
 
-# Cleanup
-docker-compose -f tests/e2e/infrastructure/http/docker-compose.yml down -v
-
-if [ "$ENRICHED_COUNT" -eq "2" ] && [ "$SUCCESS_COUNT" -eq "1" ]; then
-    echo -e "\n${GREEN}✓ HTTP Processor test PASSED${NC}"
-    echo -e "  - Processed 2 messages"
-    echo -e "  - Enriched with HTTP API responses"
-    echo -e "  - API calls successful"
-    exit 0
-else
-    echo -e "\n${RED}✗ HTTP Processor test FAILED${NC}"
-    echo -e "  - Expected 2 enriched messages, got ${ENRICHED_COUNT}"
-    echo -e "  - Expected pipeline success, got ${SUCCESS_COUNT}"
-    exit 1
+if [ "$PROCESSED" -eq 1 ] && [ "$FAILED" -eq 1 ]; then
+  echo -e "\n${GREEN}✓ HTTP Processor test PASSED${NC}"
+  exit 0
 fi
+
+echo -e "\n${RED}✗ HTTP Processor test FAILED${NC}"
+exit 1
