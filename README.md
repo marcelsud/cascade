@@ -20,7 +20,7 @@ Build type-safe data pipelines with YAML configuration for message processing.
 
 ## Installation
 
-> **Platform**: Linux (amd64) only for now.
+> **Platform**: Linux x86-64 with glibc. Alpine Linux requires `gcompat`.
 
 ### Quick Install (Recommended)
 
@@ -31,7 +31,7 @@ curl -sSL https://raw.githubusercontent.com/marcelsud/cascade/main/install.sh | 
 To install to a custom directory (no `sudo` needed):
 
 ```bash
-INSTALL_DIR="$HOME/.local/bin" curl -sSL https://raw.githubusercontent.com/marcelsud/cascade/main/install.sh | sh
+curl -sSL https://raw.githubusercontent.com/marcelsud/cascade/main/install.sh | INSTALL_DIR="$HOME/.local/bin" sh
 ```
 
 ### Manual Download

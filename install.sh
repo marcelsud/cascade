@@ -11,6 +11,8 @@ INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 main() {
     check_prerequisites
     check_platform
+    ensure_runtime_compatibility
+    ensure_install_dir
 
     echo "Installing ${BINARY_NAME} to ${INSTALL_DIR}..."
 
@@ -33,6 +35,12 @@ main() {
 
     chmod +x "$tmpfile"
 
+    if ! installed_version=$("$tmpfile" --version 2>&1); then
+        echo "Error: The downloaded Cascade binary is incompatible with this system." >&2
+        echo "$installed_version" >&2
+        exit 1
+    fi
+
     if [ -w "$INSTALL_DIR" ]; then
         mv "$tmpfile" "${INSTALL_DIR}/${BINARY_NAME}"
     else
@@ -45,11 +53,76 @@ main() {
 
     echo "Successfully installed ${BINARY_NAME} to ${INSTALL_DIR}/${BINARY_NAME}"
 
-    if command -v "$BINARY_NAME" >/dev/null 2>&1; then
-        "$BINARY_NAME" --version
-    else
-        echo "Note: ${INSTALL_DIR} may not be in your PATH" >&2
-        echo "Run: export PATH=\"${INSTALL_DIR}:\$PATH\"" >&2
+    echo "$installed_version"
+
+    case ":${PATH}:" in
+        *":${INSTALL_DIR}:"*) ;;
+        *)
+            echo "Note: ${INSTALL_DIR} may not be in your PATH" >&2
+            echo "Run: export PATH=\"${INSTALL_DIR}:\$PATH\"" >&2
+            ;;
+    esac
+}
+
+ensure_runtime_compatibility() {
+    libc=$(ldd --version 2>&1 || true)
+
+    case "$libc" in
+        *musl*)
+            if [ -e /lib64/ld-linux-x86-64.so.2 ]; then
+                return
+            fi
+
+            if ! command -v apk >/dev/null 2>&1; then
+                echo "Error: Cascade requires Linux x86-64 with glibc compatibility." >&2
+                exit 1
+            fi
+
+            echo "Linux x86-64 with glibc. Alpine Linux requires gcompat."
+
+            if [ ! -t 1 ]; then
+                echo "Error: Cannot prompt to install gcompat without an interactive terminal." >&2
+                echo "Install it with: apk add --no-cache gcompat" >&2
+                exit 1
+            fi
+
+            printf "Do you want to install it? (y/N) " > /dev/tty
+            answer=
+            IFS= read -r answer < /dev/tty || true
+
+            case "$answer" in
+                y|Y|yes|YES|Yes)
+                    if [ "$(id -u)" -eq 0 ]; then
+                        apk add --no-cache gcompat
+                    elif command -v sudo >/dev/null 2>&1; then
+                        sudo apk add --no-cache gcompat
+                    else
+                        echo "Error: Root access is required to install gcompat." >&2
+                        exit 1
+                    fi
+                    ;;
+                *)
+                    echo "Installation cancelled."
+                    exit 1
+                    ;;
+            esac
+
+            if [ ! -e /lib64/ld-linux-x86-64.so.2 ]; then
+                echo "Error: gcompat did not provide the required glibc loader." >&2
+                exit 1
+            fi
+            ;;
+    esac
+}
+
+ensure_install_dir() {
+    if [ -d "$INSTALL_DIR" ]; then
+        return
+    fi
+
+    if ! mkdir -p "$INSTALL_DIR" 2>/dev/null; then
+        echo "Elevated permissions required to create ${INSTALL_DIR}"
+        sudo mkdir -p "$INSTALL_DIR"
     fi
 }
 
