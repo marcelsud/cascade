@@ -1,0 +1,116 @@
+name: Graded issue
+description: Issue carrying the grading record required by the grading methodology (rubric 1.0.1)
+title: "<component>: <problem>"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Every section below maps to an eligibility check (IE-1..IE-9, spec §5.1).
+        Any missing section makes the issue UNGRADED and unable to authorize a PR.
+        Objectives and rubric version live in `.github/grading/config.yml`.
+  - type: input
+    id: objective
+    attributes:
+      label: Objective
+      description: "IE-7 — objective ID from .github/grading/config.yml, or a link to the recorded administrative request (request-only issues take the D path and are graded D)"
+      placeholder: "REL-2"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: "IE-1 — the problem or opportunity, without prescribing an unverified implementation"
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: "IE-2 — reproduction, incident, metric, user request, source invariant, or benchmark (include the commit tested)"
+    validations:
+      required: true
+  - type: textarea
+    id: consequence
+    attributes:
+      label: Consequence
+      description: "IE-3 — the wrong behavior, cost, risk, or missed capability. Never fabricate impact: a non-consequential request records 'consequence: none' with the request cited, which forces the D path (issue grade D)."
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and non-scope
+      description: "IE-4 — explicit in-scope and out-of-scope boundaries"
+      placeholder: |
+        In scope: ...
+        Out of scope: ...
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: "IE-5 — binary, observable criteria with stable IDs"
+      placeholder: |
+        - AC-1: ...
+        - AC-2: ...
+    validations:
+      required: true
+  - type: textarea
+    id: regression
+    attributes:
+      label: Regression proof
+      description: "IE-6 — the test, check, benchmark, or runtime observation that will prove the fix"
+    validations:
+      required: true
+  - type: textarea
+    id: duplicates
+    attributes:
+      label: Duplicate search
+      description: "IE-9 — search performed and any related or intentionally overlapping issues"
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: "Spec §5.2 — recorded independently from the value grade"
+      options:
+        - blocker
+        - material
+        - cosmetic
+    validations:
+      required: true
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Grade rationale
+      description: "IE-8 — 2-3 sentences: why now, what material decision changes (or why none changes for a D candidate), why the grade follows from §5.3"
+    validations:
+      required: true
+  - type: textarea
+    id: record
+    attributes:
+      label: Grading record
+      description: "Machine-readable record (spec §5.4). Triager selects the first matching §5.3 value_rule and runs `.github/grading/checks.mjs issue-grade`; a label without this complete record is not authoritative."
+      render: yaml
+      value: |
+        rubric_version: 1.0.1
+        eligibility:
+          IE-1: { answer: yes, evidence: "Problem" }
+          IE-2: { answer: yes, evidence: "Evidence" }
+          IE-3: { answer: yes, evidence: "Consequence" }
+          IE-4: { answer: yes, evidence: "Scope and non-scope" }
+          IE-5: { answer: yes, evidence: "Acceptance criteria" }
+          IE-6: { answer: yes, evidence: "Regression proof" }
+          IE-7: { answer: yes, evidence: "<objective id>" }
+          IE-8: { answer: yes, evidence: "Grade rationale" }
+          IE-9: { answer: yes, evidence: "Duplicate search" }
+        severity: <blocker|material|cosmetic>
+        value_rule: <D-nonconsequential|C-bounded-debt|A-blocker|A-core-guarantee|A-multi-component|A-project-gate|A-release-critical|B-localized-material>
+        issue_grade: <A|B|C|D>
+        grade_rationale: >-
+          <copy the 2-3 sentence Grade rationale here>
+    validations:
+      required: true

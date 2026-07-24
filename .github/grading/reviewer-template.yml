@@ -1,0 +1,31 @@
+rubric_version: 1.0.1
+reviewer: <reviewer-id>
+issue_grade: <A|B|C|D>
+ship_gate:
+  SG-1: { answer: <yes|no>, evidence: "<issue or exemption>" }
+  SG-2: { answer: <yes|no>, evidence: "<scope trace>" }
+  SG-3: { answer: <yes|no>, evidence: "<acceptance evidence>" }
+  SG-4: { answer: <yes|no>, evidence: "<invariant evidence>" }
+  SG-5: { answer: <yes|no>, evidence: "<behavior/failure test>" }
+  SG-6: { answer: <yes|no>, evidence: "<no weakened gates>" }
+  SG-7: { answer: <yes|no>, evidence: "<finding status>" }
+  SG-8: { answer: <yes|no>, evidence: "<ratchet run>" }
+  SG-9: { answer: <yes|no>, evidence: "<slop ledger>" }
+  SG-10: { answer: <yes|no>, evidence: "<S3 added = 0>" }
+execution_checks:
+  EX-1: <yes|no>
+  EX-2: <yes|no>
+  EX-3: <yes|no>
+  EX-4: <yes|no>
+  EX-5: <yes|no>
+  EX-6: <yes|no>
+  EX-7: <yes|no>
+  EX-8: <yes|no>
+  EX-9: <yes|no>
+slop_delta:
+  added: { S3: 0, S2: 0, S1: 0 }
+  removed: { S3: 0, S2: 0, S1: 0 }
+findings: []
+execution_grade: <A|B|C|D>
+overall_pr_grade: <A|B|C|D>
+decision: <APPROVED|REWORK>
