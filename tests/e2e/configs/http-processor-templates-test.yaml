@@ -16,7 +16,7 @@ pipeline:
   processors:
     # Test URL with multiple template variables
     - http:
-        url: "http://localhost:8081/get?userId={{content.user.id}}&action={{content.action}}&index={{content.user.name}}"
+        url: "http://localhost:8081/get?userId={{content.user.id}}&action={{content.action}}&index={{content.user.name}}&source={{meta.source}}&messageId={{message.id}}"
         method: "GET"
         result_key: "urlTemplateResponse"
         timeout: 5000
@@ -27,6 +27,11 @@ pipeline:
         method: "POST"
         headers:
           Content-Type: "application/json"
+          X-User-Id: "{{content.user.id}}"
+          X-User-Name: "{{content.user.name}}"
+          X-Action: "{{content.action}}"
+          X-Source: "{{meta.source}}"
+          X-Message-Id: "{{message.id}}"
         body: |
           {
             "userId": "{{content.user.id}}",
