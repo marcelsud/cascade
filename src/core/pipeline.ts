@@ -468,10 +468,13 @@ export const run = <E, R>(
     const shutdownRequested = yield* Deferred.isDone(shutdown.stop);
     const fatalRequested = yield* Deferred.isDone(fatalHalt);
     if (fatalRequested) {
-      // Do not stamp graceful solely because intake halted on fatal.
-      return result.shutdown === "graceful"
-        ? { ...result, shutdown: undefined }
-        : result;
+      // External timeout/force may win after fatal was recorded. Rebuild from
+      // the fatal channel so shutdown metadata cannot replace the fatal cause.
+      const fatalResult = yield* fatalFailedResult(result.errors ?? []);
+      return {
+        ...fatalResult,
+        shutdown: result.shutdown === "graceful" ? undefined : result.shutdown,
+      };
     }
     return shutdownRequested && result.shutdown === undefined
       ? { ...result, shutdown: "graceful" as const }

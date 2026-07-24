@@ -5,7 +5,9 @@ import {
   type ErrorCategory,
 } from "../../../src/core/errors.js";
 import {
+  makeShutdownController,
   PipelineFatalDrainTimeoutError,
+  PipelineShutdownError,
   run,
 } from "../../../src/core/pipeline.js";
 import { createMessage, type Message } from "../../../src/core/types.js";
@@ -354,5 +356,73 @@ describe("pipeline error categories", () => {
       ),
     ).toBe(true);
     expect(result.errors?.some((error) => error === closeError)).toBe(true);
+  });
+
+  it("preserves fatal cause when external force wins the drain race", async () => {
+    const fatal = new CategorizedTestError("poison", "fatal");
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const stuckStarted = yield* Deferred.make<void>();
+        const fatalSendStarted = yield* Deferred.make<void>();
+        const shutdown = yield* makeShutdownController();
+
+        const fiber = yield* Effect.fork(
+          run(
+            {
+              name: "fatal-external-force-race",
+              input: {
+                name: "two",
+                stream: Stream.make(
+                  createMessage("stuck"),
+                  createMessage("poison"),
+                ),
+              },
+              processors: [],
+              output: {
+                name: "mixed",
+                send: (message) =>
+                  message.content === "stuck"
+                    ? Deferred.succeed(stuckStarted, undefined).pipe(
+                        Effect.zipRight(Effect.never),
+                      )
+                    : Deferred.await(stuckStarted).pipe(
+                        Effect.zipRight(
+                          Deferred.succeed(fatalSendStarted, undefined),
+                        ),
+                        Effect.zipRight(Effect.fail(fatal)),
+                      ),
+              },
+              backpressure: { maxConcurrentMessages: 2 },
+            },
+            { shutdown, shutdownTimeoutMs: 1_000 },
+          ),
+        );
+
+        yield* Deferred.await(fatalSendStarted);
+        // Let processMessage classify and record the failure, then make the
+        // external force path win before the fatal drain timeout.
+        yield* Effect.sleep("20 millis");
+        yield* shutdown.requestForce;
+        return yield* Fiber.join(fiber);
+      }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.shutdown).toBe("forced");
+    expect(
+      result.errors?.some(
+        (error) =>
+          error instanceof CategorizedTestError &&
+          error.category === "fatal" &&
+          error.message === fatal.message,
+      ),
+    ).toBe(true);
+    expect(
+      result.errors?.some(
+        (error) =>
+          error instanceof PipelineShutdownError && error.shutdown === "forced",
+      ),
+    ).toBe(true);
   });
 });
