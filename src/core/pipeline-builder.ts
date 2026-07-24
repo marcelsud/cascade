@@ -133,6 +133,12 @@ const buildInputInternal = (
         startId: config.redis_streams.start_id,
         maxReconnectAttempts: config.redis_streams.max_reconnect_attempts,
         reconnectBackoffMs: config.redis_streams.reconnect_backoff_ms,
+        connectTimeout: config.redis_streams.connect_timeout,
+        commandTimeout: config.redis_streams.command_timeout,
+        keepAlive: config.redis_streams.keep_alive,
+        lazyConnect: config.redis_streams.lazy_connect,
+        maxRetriesPerRequest: config.redis_streams.max_retries_per_request,
+        enableOfflineQueue: config.redis_streams.enable_offline_queue,
       }),
     );
   }

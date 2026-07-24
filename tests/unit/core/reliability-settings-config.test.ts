@@ -20,6 +20,9 @@ const { createRedisListInputMock } = vi.hoisted(() => ({
 const { createRedisPubSubInputMock } = vi.hoisted(() => ({
   createRedisPubSubInputMock: vi.fn(),
 }));
+const { createRedisStreamsInputMock } = vi.hoisted(() => ({
+  createRedisStreamsInputMock: vi.fn(),
+}));
 const { createRedisListOutputMock } = vi.hoisted(() => ({
   createRedisListOutputMock: vi.fn(),
 }));
@@ -38,6 +41,9 @@ vi.mock("../../../src/inputs/redis-list-input.js", () => ({
 }));
 vi.mock("../../../src/inputs/redis-pubsub-input.js", () => ({
   createRedisPubSubInput: createRedisPubSubInputMock,
+}));
+vi.mock("../../../src/inputs/redis-streams-input.js", () => ({
+  createRedisStreamsInput: createRedisStreamsInputMock,
 }));
 vi.mock("../../../src/outputs/sqs-output.js", () => ({
   createSqsOutput: createSqsOutputMock,
@@ -82,6 +88,7 @@ beforeEach(() => {
   createSqsOutputMock.mockReset();
   createRedisListInputMock.mockReset();
   createRedisPubSubInputMock.mockReset();
+  createRedisStreamsInputMock.mockReset();
   createRedisListOutputMock.mockReset();
   createRedisPubSubOutputMock.mockReset();
   createRedisStreamsOutputMock.mockReset();
@@ -93,6 +100,9 @@ beforeEach(() => {
   );
   createRedisPubSubInputMock.mockImplementation(() =>
     stubInput("redis-pubsub-input"),
+  );
+  createRedisStreamsInputMock.mockImplementation(() =>
+    stubInput("redis-streams-input"),
   );
   createRedisListOutputMock.mockImplementation(() =>
     stubOutput("redis-list-output"),
@@ -236,6 +246,59 @@ describe("reliability settings reach connector factories", () => {
       keepAlive: 36000,
       lazyConnect: true,
       maxRetriesPerRequest: 9,
+      enableOfflineQueue: false,
+    });
+  });
+
+  it("forwards Redis streams input reliability YAML to createRedisStreamsInput", async () => {
+    const configPath = await writeTempYaml({
+      input: {
+        redis_streams: {
+          url: "redis://:stream-in-secret@streams-in.example:6391/7",
+          stream: "inbound-events",
+          mode: "consumer-group",
+          consumer_group: "cascade-workers",
+          consumer_name: "worker-1",
+          block_ms: 2500,
+          count: 42,
+          start_id: "0-0",
+          max_reconnect_attempts: 4,
+          reconnect_backoff_ms: 800,
+          connect_timeout: 1900,
+          command_timeout: 2900,
+          keep_alive: 37000,
+          lazy_connect: true,
+          max_retries_per_request: 13,
+          enable_offline_queue: false,
+        },
+      },
+      output: {
+        capture: {},
+      },
+    });
+
+    await loadAndBuild(configPath);
+
+    expect(createRedisStreamsInputMock).toHaveBeenCalledTimes(1);
+    expect(createRedisStreamsInputMock).toHaveBeenCalledWith({
+      host: "streams-in.example",
+      port: 6391,
+      stream: "inbound-events",
+      password: "stream-in-secret",
+      db: 7,
+      mode: "consumer-group",
+      consumerGroup: "cascade-workers",
+      consumerName: "worker-1",
+      blockMs: 2500,
+      count: 42,
+      startId: "0-0",
+      maxReconnectAttempts: 4,
+      reconnectBackoffMs: 800,
+      connectTimeout: 1900,
+      commandTimeout: 2900,
+      keepAlive: 37000,
+      lazyConnect: true,
+      maxRetriesPerRequest: 13,
       enableOfflineQueue: false,
     });
   });

@@ -67,6 +67,12 @@ const RedisStreamsInputSchema = S.Struct({
   start_id: S.optional(S.String),
   max_reconnect_attempts: S.optional(S.Int.pipe(S.nonNegative())),
   reconnect_backoff_ms: S.optional(S.Int.pipe(S.positive())),
+  connect_timeout: S.optional(S.Number),
+  command_timeout: S.optional(S.Number),
+  keep_alive: S.optional(S.Number),
+  lazy_connect: S.optional(S.Boolean),
+  max_retries_per_request: S.optional(S.Number),
+  enable_offline_queue: S.optional(S.Boolean),
 });
 
 /**
