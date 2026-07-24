@@ -251,4 +251,41 @@ describe("MappingProcessor", () => {
     expect(result.content.stats.min).toBe(10);
     expect(result.content.stats.sum).toBe(150);
   });
+
+  it("should keep $message and $meta bindings isolated under concurrency", async () => {
+    const processor = createMappingProcessor({
+      expression: `{
+        "workerId": workerId,
+        "boundMessageId": $message.id,
+        "boundSource": $meta.source,
+        "boundToken": $meta.token
+      }`,
+    });
+
+    const messages = Array.from({ length: 40 }, (_, index) =>
+      createMessage(
+        { workerId: index },
+        { source: `source-${index}`, token: `token-${index}` },
+      ),
+    );
+
+    const results = await Effect.runPromise(
+      Effect.forEach(messages, (message) => processor.process(message), {
+        concurrency: 10,
+      }),
+    );
+
+    expect(results).toHaveLength(messages.length);
+
+    for (let index = 0; index < messages.length; index++) {
+      const source = messages[index];
+      const result = results[index];
+
+      expect(result.id).toBe(source.id);
+      expect(result.content.workerId).toBe(index);
+      expect(result.content.boundMessageId).toBe(source.id);
+      expect(result.content.boundSource).toBe(`source-${index}`);
+      expect(result.content.boundToken).toBe(`token-${index}`);
+    }
+  });
 });

@@ -103,15 +103,18 @@ const evaluateTemplate = (
         for (const match of matches) {
           const expr = match[1].trim();
           const expression = jsonata(expr);
-          expression.assign("content", msg.content);
-          expression.assign("meta", msg.metadata);
-          expression.assign("message", {
-            id: msg.id,
-            timestamp: msg.timestamp,
-            correlationId: msg.correlationId,
-          });
-
-          const value = await expression.evaluate({});
+          const value = await expression.evaluate(
+            {},
+            {
+              content: msg.content,
+              meta: msg.metadata,
+              message: {
+                id: msg.id,
+                timestamp: msg.timestamp,
+                correlationId: msg.correlationId,
+              },
+            },
+          );
           result = result.replace(match[0], String(value));
         }
 
@@ -317,17 +320,21 @@ export const createHttpProcessor = (
 
         // Mode 1: Direct mapping (if result_mapping provided)
         if (compiledResultMapping) {
-          compiledResultMapping.assign("http_response", responseData);
-          compiledResultMapping.assign("content", msg.content);
-          compiledResultMapping.assign("meta", msg.metadata);
-          compiledResultMapping.assign("message", {
-            id: msg.id,
-            timestamp: msg.timestamp,
-            correlationId: msg.correlationId,
-          });
-
           const mappedContent = yield* Effect.tryPromise({
-            try: async () => compiledResultMapping!.evaluate({}),
+            try: async () =>
+              compiledResultMapping!.evaluate(
+                {},
+                {
+                  http_response: responseData,
+                  content: msg.content,
+                  meta: msg.metadata,
+                  message: {
+                    id: msg.id,
+                    timestamp: msg.timestamp,
+                    correlationId: msg.correlationId,
+                  },
+                },
+              ),
             catch: (error) =>
               new HttpProcessorError(
                 `Failed to map HTTP response: ${error instanceof Error ? error.message : String(error)}`,

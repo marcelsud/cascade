@@ -44,17 +44,17 @@ export const createMappingProcessor = (
             ? msg.content
             : { value: msg.content };
 
-        // Bind special variables using JSONata's assign method
-        compiledExpression.assign("message", {
-          id: msg.id,
-          timestamp: msg.timestamp,
-          correlationId: msg.correlationId,
-        });
-        compiledExpression.assign("meta", msg.metadata);
-
-        // Evaluate JSONata expression
+        // Evaluate with call-local bindings (concurrency-safe)
         const result = yield* Effect.tryPromise({
-          try: async () => compiledExpression.evaluate(context),
+          try: async () =>
+            compiledExpression.evaluate(context, {
+              message: {
+                id: msg.id,
+                timestamp: msg.timestamp,
+                correlationId: msg.correlationId,
+              },
+              meta: msg.metadata,
+            }),
           catch: (error) =>
             new MappingError(
               `JSONata evaluation failed: ${error instanceof Error ? error.message : String(error)}`,
