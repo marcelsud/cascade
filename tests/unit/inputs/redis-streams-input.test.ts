@@ -191,16 +191,33 @@ describe("RedisStreamsInput", () => {
       expect(input).toBeDefined();
     });
 
-    it("should ACK messages after reading", async () => {
-      const Redis = (await import("ioredis")).default;
-      const mockClient = new Redis();
+    it("defers XACK until Message.ack is invoked", async () => {
+      const RedisCtor = (await import("ioredis")).default as unknown as {
+        mock: { results: Array<{ value: Record<string, any> }> };
+      };
 
-      (mockClient.xreadgroup as any).mockResolvedValueOnce([
+      const entryId = "1234567890-0";
+      const streamName = "test-stream";
+      const groupName = "test-group";
+
+      const input = createRedisStreamsInput({
+        host: "localhost",
+        port: 6379,
+        stream: streamName,
+        mode: "consumer-group",
+        consumerGroup: groupName,
+        consumerName: "consumer-1",
+        blockMs: 1,
+        count: 1,
+      });
+
+      const mockClient = RedisCtor.mock.results.at(-1)!.value;
+      mockClient.xreadgroup.mockResolvedValueOnce([
         [
-          "test-stream",
+          streamName,
           [
             [
-              "1234567890-0",
+              entryId,
               [
                 "content",
                 JSON.stringify({ test: "data" }),
@@ -214,15 +231,28 @@ describe("RedisStreamsInput", () => {
         ],
       ]);
 
-      const input = createRedisStreamsInput({
-        host: "localhost",
-        port: 6379,
-        stream: "test-stream",
-        mode: "consumer-group",
-        consumerGroup: "test-group",
-      });
+      const message = await Effect.runPromise(
+        Stream.runHead(input.stream).pipe(Effect.map((opt) => opt)),
+      );
 
-      expect(input.stream).toBeDefined();
+      expect(message._tag).toBe("Some");
+      if (message._tag !== "Some") {
+        throw new Error("expected a consumer-group message");
+      }
+
+      expect(message.value.ack).toEqual(expect.any(Function));
+      expect(mockClient.xack).not.toHaveBeenCalled();
+
+      await Effect.runPromise(message.value.ack!());
+
+      expect(mockClient.xack).toHaveBeenCalledOnce();
+      expect(mockClient.xack).toHaveBeenCalledWith(
+        streamName,
+        groupName,
+        entryId,
+      );
+
+      await Effect.runPromise(input.close!());
     });
 
     it("should generate consumer name if not provided", () => {

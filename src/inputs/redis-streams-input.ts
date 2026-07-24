@@ -398,7 +398,7 @@ export const createRedisStreamsInput = (
       return [];
     }
 
-    // Process and ACK messages
+    // Convert entries; ACK is deferred until pipeline delivery succeeds.
     const [streamName, entries] = results[0] as [string, [string, string[]][]];
     const messages = yield* Effect.forEach(
       entries as [string, string[]][],
@@ -406,15 +406,17 @@ export const createRedisStreamsInput = (
         Effect.gen(function* () {
           const [entryId] = entry;
           const msg = yield* convertRedisEntry(streamName, entry);
-          yield* ackMessage(entryId).pipe(
-            Effect.catchAll((error) => {
-              metrics.recordError();
-              return Effect.logError(
-                `Failed to ACK ${entryId}: ${error.message}`,
-              );
-            }),
-          );
-          return msg;
+          return {
+            ...msg,
+            ack: () =>
+              ackMessage(entryId).pipe(
+                Effect.tapError(() =>
+                  Effect.sync(() => {
+                    metrics.recordError();
+                  }),
+                ),
+              ),
+          };
         }),
       { concurrency: 5 },
     );
@@ -432,7 +434,7 @@ export const createRedisStreamsInput = (
     }
 
     yield* Effect.logDebug(
-      `Read and ACKed ${messages.length} messages from Redis stream`,
+      `Read ${messages.length} messages from Redis stream consumer group`,
     );
     return messages;
   });
