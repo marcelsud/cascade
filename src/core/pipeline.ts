@@ -9,6 +9,7 @@ import type {
   PipelineStats,
 } from "./types.js";
 import { runProcessorChain } from "./processor-chain.js";
+import { isFatalError } from "./errors.js";
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -31,6 +32,21 @@ export class PipelineShutdownError extends PipelineError {
         : "Pipeline graceful shutdown timed out",
     );
     this.shutdown = shutdown;
+  }
+}
+
+/**
+ * Internal signal: a processor/output failure classified as fatal.
+ * Halts further intake without using the external shutdown controller.
+ */
+export class PipelineFatalHaltError extends PipelineError {
+  constructor(readonly cause: unknown) {
+    super(
+      cause instanceof Error
+        ? `Pipeline halted on fatal error: ${cause.message}`
+        : `Pipeline halted on fatal error: ${String(cause)}`,
+      cause,
+    );
   }
 }
 
@@ -95,6 +111,8 @@ export const run = <E, R>(
       startTime: Date.now(),
     });
     const errorsRef = yield* Ref.make<unknown[]>([]);
+    // Internal halt channel — distinct from external graceful shutdown.
+    const fatalHalt = yield* Deferred.make<unknown>();
     const snapshotMetrics = () => {
       const input = pipeline.input.getMetrics?.();
       const output = pipeline.output.getMetrics?.();
@@ -160,6 +178,11 @@ export const run = <E, R>(
             }));
             yield* Ref.update(errorsRef, (errors) => [...errors, error]);
             yield* Effect.logError(`Message processing failed: ${error}`);
+
+            if (isFatalError(error)) {
+              // Signal internal halt; already-accepted workers may still drain.
+              yield* Deferred.succeed(fatalHalt, error).pipe(Effect.asVoid);
+            }
           }),
         ),
         Effect.withSpan("process-message", {
@@ -172,17 +195,42 @@ export const run = <E, R>(
         yield* Effect.log(`Starting pipeline: ${pipeline.name}`);
         const workers = yield* FiberSet.make<void, never>();
         const permits = yield* Effect.makeSemaphore(maxConcurrentMessages);
+        // Stop intake on external shutdown OR internal fatal halt.
+        const intakeStop = yield* Deferred.make<void>();
+        yield* Effect.forkScoped(
+          Deferred.await(shutdown.stop).pipe(
+            Effect.zipRight(Deferred.succeed(intakeStop, undefined)),
+            Effect.asVoid,
+          ),
+        );
+        yield* Effect.forkScoped(
+          Deferred.await(fatalHalt).pipe(
+            Effect.zipRight(Deferred.succeed(intakeStop, undefined)),
+            Effect.asVoid,
+          ),
+        );
+
         const stoppedInput =
           pipeline.input.shutdownMode === "finish-current"
-            ? pipeline.input.stream.pipe(Stream.haltWhenDeferred(shutdown.stop))
+            ? pipeline.input.stream.pipe(Stream.haltWhenDeferred(intakeStop))
             : pipeline.input.stream.pipe(
-                Stream.interruptWhenDeferred(shutdown.stop),
+                Stream.interruptWhenDeferred(intakeStop),
               );
 
         yield* stoppedInput.pipe(
           Stream.runForEach((message) =>
             Effect.gen(function* () {
+              // Do not accept new work once a fatal halt is already signaled.
+              if (yield* Deferred.isDone(fatalHalt)) {
+                return;
+              }
               yield* permits.take(1);
+              // Re-check after acquiring a slot: the previous worker may have
+              // signaled fatal while we were waiting on the semaphore.
+              if (yield* Deferred.isDone(fatalHalt)) {
+                yield* permits.release(1);
+                return;
+              }
               yield* FiberSet.run(
                 workers,
                 processMessage(message).pipe(
@@ -199,6 +247,9 @@ export const run = <E, R>(
                 failed: stats.failed + 1,
               }));
               yield* Ref.update(errorsRef, (errors) => [...errors, error]);
+              if (isFatalError(error)) {
+                yield* Deferred.succeed(fatalHalt, error).pipe(Effect.asVoid);
+              }
             }),
           ),
         );
@@ -208,6 +259,10 @@ export const run = <E, R>(
 
         const stats = yield* Ref.get(statsRef);
         const errors = yield* Ref.get(errorsRef);
+        const polledFatal = yield* Deferred.poll(fatalHalt);
+        const resolvedFatal =
+          polledFatal._tag === "Some" ? yield* polledFatal.value : undefined;
+
         const finalStats: PipelineStats = {
           processed: stats.processed,
           failed: stats.failed,
@@ -215,6 +270,13 @@ export const run = <E, R>(
           startTime: stats.startTime,
           endTime: Date.now(),
         };
+
+        if (resolvedFatal !== undefined) {
+          yield* Effect.log(
+            `Pipeline halted on fatal error: ${finalStats.processed} processed, ${finalStats.failed} failed in ${finalStats.duration}ms`,
+          );
+          return yield* Effect.fail(new PipelineFatalHaltError(resolvedFatal));
+        }
 
         yield* Effect.log(
           `Pipeline completed: ${finalStats.processed} processed, ${finalStats.failed} failed in ${finalStats.duration}ms`,
@@ -260,14 +322,41 @@ export const run = <E, R>(
         ),
       ),
     ).pipe(
-      Effect.catchAll((error: unknown) =>
-        failedResult(
+      Effect.catchAll((error: unknown) => {
+        if (error instanceof PipelineFatalHaltError) {
+          // Fatal halt is not an external graceful shutdown.
+          return Effect.gen(function* () {
+            const stats = yield* snapshotStats();
+            const prior = yield* Ref.get(errorsRef);
+            const errors =
+              prior.length > 0
+                ? prior
+                : error.cause !== undefined
+                  ? [error.cause]
+                  : [error];
+            return {
+              success: false,
+              stats,
+              errors,
+              metrics: snapshotMetrics(),
+            } satisfies PipelineResult;
+          });
+        }
+        return failedResult(
           error,
           error instanceof PipelineShutdownError ? error.shutdown : undefined,
-        ),
-      ),
+        );
+      }),
     );
+    // Only external stop requests count as graceful shutdown.
     const shutdownRequested = yield* Deferred.isDone(shutdown.stop);
+    const fatalRequested = yield* Deferred.isDone(fatalHalt);
+    if (fatalRequested) {
+      // Do not stamp graceful solely because intake halted on fatal.
+      return result.shutdown === "graceful"
+        ? { ...result, shutdown: undefined }
+        : result;
+    }
     return shutdownRequested && result.shutdown === undefined
       ? { ...result, shutdown: "graceful" as const }
       : result;

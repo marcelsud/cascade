@@ -1,10 +1,15 @@
 /**
  * Dead Letter Queue (DLQ) support for outputs
- * Handles retry logic and sends failed messages to DLQ after max retries
+ * Handles category-aware retry logic and routes failed messages to the DLQ
  */
 import { Duration, Effect, Schedule } from "effect";
 import type { Output, Message } from "./types.js";
-import { ComponentError, type ErrorCategory } from "./errors.js";
+import {
+  ComponentError,
+  getErrorCategory,
+  isIntermittentError,
+  type ErrorCategory,
+} from "./errors.js";
 
 export class DLQError extends ComponentError {
   readonly _tag = "DLQError";
@@ -81,24 +86,34 @@ export const withDLQ = <E>(config: DLQConfig<E>): Output<E | DLQError> => {
     name: `${config.output.name}-with-dlq`,
     send: (msg: Message): Effect.Effect<void, E | DLQError> =>
       Effect.gen(function* () {
-        // Try sending with retry logic
-        const sendWithRetry = config.output.send(msg).pipe(
+        let attempts = 0;
+
+        // Count every primary send, including the first attempt.
+        const sendOnce = Effect.suspend(() => {
+          attempts += 1;
+          return config.output.send(msg);
+        });
+
+        // Only intermittent failures consume the configured retry budget.
+        const sendWithRetry = sendOnce.pipe(
           Effect.retry({
             times: maxRetries,
             schedule: retrySchedule,
+            while: (error) => isIntermittentError(error),
           }),
         );
 
-        // If send fails after retries, send to DLQ
         yield* sendWithRetry.pipe(
           Effect.catchAll((error) =>
             Effect.gen(function* () {
+              const category = getErrorCategory(error);
+
               if (config.dlq) {
                 yield* Effect.logWarning(
-                  `Message ${msg.id} failed after ${maxRetries} retries, sending to DLQ: ${error}`,
+                  `Message ${msg.id} failed after ${attempts} attempt(s), sending to DLQ: ${error}`,
                 );
 
-                const dlqMessage = createDLQMessage(msg, error, maxRetries + 1);
+                const dlqMessage = createDLQMessage(msg, error, attempts);
 
                 // Send to DLQ (without retry to avoid infinite loops)
                 yield* config.dlq.send(dlqMessage).pipe(
@@ -112,6 +127,12 @@ export const withDLQ = <E>(config: DLQConfig<E>): Output<E | DLQError> => {
                     }),
                   ),
                 );
+
+                // Logical (and exhausted intermittent) resolve after DLQ copy.
+                // Fatal may be archived but must still fail the send.
+                if (category === "fatal") {
+                  return yield* Effect.fail(error as E);
+                }
               } else {
                 // No DLQ configured, just fail
                 return yield* Effect.fail(error as E);
@@ -129,9 +150,7 @@ export const withDLQ = <E>(config: DLQConfig<E>): Output<E | DLQError> => {
                 closeOutputs.map((close) => Effect.either(close())),
                 { concurrency: "unbounded" },
               );
-              const failure = results.find(
-                (result) => result._tag === "Left",
-              );
+              const failure = results.find((result) => result._tag === "Left");
               if (failure?._tag === "Left") {
                 return yield* Effect.fail(failure.left);
               }

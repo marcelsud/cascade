@@ -3,6 +3,9 @@ import {
   ComponentError,
   type ErrorCategory,
   detectCategory,
+  getErrorCategory,
+  isFatalError,
+  isIntermittentError,
 } from "../../../src/core/errors.js";
 import { SqsInputError } from "../../../src/inputs/sqs-input.js";
 import { SqsOutputError } from "../../../src/outputs/sqs-output.js";
@@ -139,6 +142,44 @@ describe("Error Categorization", () => {
       expect(error.shouldRetry).toBe(false);
       expect(error.isFatal).toBe(true);
       expect(error.logLevel).toBe("error");
+    });
+  });
+
+  describe("getErrorCategory()", () => {
+    it("prefers an explicit valid category on the error object", () => {
+      const error = Object.assign(new Error("network timeout"), {
+        category: "logical" as const,
+      });
+      expect(getErrorCategory(error)).toBe("logical");
+      expect(isIntermittentError(error)).toBe(false);
+      expect(isFatalError(error)).toBe(false);
+    });
+
+    it("honors ComponentError.category values", () => {
+      expect(getErrorCategory(new SqsInputError("x", "fatal"))).toBe("fatal");
+      expect(isFatalError(new SqsInputError("x", "fatal"))).toBe(true);
+      expect(isIntermittentError(new SqsInputError("x", "intermittent"))).toBe(
+        true,
+      );
+    });
+
+    it("falls back to detectCategory for untyped errors", () => {
+      expect(getErrorCategory(new Error("Persistent error"))).toBe(
+        "intermittent",
+      );
+      expect(getErrorCategory(new Error("invalid json payload"))).toBe(
+        "logical",
+      );
+      expect(getErrorCategory(new Error("missing required config"))).toBe(
+        "fatal",
+      );
+    });
+
+    it("ignores invalid category fields and falls back", () => {
+      const error = Object.assign(new Error("network timeout"), {
+        category: "nope",
+      });
+      expect(getErrorCategory(error)).toBe("intermittent");
     });
   });
 
