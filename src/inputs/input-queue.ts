@@ -1,4 +1,4 @@
-import { Duration, Effect, Queue } from "effect";
+import { Cause, Chunk, Effect, Option, Queue, Stream } from "effect";
 import type { MetricsAccumulator } from "../core/metrics.js";
 
 export type OverflowPolicy = "block" | "drop_new" | "drop_old";
@@ -69,30 +69,38 @@ export const recordQueueDrop = (
     }
   });
 
-/** Poll interval while waiting for consumers to drain a one-shot input queue. */
-const DRAIN_POLL_INTERVAL_MS = 5;
-
 /**
- * Wait until consumers have taken every queued value.
+ * Stream a bounded input queue, ending only once the producer is done AND the
+ * queue is exhausted.
  *
- * A resolved `Queue.offer` only means the queue accepted the value; the stream
- * may not have taken it yet. Shutting down at that point discards the
- * remainder and `Stream.fromQueue` reports it as a normal end of stream, so the
- * loss is silent. Callers shut the queue down after this resolves.
- *
- * `isAborted` lets an explicit close cut the wait short. A concurrent shutdown
- * makes `Queue.size` interrupt; that is treated as "nothing left to drain".
+ * `Stream.fromQueue` ends the moment the queue is shut down and discards
+ * whatever the consumer has not taken yet — and it reports that as a normal
+ * end of stream, so the loss is silent. A producer therefore cannot signal
+ * completion by shutting the queue down. Instead it flips `isProducerDone`
+ * once every offer has resolved; this stream drains what is left and then
+ * ends. An explicit `Queue.shutdown` (from `close()`) still ends it at once.
  */
-export const awaitInputQueueDrain = <A>(
+export const streamInputQueue = <A>(
   queue: Queue.Queue<A>,
-  isAborted: () => boolean,
-): Effect.Effect<void> =>
-  Effect.gen(function* () {
-    while (!isAborted()) {
-      const remaining = yield* Queue.size(queue).pipe(
-        Effect.catchAllCause(() => Effect.succeed(0)),
-      );
-      if (remaining <= 0) return;
-      yield* Effect.sleep(Duration.millis(DRAIN_POLL_INTERVAL_MS));
-    }
-  });
+  isProducerDone: () => boolean,
+): Stream.Stream<A> =>
+  Stream.repeatEffectChunkOption(
+    Effect.suspend(() =>
+      isProducerDone()
+        ? Queue.takeAll(queue)
+        : Queue.takeBetween(queue, 1, Queue.capacity(queue)),
+    ).pipe(
+      Effect.catchAllCause((cause) =>
+        Effect.flatMap(Queue.isShutdown(queue), (isShutdown) =>
+          isShutdown && Cause.isInterrupted(cause)
+            ? Effect.fail(Option.none<never>())
+            : Effect.failCause(Cause.map(cause, Option.some)),
+        ),
+      ),
+      Effect.flatMap((chunk) =>
+        Chunk.isEmpty(chunk)
+          ? Effect.fail(Option.none<never>())
+          : Effect.succeed(chunk),
+      ),
+    ),
+  );

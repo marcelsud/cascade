@@ -3,6 +3,8 @@ import { Duration, Effect, Stream } from "effect";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { createFileInput } from "../../../src/inputs/file-input.js";
 import { run } from "../../../src/core/pipeline.js";
@@ -10,6 +12,10 @@ import type { Output } from "../../../src/core/types.js";
 import { createCaptureOutput } from "../../../src/testing/capture-output.js";
 
 const createdPaths: string[] = [];
+const repoRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../..",
+);
 
 const createTempFile = async (content = ""): Promise<string> => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cascade-file-input-"));
@@ -417,7 +423,11 @@ describe("FileInput", () => {
     });
 
     // No consumer — producer blocks once the single-slot queue is full.
-    await delay(50);
+    const blocked = await waitUntil(
+      async () => input.getMetrics?.()?.messagesProcessed === 1,
+      5_000,
+    );
+    expect(blocked).toBe(true);
 
     const closeResult = await Promise.race([
       Effect.runPromise(input.close()).then(() => "closed" as const),
@@ -426,4 +436,39 @@ describe("FileInput", () => {
 
     expect(closeResult).toBe("closed");
   }, 20_000);
+
+  it("does not keep the process alive when a one-shot replay is abandoned", async () => {
+    const lines = Array.from({ length: 32 }, (_, id) =>
+      JSON.stringify({ id }),
+    ).join("\n");
+    const filePath = await createTempFile(`${lines}\n`);
+    const fixturePath = path.join(
+      "tests",
+      "unit",
+      "inputs",
+      "__fixtures__",
+      "abandoned-one-shot.ts",
+    );
+
+    const child = spawn("npx", ["tsx", fixturePath, filePath], {
+      cwd: repoRoot,
+      stdio: "ignore",
+    });
+
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, 15_000);
+
+    const exitCode = await new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", (code) => resolve(code));
+    }).finally(() => {
+      clearTimeout(timeout);
+    });
+
+    expect(timedOut).toBe(false);
+    expect(exitCode).toBe(0);
+  }, 30_000);
 });

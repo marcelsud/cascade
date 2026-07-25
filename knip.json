@@ -2,7 +2,8 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "entry": [
     "tests/e2e/helpers/assert-http-requests.mjs",
-    "tests/e2e/helpers/http-test-server.mjs"
+    "tests/e2e/helpers/http-test-server.mjs",
+    "tests/unit/inputs/__fixtures__/abandoned-one-shot.ts"
   ],
   "ignoreBinaries": ["docker-compose"]
 }
