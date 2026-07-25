@@ -54,10 +54,15 @@ const expectBuildFailure = async (
 const runCliValidate = async (
   fixturePath: string,
 ): Promise<{ code: number | null; output: string }> => {
-  const { promise, resolve, reject } = Promise.withResolvers<{
+  let resolve!: (value: { code: number | null; output: string }) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<{
     code: number | null;
     output: string;
-  }>();
+  }>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
   // bun test sets process.execPath to bun; CLI spawn needs real Node + tsx.
   const nodeExecutable =
     process.execPath.endsWith("bun") || process.versions.bun
