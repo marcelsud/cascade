@@ -21,7 +21,7 @@ Consumes messages from Redis Lists using blocking pop operations (BLPOP/BRPOP). 
 ### Connection Configuration Fields
 
 - `connect_timeout`: Connection timeout in ms (default: 10000)
-- `max_reconnect_attempts`: Retry limit after a failed Redis operation (default: unlimited)
+- `max_reconnect_attempts`: Retry limit after a failed intermittent Redis operation (default: unlimited for intermittent errors)
 - `reconnect_backoff_ms`: Initial reconnect delay in ms (default: 1000)
 - `command_timeout`: Command timeout in ms (optional)
 - `keep_alive`: TCP keep-alive in ms (default: 30000)
@@ -29,10 +29,13 @@ Consumes messages from Redis Lists using blocking pop operations (BLPOP/BRPOP). 
 - `max_retries_per_request`: Max retries per request (default: 20)
 - `enable_offline_queue`: Queue commands when offline (default: true)
 
-Reconnect delays double after each failure and are capped at 30 seconds. When
-`max_reconnect_attempts` is exhausted, the input stream fails with a typed error
-and the pipeline exits non-zero. Omit it to preserve unlimited reconnects.
-The end-to-end suite also verifies bounded retries against an unreachable Redis.
+Reconnect delays double after each failure and are capped at 30 seconds. The
+unlimited default applies only to intermittent reconnect-eligible errors;
+logical and fatal errors are terminal and fail the stream immediately without
+reconnect attempts. When `max_reconnect_attempts` is exhausted for intermittent
+failures, the input stream fails with a typed error and the pipeline exits
+non-zero. The end-to-end suite also verifies bounded retries against an
+unreachable Redis.
 
 ## Examples
 

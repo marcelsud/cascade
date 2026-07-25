@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import { isIntermittentError } from "../core/errors.js";
 
 export interface ReconnectPolicy {
   readonly maxReconnectAttempts?: number;
@@ -23,6 +24,9 @@ export const withReconnect = <A, E, R>(
     while (true) {
       const result = yield* Effect.either(operation);
       if (result._tag === "Right") return result.right;
+      if (!isIntermittentError(result.left)) {
+        return yield* Effect.fail(result.left);
+      }
 
       if (
         policy.maxReconnectAttempts !== undefined &&

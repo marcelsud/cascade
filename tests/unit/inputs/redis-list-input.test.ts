@@ -257,4 +257,42 @@ describe("RedisListInput", () => {
     expect(pipelineResult.success).toBe(false);
     expect(pipelineResult.errors?.[0]).toBeInstanceOf(RedisListInputError);
   });
+
+  it("propagates a fatal pop error without a second Redis operation", async () => {
+    const blpop = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("NOAUTH Authentication required."))
+      .mockResolvedValueOnce(["tasks", JSON.stringify({ recovered: true })]);
+    const redisMock = Redis as unknown as {
+      mockImplementationOnce: (factory: () => never) => void;
+    };
+    redisMock.mockImplementationOnce(
+      () =>
+        ({
+          status: "ready",
+          blpop,
+          brpop: vi.fn().mockResolvedValue(null),
+          quit: vi.fn().mockResolvedValue("OK"),
+          disconnect: vi.fn(),
+          on: vi.fn(),
+        }) as never,
+    );
+    const input = createRedisListInput({
+      host: "localhost",
+      port: 6379,
+      key: "tasks",
+      reconnectBackoffMs: 1,
+    });
+
+    const result = await Effect.runPromise(
+      Effect.either(Stream.runHead(input.stream)),
+    );
+
+    expect(blpop).toHaveBeenCalledTimes(1);
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isLeft(result)) {
+      expect(result.left).toBeInstanceOf(RedisListInputError);
+      expect((result.left as RedisListInputError).category).toBe("fatal");
+    }
+  });
 });

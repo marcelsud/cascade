@@ -37,6 +37,139 @@ describe("Redis reconnect policy", () => {
     if (Either.isLeft(result)) expect(result.left).toBe(error);
   });
 
+  it("does not retry a fatal failure when the reconnect limit is omitted", async () => {
+    let attempts = 0;
+    const fatal = new RedisListInputError(
+      "NOAUTH Authentication required.",
+      "fatal",
+    );
+    const operation = Effect.suspend(() => {
+      attempts += 1;
+      if (attempts === 1) {
+        return Effect.fail(fatal);
+      }
+      return Effect.succeed("unexpected recovery");
+    });
+
+    const result = await Effect.runPromise(
+      Effect.either(
+        withReconnect(operation, {
+          reconnectBackoffMs: 1,
+        }),
+      ),
+    );
+
+    expect(attempts).toBe(1);
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isLeft(result)) expect(result.left).toBe(fatal);
+  });
+
+  it("does not retry a logical failure when the reconnect limit is omitted", async () => {
+    let attempts = 0;
+    let retries = 0;
+    const logical = new RedisListInputError(
+      "Schema validation failed",
+      "logical",
+    );
+    const operation = Effect.suspend(() => {
+      attempts += 1;
+      if (attempts === 1) {
+        return Effect.fail(logical);
+      }
+      return Effect.succeed("unexpected recovery");
+    });
+
+    const result = await Effect.runPromise(
+      Effect.either(
+        withReconnect(
+          operation,
+          {
+            reconnectBackoffMs: 1,
+          },
+          () =>
+            Effect.sync(() => {
+              retries += 1;
+            }),
+        ),
+      ),
+    );
+
+    expect(attempts).toBe(1);
+    expect(retries).toBe(0);
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isLeft(result)) expect(result.left).toBe(logical);
+  });
+
+  it("does not invoke onRetry or backoff for a fatal failure with a positive limit", async () => {
+    let attempts = 0;
+    let retries = 0;
+    const fatal = new RedisListInputError(
+      "NOAUTH Authentication required.",
+      "fatal",
+    );
+    const operation = Effect.suspend(() => {
+      attempts += 1;
+      return Effect.fail(fatal);
+    });
+
+    const result = await Effect.runPromise(
+      Effect.either(
+        withReconnect(
+          operation,
+          {
+            maxReconnectAttempts: 5,
+            reconnectBackoffMs: 1,
+          },
+          () =>
+            Effect.sync(() => {
+              retries += 1;
+            }),
+        ),
+      ),
+    );
+
+    expect(attempts).toBe(1);
+    expect(retries).toBe(0);
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isLeft(result)) expect(result.left).toBe(fatal);
+  });
+
+  it("retries an intermittent failure until success when the limit is omitted", async () => {
+    let attempts = 0;
+    let retries = 0;
+    const intermittent = new RedisListInputError(
+      "Redis unavailable",
+      "intermittent",
+    );
+    const operation = Effect.suspend(() => {
+      attempts += 1;
+      if (attempts === 1) {
+        return Effect.fail(intermittent);
+      }
+      return Effect.succeed("recovered");
+    });
+
+    const result = await Effect.runPromise(
+      Effect.either(
+        withReconnect(
+          operation,
+          {
+            reconnectBackoffMs: 1,
+          },
+          () =>
+            Effect.sync(() => {
+              retries += 1;
+            }),
+        ),
+      ),
+    );
+
+    expect(attempts).toBe(2);
+    expect(retries).toBe(1);
+    expect(Either.isRight(result)).toBe(true);
+    if (Either.isRight(result)) expect(result.right).toBe("recovered");
+  });
+
   it.each([
     {
       redis_list: {

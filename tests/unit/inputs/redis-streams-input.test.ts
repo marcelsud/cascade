@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Effect, Stream } from "effect";
+import { Effect, Either, Stream } from "effect";
 import Redis from "ioredis";
-import { createRedisStreamsInput } from "../../../src/inputs/redis-streams-input.js";
+import {
+  createRedisStreamsInput,
+  RedisStreamsInputError,
+} from "../../../src/inputs/redis-streams-input.js";
 
 // Mock ioredis
 vi.mock("ioredis", () => {
@@ -310,6 +313,140 @@ describe("RedisStreamsInput", () => {
       });
 
       expect(input.stream).toBeDefined();
+    });
+
+    it("propagates a fatal simple-read error without a second Redis operation", async () => {
+      const xread = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("NOAUTH Authentication required."))
+        .mockResolvedValueOnce(null);
+      const redisMock = Redis as unknown as {
+        mockImplementationOnce: (factory: () => never) => void;
+      };
+      redisMock.mockImplementationOnce(
+        () =>
+          ({
+            status: "ready",
+            xread,
+            xreadgroup: vi.fn().mockResolvedValue(null),
+            xgroup: vi.fn().mockResolvedValue("OK"),
+            xack: vi.fn().mockResolvedValue(1),
+            quit: vi.fn().mockResolvedValue("OK"),
+            disconnect: vi.fn(),
+            on: vi.fn(),
+          }) as never,
+      );
+
+      const input = createRedisStreamsInput({
+        host: "localhost",
+        port: 6379,
+        stream: "test-stream",
+        mode: "simple",
+        reconnectBackoffMs: 1,
+      });
+
+      const result = await Effect.runPromise(
+        Effect.either(Stream.runHead(input.stream)),
+      );
+
+      expect(xread).toHaveBeenCalledTimes(1);
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) {
+        expect(result.left).toBeInstanceOf(RedisStreamsInputError);
+        expect((result.left as RedisStreamsInputError).category).toBe("fatal");
+      }
+    });
+
+    it("propagates a fatal consumer-group init error without a second Redis operation", async () => {
+      const xgroup = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("NOAUTH Authentication required."))
+        .mockResolvedValueOnce("OK");
+      const xreadgroup = vi.fn().mockResolvedValue(null);
+      const redisMock = Redis as unknown as {
+        mockImplementationOnce: (factory: () => never) => void;
+      };
+      redisMock.mockImplementationOnce(
+        () =>
+          ({
+            status: "ready",
+            xread: vi.fn().mockResolvedValue(null),
+            xreadgroup,
+            xgroup,
+            xack: vi.fn().mockResolvedValue(1),
+            quit: vi.fn().mockResolvedValue("OK"),
+            disconnect: vi.fn(),
+            on: vi.fn(),
+          }) as never,
+      );
+
+      const input = createRedisStreamsInput({
+        host: "localhost",
+        port: 6379,
+        stream: "test-stream",
+        mode: "consumer-group",
+        consumerGroup: "test-group",
+        consumerName: "consumer-1",
+        reconnectBackoffMs: 1,
+      });
+
+      const result = await Effect.runPromise(
+        Effect.either(Stream.runHead(input.stream)),
+      );
+
+      expect(xgroup).toHaveBeenCalledTimes(1);
+      expect(xreadgroup).not.toHaveBeenCalled();
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) {
+        expect(result.left).toBeInstanceOf(RedisStreamsInputError);
+        expect((result.left as RedisStreamsInputError).category).toBe("fatal");
+      }
+    });
+
+    it("propagates a fatal consumer-group read error without a second Redis operation", async () => {
+      const xgroup = vi.fn().mockResolvedValue("OK");
+      const xreadgroup = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("NOAUTH Authentication required."))
+        .mockResolvedValueOnce(null);
+      const redisMock = Redis as unknown as {
+        mockImplementationOnce: (factory: () => never) => void;
+      };
+      redisMock.mockImplementationOnce(
+        () =>
+          ({
+            status: "ready",
+            xread: vi.fn().mockResolvedValue(null),
+            xreadgroup,
+            xgroup,
+            xack: vi.fn().mockResolvedValue(1),
+            quit: vi.fn().mockResolvedValue("OK"),
+            disconnect: vi.fn(),
+            on: vi.fn(),
+          }) as never,
+      );
+
+      const input = createRedisStreamsInput({
+        host: "localhost",
+        port: 6379,
+        stream: "test-stream",
+        mode: "consumer-group",
+        consumerGroup: "test-group",
+        consumerName: "consumer-1",
+        reconnectBackoffMs: 1,
+      });
+
+      const result = await Effect.runPromise(
+        Effect.either(Stream.runHead(input.stream)),
+      );
+
+      expect(xgroup).toHaveBeenCalledTimes(1);
+      expect(xreadgroup).toHaveBeenCalledTimes(1);
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) {
+        expect(result.left).toBeInstanceOf(RedisStreamsInputError);
+        expect((result.left as RedisStreamsInputError).category).toBe("fatal");
+      }
     });
   });
 
