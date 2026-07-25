@@ -1,12 +1,21 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { Effect, Stream } from "effect";
+import { Duration, Effect, Stream } from "effect";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { createFileInput } from "../../../src/inputs/file-input.js";
+import { run } from "../../../src/core/pipeline.js";
+import type { Output } from "../../../src/core/types.js";
+import { createCaptureOutput } from "../../../src/testing/capture-output.js";
 
 const createdPaths: string[] = [];
+const repoRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../..",
+);
 
 const createTempFile = async (content = ""): Promise<string> => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cascade-file-input-"));
@@ -29,6 +38,18 @@ const waitUntil = async (
     await delay(10);
   }
   return false;
+};
+
+const contentId = (content: unknown): number => {
+  if (
+    content !== null &&
+    typeof content === "object" &&
+    "id" in content &&
+    typeof content.id === "number"
+  ) {
+    return content.id;
+  }
+  throw new Error(`expected content with numeric id, got ${String(content)}`);
 };
 
 afterEach(async () => {
@@ -290,4 +311,164 @@ describe("FileInput", () => {
       }
     },
   );
+
+  it("drains buffered records before ending one-shot replay", async () => {
+    const lines = Array.from({ length: 32 }, (_, id) =>
+      JSON.stringify({ id }),
+    ).join("\n");
+    const filePath = await createTempFile(`${lines}\n`);
+    const input = createFileInput({
+      path: filePath,
+      follow: false,
+      startAt: "beginning",
+      pollIntervalMs: 5,
+      queueSize: 32,
+      overflow: "block",
+    });
+
+    const produced = await waitUntil(
+      async () => input.getMetrics?.()?.messagesProcessed === 32,
+      5_000,
+    );
+    expect(produced).toBe(true);
+
+    const messages = await collectChunk(Stream.runCollect(input.stream));
+    expect(messages.map((message) => contentId(message.content))).toEqual(
+      Array.from({ length: 32 }, (_, id) => id),
+    );
+  });
+
+  it("delivers every line to a slow consumer when the file exceeds queue capacity", async () => {
+    const lines = Array.from({ length: 64 }, (_, id) =>
+      JSON.stringify({ id }),
+    ).join("\n");
+    const filePath = await createTempFile(`${lines}\n`);
+    const input = createFileInput({
+      path: filePath,
+      follow: false,
+      startAt: "beginning",
+      pollIntervalMs: 5,
+      queueSize: 4,
+      overflow: "block",
+    });
+
+    const messages = await collectChunk(
+      input.stream.pipe(
+        Stream.tap(() => Effect.sleep(Duration.millis(1))),
+        Stream.runCollect,
+      ),
+    );
+
+    expect(messages.map((message) => contentId(message.content))).toEqual(
+      Array.from({ length: 64 }, (_, id) => id),
+    );
+  }, 20_000);
+
+  it("replays every line through a pipeline with a slow output", async () => {
+    const lines = Array.from({ length: 16 }, (_, id) =>
+      JSON.stringify({ id }),
+    ).join("\n");
+    const filePath = await createTempFile(`${lines}\n`);
+    const input = createFileInput({
+      path: filePath,
+      follow: false,
+      startAt: "beginning",
+      pollIntervalMs: 5,
+      queueSize: 2,
+      overflow: "block",
+    });
+
+    const capture = await Effect.runPromise(createCaptureOutput());
+    const slow: Output = {
+      ...capture,
+      send: (message) =>
+        Effect.delay(capture.send(message), Duration.millis(2)),
+    };
+
+    const result = await Effect.runPromise(
+      run({
+        name: "file-input-drain-pipeline",
+        input,
+        processors: [],
+        output: slow,
+        backpressure: { maxConcurrentMessages: 1 },
+      }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.stats.failed).toBe(0);
+    expect(result.stats.processed).toBe(16);
+
+    const messages = await Effect.runPromise(capture.getMessages());
+    expect(messages).toHaveLength(16);
+    expect(messages.map((message) => contentId(message.content))).toEqual(
+      Array.from({ length: 16 }, (_, id) => id),
+    );
+    expect(result.metrics?.input).toMatchObject({
+      component: "file-input",
+      messagesProcessed: 16,
+      messagesDropped: 0,
+    });
+  }, 20_000);
+
+  it("close releases a producer blocked on queue capacity", async () => {
+    const filePath = await createTempFile("one\ntwo\nthree\nfour\n");
+    const input = createFileInput({
+      path: filePath,
+      follow: true,
+      startAt: "beginning",
+      pollIntervalMs: 5,
+      queueSize: 1,
+      overflow: "block",
+    });
+
+    // No consumer — producer blocks once the single-slot queue is full.
+    const blocked = await waitUntil(
+      async () => input.getMetrics?.()?.messagesProcessed === 1,
+      5_000,
+    );
+    expect(blocked).toBe(true);
+
+    const closeResult = await Promise.race([
+      Effect.runPromise(input.close()).then(() => "closed" as const),
+      delay(2_000).then(() => "timeout" as const),
+    ]);
+
+    expect(closeResult).toBe("closed");
+  }, 20_000);
+
+  it("does not keep the process alive when a one-shot replay is abandoned", async () => {
+    const lines = Array.from({ length: 32 }, (_, id) =>
+      JSON.stringify({ id }),
+    ).join("\n");
+    const filePath = await createTempFile(`${lines}\n`);
+    const fixturePath = path.join(
+      "tests",
+      "unit",
+      "inputs",
+      "__fixtures__",
+      "abandoned-one-shot.ts",
+    );
+
+    const child = spawn("npx", ["tsx", fixturePath, filePath], {
+      cwd: repoRoot,
+      stdio: "ignore",
+    });
+
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, 15_000);
+
+    const exitCode = await new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", (code) => resolve(code));
+    }).finally(() => {
+      clearTimeout(timeout);
+    });
+
+    expect(timedOut).toBe(false);
+    expect(exitCode).toBe(0);
+  }, 30_000);
 });

@@ -1,7 +1,7 @@
 /**
  * File Input - Reads newline-delimited messages from a local file
  */
-import { Effect, Queue, Stream } from "effect";
+import { Effect, Queue } from "effect";
 import * as Schema from "effect/Schema";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
@@ -15,6 +15,7 @@ import {
   createInputQueue,
   offerInputQueue,
   recordQueueDrop,
+  streamInputQueue,
   type OverflowPolicy,
 } from "./input-queue.js";
 
@@ -109,6 +110,7 @@ export const createFileInput = (
 
   let closed = false;
   let queueClosed = false;
+  let producerDone = false;
   let timer: NodeJS.Timeout | null = null;
   let currentPosition = startAt === "end" ? initialStats.size : 0;
   let currentIdentity = getIdentity(initialStats);
@@ -123,6 +125,28 @@ export const createFileInput = (
     }
     queueClosed = true;
     await Effect.runPromise(Queue.shutdown(queue));
+  };
+
+  /**
+   * One-shot completion. Production finishing is not consumption finishing, so
+   * signal completion instead of shutting the queue down: `streamInputQueue`
+   * drains what is still buffered and then ends. Shutting down is only safe
+   * when nothing is buffered, and it is then also necessary — it wakes a
+   * consumer already blocked on the empty queue.
+   */
+  const finishOneShot = async (): Promise<void> => {
+    if (queueClosed) {
+      return;
+    }
+    // Set the flag BEFORE checking size: a consumer that drains the queue in
+    // between must find the flag already set, or it blocks forever.
+    producerDone = true;
+    const remaining = await Effect.runPromise(
+      Queue.size(queue).pipe(Effect.catchAllCause(() => Effect.succeed(0))),
+    );
+    if (remaining <= 0) {
+      await shutdownQueue();
+    }
   };
 
   const emitLineMessages = async (lines: readonly string[]): Promise<void> => {
@@ -189,7 +213,7 @@ export const createFileInput = (
       }
 
       if (!follow) {
-        await shutdownQueue();
+        await finishOneShot();
         return false;
       }
 
@@ -207,7 +231,7 @@ export const createFileInput = (
       ).catch(() => undefined);
 
       if (!follow) {
-        await shutdownQueue();
+        await finishOneShot();
         return false;
       }
 
@@ -241,7 +265,7 @@ export const createFileInput = (
   return {
     name: "file-input",
     getMetrics: () => metrics.getInputMetrics(),
-    stream: Stream.fromQueue(queue),
+    stream: streamInputQueue(queue, () => producerDone),
     close: () =>
       Effect.gen(function* () {
         closed = true;

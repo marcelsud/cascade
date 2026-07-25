@@ -1,4 +1,4 @@
-import { Effect, Queue } from "effect";
+import { Cause, Chunk, Effect, Option, Queue, Stream } from "effect";
 import type { MetricsAccumulator } from "../core/metrics.js";
 
 export type OverflowPolicy = "block" | "drop_new" | "drop_old";
@@ -68,3 +68,45 @@ export const recordQueueDrop = (
       state.suppressed += 1;
     }
   });
+
+/**
+ * Stream a bounded input queue, ending only once the producer is done AND the
+ * queue is exhausted.
+ *
+ * `Stream.fromQueue` ends the moment the queue is shut down and discards
+ * whatever the consumer has not taken yet — and it reports that as a normal
+ * end of stream, so the loss is silent. A producer therefore cannot signal
+ * completion by shutting the queue down. Instead it flips `isProducerDone`
+ * once every offer has resolved; this stream drains what is left and then
+ * ends. An explicit `Queue.shutdown` (from `close()`) still ends it at once.
+ *
+ * Chunks stay bounded by `Stream.DefaultChunkSize`, matching what
+ * `Stream.fromQueue` pulls. Taking the whole queue instead would hold up to
+ * another full capacity outside the queue while a chunk is processed, which
+ * loosens `block` backpressure and changes `drop_new`/`drop_old` outcomes
+ * whenever `queueSize` exceeds that bound.
+ */
+export const streamInputQueue = <A>(
+  queue: Queue.Queue<A>,
+  isProducerDone: () => boolean,
+): Stream.Stream<A> =>
+  Stream.repeatEffectChunkOption(
+    Effect.suspend(() =>
+      isProducerDone()
+        ? Queue.takeUpTo(queue, Stream.DefaultChunkSize)
+        : Queue.takeBetween(queue, 1, Stream.DefaultChunkSize),
+    ).pipe(
+      Effect.catchAllCause((cause) =>
+        Effect.flatMap(Queue.isShutdown(queue), (isShutdown) =>
+          isShutdown && Cause.isInterrupted(cause)
+            ? Effect.fail(Option.none<never>())
+            : Effect.failCause(Cause.map(cause, Option.some)),
+        ),
+      ),
+      Effect.flatMap((chunk) =>
+        Chunk.isEmpty(chunk)
+          ? Effect.fail(Option.none<never>())
+          : Effect.succeed(chunk),
+      ),
+    ),
+  );
