@@ -248,7 +248,7 @@ The processor tracks four counters accessible via `getMetrics()`:
 | `extractionFailures` | Total key extraction failures since process start |
 | `activeKeys` | Current number of keys held in dedupe state (point-in-time) |
 
-Metrics are emitted via structured logging following the same pattern as other Cascade components:
+Metrics are emitted automatically via structured logging every 100 processed messages, using the same bounded component-metrics cadence as other Cascade components (for example stdout output). Processors have no close hook, so emission is entirely count-based inside `process` — there is no flush-on-close. Each snapshot is one coherent post-update view of the four counters:
 
 ```json
 {
