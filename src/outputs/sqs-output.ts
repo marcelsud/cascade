@@ -90,26 +90,55 @@ interface EnqueueResult {
 }
 
 /**
- * Serialize Message to SQS format
+ * Serialize Message to SQS format.
+ *
+ * Emits documented top-level message attributes plus the full metadata JSON
+ * blob. Optional fields are omitted when absent.
  */
 const serializeMessage = (
   msg: Message,
   delaySeconds?: number,
-): { body: string; attributes: Record<string, any>; delay?: number } => ({
-  body: JSON.stringify(msg.content),
-  attributes: {
+): { body: string; attributes: Record<string, any>; delay?: number } => {
+  const stringAttr = (value: unknown) =>
+    typeof value === "string"
+      ? { StringValue: value, DataType: "String" as const }
+      : undefined;
+
+  const attributes: Record<string, any> = {
     messageId: { StringValue: msg.id, DataType: "String" },
     timestamp: { StringValue: msg.timestamp.toString(), DataType: "Number" },
-    correlationId: msg.correlationId
-      ? { StringValue: msg.correlationId, DataType: "String" }
-      : undefined,
     metadata: { StringValue: JSON.stringify(msg.metadata), DataType: "String" },
-    trace: msg.trace
-      ? { StringValue: JSON.stringify(msg.trace), DataType: "String" }
-      : undefined,
-  },
-  delay: delaySeconds,
-});
+  };
+
+  if (msg.correlationId) {
+    attributes.correlationId = {
+      StringValue: msg.correlationId,
+      DataType: "String",
+    };
+  }
+
+  const source = stringAttr(msg.metadata.source);
+  if (source) attributes.source = source;
+
+  const receivedAt = stringAttr(msg.metadata.receivedAt);
+  if (receivedAt) attributes.receivedAt = receivedAt;
+
+  const processedAt = stringAttr(msg.metadata.processedAt);
+  if (processedAt) attributes.processedAt = processedAt;
+
+  if (msg.trace) {
+    attributes.trace = {
+      StringValue: JSON.stringify(msg.trace),
+      DataType: "String",
+    };
+  }
+
+  return {
+    body: JSON.stringify(msg.content),
+    attributes,
+    delay: delaySeconds,
+  };
+};
 
 /**
  * Create an SQS output destination
