@@ -1,4 +1,4 @@
-import { Effect, Queue } from "effect";
+import { Duration, Effect, Queue } from "effect";
 import type { MetricsAccumulator } from "../core/metrics.js";
 
 export type OverflowPolicy = "block" | "drop_new" | "drop_old";
@@ -66,5 +66,33 @@ export const recordQueueDrop = (
       state.suppressed = 0;
     } else {
       state.suppressed += 1;
+    }
+  });
+
+/** Poll interval while waiting for consumers to drain a one-shot input queue. */
+const DRAIN_POLL_INTERVAL_MS = 5;
+
+/**
+ * Wait until consumers have taken every queued value.
+ *
+ * A resolved `Queue.offer` only means the queue accepted the value; the stream
+ * may not have taken it yet. Shutting down at that point discards the
+ * remainder and `Stream.fromQueue` reports it as a normal end of stream, so the
+ * loss is silent. Callers shut the queue down after this resolves.
+ *
+ * `isAborted` lets an explicit close cut the wait short. A concurrent shutdown
+ * makes `Queue.size` interrupt; that is treated as "nothing left to drain".
+ */
+export const awaitInputQueueDrain = <A>(
+  queue: Queue.Queue<A>,
+  isAborted: () => boolean,
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    while (!isAborted()) {
+      const remaining = yield* Queue.size(queue).pipe(
+        Effect.catchAllCause(() => Effect.succeed(0)),
+      );
+      if (remaining <= 0) return;
+      yield* Effect.sleep(Duration.millis(DRAIN_POLL_INTERVAL_MS));
     }
   });

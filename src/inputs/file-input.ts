@@ -12,6 +12,7 @@ import { MetricsAccumulator, emitInputMetrics } from "../core/metrics.js";
 import { validate, NonEmptyString, PositiveInt } from "../core/validation.js";
 import { createTextMessage, splitCompleteLines } from "./text-input-utils.js";
 import {
+  awaitInputQueueDrain,
   createInputQueue,
   offerInputQueue,
   recordQueueDrop,
@@ -125,6 +126,19 @@ export const createFileInput = (
     await Effect.runPromise(Queue.shutdown(queue));
   };
 
+  /**
+   * One-shot completion. Production finishing is not consumption finishing, so
+   * wait for the stream to drain what it accepted before shutting the queue
+   * down; an explicit close() cuts the wait short.
+   */
+  const finishOneShot = async (): Promise<void> => {
+    if (queueClosed) return;
+    await Effect.runPromise(
+      awaitInputQueueDrain(queue, () => closed || queueClosed),
+    );
+    await shutdownQueue();
+  };
+
   const emitLineMessages = async (lines: readonly string[]): Promise<void> => {
     for (const line of lines) {
       const startedAt = Date.now();
@@ -189,7 +203,7 @@ export const createFileInput = (
       }
 
       if (!follow) {
-        await shutdownQueue();
+        await finishOneShot();
         return false;
       }
 
@@ -207,7 +221,7 @@ export const createFileInput = (
       ).catch(() => undefined);
 
       if (!follow) {
-        await shutdownQueue();
+        await finishOneShot();
         return false;
       }
 
