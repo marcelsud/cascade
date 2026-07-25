@@ -1,10 +1,37 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { Effect } from "effect";
+import type * as EffectRef from "effect/Ref";
 import {
   createDedupeProcessor,
   DedupeKeyExtractionError,
 } from "../../../src/processors/dedupe-processor.js";
 import type { Message } from "../../../src/core/types.js";
+
+/**
+ * Deterministic concurrency gate for same-key admission races.
+ * When enabled, every Ref.get yields after reading so concurrent fibers all
+ * observe the pre-insert snapshot under the unfixed multi-step admission path.
+ * Fixed atomic Ref.modify never calls Ref.get for membership, so it stays correct.
+ */
+const refGetYieldGate = vi.hoisted(() => ({ enabled: false }));
+
+vi.mock("effect", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("effect")>();
+  const Ref = {
+    ...actual.Ref,
+    get: <A>(ref: EffectRef.Ref<A>) => {
+      if (!refGetYieldGate.enabled) {
+        return actual.Ref.get(ref);
+      }
+      return actual.Effect.gen(function* () {
+        const value = yield* actual.Ref.get(ref);
+        yield* actual.Effect.yieldNow();
+        return value;
+      });
+    },
+  };
+  return { ...actual, Ref };
+});
 
 /**
  * Helper: create a message with explicit id for deterministic testing.
@@ -399,6 +426,64 @@ describe("Dedupe Suppression, First-Seen Pass-Through, and Expiry", () => {
       expect(metrics.extractionFailures).toBe(1);
       expect(metrics.dedupeMisses).toBe(1);
       expect(metrics.dedupeHits).toBe(1);
+    });
+  });
+
+  describe("concurrent first-seen admission", () => {
+    it("should admit exactly one concurrent call for the same unseen key", async () => {
+      const processor = createDedupeProcessor({ key: "orderId" });
+      const messages = Array.from({ length: 10 }, (_, i) =>
+        makeMsg(`m${i}`, { orderId: "same-key" }),
+      );
+
+      refGetYieldGate.enabled = true;
+      let results: Array<Message | Message[]>;
+      try {
+        results = await Effect.runPromise(
+          Effect.forEach(messages, (msg) => processor.process(msg), {
+            concurrency: 10,
+          }),
+        );
+      } finally {
+        refGetYieldGate.enabled = false;
+      }
+
+      const passed = results.filter((r) => !Array.isArray(r));
+      const suppressed = results.filter(
+        (r) => Array.isArray(r) && (r as Message[]).length === 0,
+      );
+      expect(passed).toHaveLength(1);
+      expect(suppressed).toHaveLength(9);
+
+      const metrics = await Effect.runPromise(processor.getMetrics());
+      expect(metrics.dedupeMisses).toBe(1);
+      expect(metrics.dedupeHits).toBe(9);
+      expect(metrics.activeKeys).toBe(1);
+    });
+
+    it("should admit each concurrent distinct key exactly once", async () => {
+      const processor = createDedupeProcessor({ key: "orderId", maxKeys: 20 });
+      const messages = Array.from({ length: 10 }, (_, i) =>
+        makeMsg(`m${i}`, { orderId: `key-${i}` }),
+      );
+
+      const results = await Effect.runPromise(
+        Effect.forEach(messages, (msg) => processor.process(msg), {
+          concurrency: 10,
+        }),
+      );
+
+      const passed = results.filter((r) => !Array.isArray(r));
+      const suppressed = results.filter(
+        (r) => Array.isArray(r) && (r as Message[]).length === 0,
+      );
+      expect(passed).toHaveLength(10);
+      expect(suppressed).toHaveLength(0);
+
+      const metrics = await Effect.runPromise(processor.getMetrics());
+      expect(metrics.dedupeMisses).toBe(10);
+      expect(metrics.dedupeHits).toBe(0);
+      expect(metrics.activeKeys).toBe(10);
     });
   });
 });
