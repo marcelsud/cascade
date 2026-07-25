@@ -111,6 +111,59 @@ describe("FileInput", () => {
     expect(messages[1].content).toEqual({ raw: "plain-text" });
   });
 
+  it("emits a final non-empty record without a trailing newline in one-shot mode", async () => {
+    const filePath = await createTempFile('{"id":1}\n{"id":2}');
+    const input = createFileInput({
+      path: filePath,
+      follow: false,
+      startAt: "beginning",
+      pollIntervalMs: 25,
+    });
+
+    const messages = await collectChunk(Stream.runCollect(input.stream));
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0].content).toEqual({ id: 1 });
+    expect(messages[1].content).toEqual({ id: 2 });
+    expect(messages[1].metadata).toMatchObject({
+      source: "file-input",
+      path: filePath,
+      lineNumber: 2,
+    });
+
+    expect(input.getMetrics?.()).toMatchObject({
+      messagesProcessed: 2,
+      messagesDropped: 0,
+      errorsEncountered: 0,
+    });
+  });
+
+  it("emits a single-record file with no trailing newline in one-shot mode", async () => {
+    const filePath = await createTempFile('{"id":1}');
+    const input = createFileInput({
+      path: filePath,
+      follow: false,
+      startAt: "beginning",
+      pollIntervalMs: 25,
+    });
+
+    const messages = await collectChunk(Stream.runCollect(input.stream));
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0].content).toEqual({ id: 1 });
+    expect(messages[0].metadata).toMatchObject({
+      source: "file-input",
+      path: filePath,
+      lineNumber: 1,
+    });
+
+    expect(input.getMetrics?.()).toMatchObject({
+      messagesProcessed: 1,
+      messagesDropped: 0,
+      errorsEncountered: 0,
+    });
+  });
+
   it("ignores pre-existing content in default tail mode and emits appended lines", async () => {
     const filePath = await createTempFile("existing\n");
     const input = createFileInput({
