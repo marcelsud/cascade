@@ -11,8 +11,6 @@ import { startPipeline, type RunningPipeline } from "./helpers/index.js";
 
 const AUTH_URL = process.env.CASCADE_E2E_REDIS_AUTH_URL;
 
-const describeAuth = AUTH_URL ? describe : describe.skip;
-
 const parseRedisUrl = (raw: string) => {
   const endpoint = new URL(raw);
   return {
@@ -42,7 +40,7 @@ const withTimeout = async <A>(
   }
 };
 
-describeAuth("Redis fatal reconnect with password-protected Redis", () => {
+describe("Redis fatal reconnect with password-protected Redis", () => {
   let tempDir: string | undefined;
   let activeRun: RunningPipeline | undefined;
   let activeChild: ChildProcessWithoutNullStreams | undefined;
@@ -70,7 +68,8 @@ describeAuth("Redis fatal reconnect with password-protected Redis", () => {
   });
 
   it("fails the pipeline once credentials are omitted and reconnect is unlimited", async () => {
-    const { host, port } = parseRedisUrl(AUTH_URL!);
+    if (!AUTH_URL) return;
+    const { host, port } = parseRedisUrl(AUTH_URL);
     const startedAt = Date.now();
 
     // Omit password and maxReconnectAttempts. Default reconnect is unlimited,
@@ -116,7 +115,8 @@ describeAuth("Redis fatal reconnect with password-protected Redis", () => {
   }, 10_000);
 
   it("exits the CLI non-zero for passwordless Redis without reconnect limit", async () => {
-    const { host, port } = parseRedisUrl(AUTH_URL!);
+    if (!AUTH_URL) return;
+    const { host, port } = parseRedisUrl(AUTH_URL);
     tempDir = await mkdtemp(join(tmpdir(), "cascade-redis-fatal-"));
     const configPath = join(tempDir, "redis-fatal.yaml");
     await writeFile(
