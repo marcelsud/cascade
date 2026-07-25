@@ -79,6 +79,12 @@ export const recordQueueDrop = (
  * completion by shutting the queue down. Instead it flips `isProducerDone`
  * once every offer has resolved; this stream drains what is left and then
  * ends. An explicit `Queue.shutdown` (from `close()`) still ends it at once.
+ *
+ * Chunks stay bounded by `Stream.DefaultChunkSize`, matching what
+ * `Stream.fromQueue` pulls. Taking the whole queue instead would hold up to
+ * another full capacity outside the queue while a chunk is processed, which
+ * loosens `block` backpressure and changes `drop_new`/`drop_old` outcomes
+ * whenever `queueSize` exceeds that bound.
  */
 export const streamInputQueue = <A>(
   queue: Queue.Queue<A>,
@@ -87,8 +93,8 @@ export const streamInputQueue = <A>(
   Stream.repeatEffectChunkOption(
     Effect.suspend(() =>
       isProducerDone()
-        ? Queue.takeAll(queue)
-        : Queue.takeBetween(queue, 1, Queue.capacity(queue)),
+        ? Queue.takeUpTo(queue, Stream.DefaultChunkSize)
+        : Queue.takeBetween(queue, 1, Stream.DefaultChunkSize),
     ).pipe(
       Effect.catchAllCause((cause) =>
         Effect.flatMap(Queue.isShutdown(queue), (isShutdown) =>

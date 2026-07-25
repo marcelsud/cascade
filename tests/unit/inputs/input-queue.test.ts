@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { Effect, Fiber, Option, Queue } from "effect";
+import { Effect, Fiber, Option, Queue, Stream } from "effect";
 import {
   createInputQueue,
   offerInputQueue,
   recordQueueDrop,
+  streamInputQueue,
 } from "../../../src/inputs/input-queue.js";
 import { MetricsAccumulator } from "../../../src/core/metrics.js";
 
@@ -96,5 +97,27 @@ describe("bounded input queue policies", () => {
     expect(snapshot.messagesProcessed).toBe(1);
     expect(snapshot.messagesDropped).toBe(1);
     expect(snapshot.messagesProcessed + snapshot.messagesDropped).toBe(2);
+  });
+
+  it("caps streamed chunks at the default stream chunk size", async () => {
+    const capacity = Stream.DefaultChunkSize + 904;
+    const chunkSizes = await Effect.runPromise(
+      Effect.gen(function* () {
+        const queue = yield* createInputQueue<number>(capacity, "block");
+        for (let value = 0; value < capacity; value++) {
+          yield* Queue.offer(queue, value);
+        }
+        // Production is already finished, so the stream drains and ends.
+        const chunks = yield* Stream.runCollect(
+          Stream.chunks(streamInputQueue(queue, () => true)),
+        );
+        return Array.from(chunks).map((chunk) => chunk.length);
+      }),
+    );
+
+    // Taking the whole queue instead would hold `capacity` messages outside
+    // the queue in one chunk, loosening backpressure past what
+    // `Stream.fromQueue` ever did.
+    expect(chunkSizes).toEqual([Stream.DefaultChunkSize, 904]);
   });
 });
