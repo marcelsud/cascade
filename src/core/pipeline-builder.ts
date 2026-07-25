@@ -119,137 +119,164 @@ const buildInputInternal = (
   registry?: ComponentRegistry,
 ): Effect.Effect<Input<any>, BuildError> => {
   if (config.aws_sqs) {
-    return Effect.succeed(
-      createSqsInput({
-        queueUrl: config.aws_sqs.url,
-        region: config.aws_sqs.region,
-        endpoint: config.aws_sqs.endpoint,
-        waitTimeSeconds: config.aws_sqs.wait_time_seconds,
-        maxMessages: config.aws_sqs.max_number_of_messages,
-        maxAttempts: config.aws_sqs.max_attempts,
-        requestTimeout: config.aws_sqs.request_timeout,
-        connectionTimeout: config.aws_sqs.connection_timeout,
-      }),
-    );
+    const awsSqs = config.aws_sqs;
+    return Effect.try({
+      try: () =>
+        createSqsInput({
+          queueUrl: awsSqs.url,
+          region: awsSqs.region,
+          endpoint: awsSqs.endpoint,
+          waitTimeSeconds: awsSqs.wait_time_seconds,
+          maxMessages: awsSqs.max_number_of_messages,
+          maxAttempts: awsSqs.max_attempts,
+          requestTimeout: awsSqs.request_timeout,
+          connectionTimeout: awsSqs.connection_timeout,
+        }),
+      catch: (error) =>
+        new BuildError(error instanceof Error ? error.message : String(error)),
+    });
   }
 
   if (config.redis_streams) {
     const streams = config.redis_streams;
     return parseRedisStreamsUrl(streams.url, "input").pipe(
-      Effect.map(({ host, port, password, db }) =>
-        createRedisStreamsInput({
-          host,
-          port,
-          stream: streams.stream,
-          password,
-          db,
-          mode: streams.mode,
-          consumerGroup: streams.consumer_group,
-          consumerName: streams.consumer_name,
-          blockMs: streams.block_ms,
-          count: streams.count,
-          startId: streams.start_id,
-          maxReconnectAttempts: streams.max_reconnect_attempts,
-          reconnectBackoffMs: streams.reconnect_backoff_ms,
-          connectTimeout: streams.connect_timeout,
-          commandTimeout: streams.command_timeout,
-          keepAlive: streams.keep_alive,
-          lazyConnect: streams.lazy_connect,
-          maxRetriesPerRequest: streams.max_retries_per_request,
-          enableOfflineQueue: streams.enable_offline_queue,
+      Effect.flatMap(({ host, port, password, db }) =>
+        Effect.try({
+          try: () =>
+            createRedisStreamsInput({
+              host,
+              port,
+              stream: streams.stream,
+              password,
+              db,
+              mode: streams.mode,
+              consumerGroup: streams.consumer_group,
+              consumerName: streams.consumer_name,
+              blockMs: streams.block_ms,
+              count: streams.count,
+              startId: streams.start_id,
+              maxReconnectAttempts: streams.max_reconnect_attempts,
+              reconnectBackoffMs: streams.reconnect_backoff_ms,
+              connectTimeout: streams.connect_timeout,
+              commandTimeout: streams.command_timeout,
+              keepAlive: streams.keep_alive,
+              lazyConnect: streams.lazy_connect,
+              maxRetriesPerRequest: streams.max_retries_per_request,
+              enableOfflineQueue: streams.enable_offline_queue,
+            }),
+          catch: (error) =>
+            new BuildError(
+              error instanceof Error ? error.message : String(error),
+            ),
         }),
       ),
     );
   }
 
   if (config.redis_pubsub) {
-    return Effect.succeed(
-      createRedisPubSubInput({
-        host: config.redis_pubsub.host || "localhost",
-        port: config.redis_pubsub.port || 6379,
-        channels: config.redis_pubsub.channels
-          ? [...config.redis_pubsub.channels]
-          : undefined,
-        patterns: config.redis_pubsub.patterns
-          ? [...config.redis_pubsub.patterns]
-          : undefined,
-        password: config.redis_pubsub.password,
-        db: config.redis_pubsub.db,
-        queueSize: config.redis_pubsub.queue_size,
-        overflow: config.redis_pubsub.overflow,
-        connectTimeout: config.redis_pubsub.connect_timeout,
-        commandTimeout: config.redis_pubsub.command_timeout,
-        keepAlive: config.redis_pubsub.keep_alive,
-        lazyConnect: config.redis_pubsub.lazy_connect,
-        maxRetriesPerRequest: config.redis_pubsub.max_retries_per_request,
-        enableOfflineQueue: config.redis_pubsub.enable_offline_queue,
-      }),
-    );
+    const redisPubSub = config.redis_pubsub;
+    return Effect.try({
+      try: () =>
+        createRedisPubSubInput({
+          host: redisPubSub.host || "localhost",
+          port: redisPubSub.port || 6379,
+          channels: redisPubSub.channels
+            ? [...redisPubSub.channels]
+            : undefined,
+          patterns: redisPubSub.patterns
+            ? [...redisPubSub.patterns]
+            : undefined,
+          password: redisPubSub.password,
+          db: redisPubSub.db,
+          queueSize: redisPubSub.queue_size,
+          overflow: redisPubSub.overflow,
+          connectTimeout: redisPubSub.connect_timeout,
+          commandTimeout: redisPubSub.command_timeout,
+          keepAlive: redisPubSub.keep_alive,
+          lazyConnect: redisPubSub.lazy_connect,
+          maxRetriesPerRequest: redisPubSub.max_retries_per_request,
+          enableOfflineQueue: redisPubSub.enable_offline_queue,
+        }),
+      catch: (error) =>
+        new BuildError(error instanceof Error ? error.message : String(error)),
+    });
   }
 
   if (config.redis_list) {
+    const redisList = config.redis_list;
     const key =
-      typeof config.redis_list.key === "string"
-        ? config.redis_list.key
-        : [...config.redis_list.key];
+      typeof redisList.key === "string" ? redisList.key : [...redisList.key];
 
-    return Effect.succeed(
-      createRedisListInput({
-        host: config.redis_list.host || "localhost",
-        port: config.redis_list.port || 6379,
-        key,
-        direction: config.redis_list.direction,
-        timeout: config.redis_list.timeout,
-        password: config.redis_list.password,
-        db: config.redis_list.db,
-        connectTimeout: config.redis_list.connect_timeout,
-        commandTimeout: config.redis_list.command_timeout,
-        keepAlive: config.redis_list.keep_alive,
-        lazyConnect: config.redis_list.lazy_connect,
-        maxRetriesPerRequest: config.redis_list.max_retries_per_request,
-        enableOfflineQueue: config.redis_list.enable_offline_queue,
-        maxReconnectAttempts: config.redis_list.max_reconnect_attempts,
-        reconnectBackoffMs: config.redis_list.reconnect_backoff_ms,
-      }),
-    );
+    return Effect.try({
+      try: () =>
+        createRedisListInput({
+          host: redisList.host || "localhost",
+          port: redisList.port || 6379,
+          key,
+          direction: redisList.direction,
+          timeout: redisList.timeout,
+          password: redisList.password,
+          db: redisList.db,
+          connectTimeout: redisList.connect_timeout,
+          commandTimeout: redisList.command_timeout,
+          keepAlive: redisList.keep_alive,
+          lazyConnect: redisList.lazy_connect,
+          maxRetriesPerRequest: redisList.max_retries_per_request,
+          enableOfflineQueue: redisList.enable_offline_queue,
+          maxReconnectAttempts: redisList.max_reconnect_attempts,
+          reconnectBackoffMs: redisList.reconnect_backoff_ms,
+        }),
+      catch: (error) =>
+        new BuildError(error instanceof Error ? error.message : String(error)),
+    });
   }
 
   if (config.http) {
-    return Effect.succeed(
-      createHttpInput({
-        port: config.http.port,
-        host: config.http.host,
-        path: config.http.path,
-        timeout: config.http.timeout,
-        queueSize: config.http.queue_size,
-        overflow: config.http.overflow,
-      }),
-    );
+    const http = config.http;
+    return Effect.try({
+      try: () =>
+        createHttpInput({
+          port: http.port,
+          host: http.host,
+          path: http.path,
+          timeout: http.timeout,
+          queueSize: http.queue_size,
+          overflow: http.overflow,
+        }),
+      catch: (error) =>
+        new BuildError(error instanceof Error ? error.message : String(error)),
+    });
   }
 
   if ((config as any).file) {
-    return Effect.succeed(
-      createFileInput({
-        path: (config as any).file.path,
-        follow: (config as any).file.follow,
-        startAt: (config as any).file.start_at,
-        pollIntervalMs: (config as any).file.poll_interval_ms,
-        encoding: (config as any).file.encoding,
-        queueSize: (config as any).file.queue_size,
-        overflow: (config as any).file.overflow,
-      }),
-    );
+    return Effect.try({
+      try: () =>
+        createFileInput({
+          path: (config as any).file.path,
+          follow: (config as any).file.follow,
+          startAt: (config as any).file.start_at,
+          pollIntervalMs: (config as any).file.poll_interval_ms,
+          encoding: (config as any).file.encoding,
+          queueSize: (config as any).file.queue_size,
+          overflow: (config as any).file.overflow,
+        }),
+      catch: (error) =>
+        new BuildError(error instanceof Error ? error.message : String(error)),
+    });
   }
 
   if ((config as any).stdin) {
-    return Effect.succeed(
-      createStdinInput({
-        mode: (config as any).stdin.mode,
-        encoding: (config as any).stdin.encoding,
-        queueSize: (config as any).stdin.queue_size,
-        overflow: (config as any).stdin.overflow,
-      }),
-    );
+    return Effect.try({
+      try: () =>
+        createStdinInput({
+          mode: (config as any).stdin.mode,
+          encoding: (config as any).stdin.encoding,
+          queueSize: (config as any).stdin.queue_size,
+          overflow: (config as any).stdin.overflow,
+        }),
+      catch: (error) =>
+        new BuildError(error instanceof Error ? error.message : String(error)),
+    });
   }
 
   // Testing utility: generate input
