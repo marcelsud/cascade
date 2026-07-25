@@ -149,9 +149,10 @@ export const createSqsInput = (
       Effect.retry({
         times: 3,
         schedule: Schedule.exponential("1 second"),
+        while: (error) => error.shouldRetry,
       }),
       Effect.tapError((error) =>
-        Effect.logError(`SQS polling failed after 3 retries: ${error.message}`),
+        Effect.logError(`SQS polling failed: ${error.message}`),
       ),
     );
   };
@@ -217,58 +218,59 @@ export const createSqsInput = (
   /**
    * Create a stream that continuously polls SQS
    */
-  const stream = Stream.repeatEffect(
-    Effect.gen(function* () {
-      yield* Effect.logInfo("Polling SQS for messages...");
+  const pollBatch = Effect.gen(function* () {
+    yield* Effect.logInfo("Polling SQS for messages...");
 
-      const [sqsMessages, pollDuration] =
-        yield* measureDuration(pollMessages());
+    const [sqsMessages, pollDuration] =
+      yield* measureDuration(pollMessages());
 
-      if (sqsMessages.length === 0) {
-        yield* Effect.logDebug("No messages received, continuing to poll...");
-        return [];
-      }
+    if (sqsMessages.length === 0) {
+      yield* Effect.logDebug("No messages received, continuing to poll...");
+      return [];
+    }
 
-      yield* Effect.logDebug(
-        `Received ${sqsMessages.length} messages from SQS`,
-      );
+    yield* Effect.logDebug(
+      `Received ${sqsMessages.length} messages from SQS`,
+    );
 
-      // Convert messages. Deletion is deferred to the pipeline acknowledgement
-      // after all downstream processing and output delivery succeeds.
-      const [messages, processDuration] = yield* measureDuration(
-        Effect.forEach(sqsMessages, (sqsMsg) =>
-          Effect.succeed(convertMessage(sqsMsg)),
-        ),
-      );
+    // Convert messages. Deletion is deferred to the pipeline acknowledgement
+    // after all downstream processing and output delivery succeeds.
+    const [messages, processDuration] = yield* measureDuration(
+      Effect.forEach(sqsMessages, (sqsMsg) =>
+        Effect.succeed(convertMessage(sqsMsg)),
+      ),
+    );
 
-      // Record metrics
-      const totalDuration = pollDuration + processDuration;
-      messages.forEach(() => {
-        metrics.recordProcessed(totalDuration / messages.length);
-        messageCount++;
-      });
+    // Record metrics
+    const totalDuration = pollDuration + processDuration;
+    messages.forEach(() => {
+      metrics.recordProcessed(totalDuration / messages.length);
+      messageCount++;
+    });
 
-      // Emit metrics every 100 messages
-      if (messageCount >= 100) {
-        yield* emitInputMetrics(metrics.getInputMetrics());
-        messageCount = 0;
-      }
+    // Emit metrics every 100 messages
+    if (messageCount >= 100) {
+      yield* emitInputMetrics(metrics.getInputMetrics());
+      messageCount = 0;
+    }
 
-      return messages;
-    }),
-  ).pipe(
-    Stream.flatMap((messages) => Stream.fromIterable(messages)),
-    Stream.catchAll((error) =>
-      Stream.fromEffect(
-        Effect.gen(function* () {
-          metrics.recordError();
-          yield* Effect.logError(`SQS stream error: ${error}`);
-          // Wait before retrying
-          yield* Effect.sleep("5 seconds");
-          return [] as Message[];
-        }),
-      ).pipe(Stream.flatMap((msgs) => Stream.fromIterable(msgs))),
+    return messages;
+  }).pipe(
+    Effect.catchAll((error: SqsInputError) =>
+      Effect.gen(function* () {
+        metrics.recordError();
+        yield* Effect.logError(`SQS stream error: ${error}`);
+        if (!error.shouldRetry) {
+          return yield* Effect.fail(error);
+        }
+        yield* Effect.sleep("5 seconds");
+        return [] as Message[];
+      }),
     ),
+  );
+
+  const stream = Stream.repeatEffect(pollBatch).pipe(
+    Stream.flatMap((messages) => Stream.fromIterable(messages)),
   );
 
   return {

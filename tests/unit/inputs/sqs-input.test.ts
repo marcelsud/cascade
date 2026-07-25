@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { Effect, Stream } from "effect";
+import {
+  Effect,
+  Fiber,
+  Logger,
+  Stream,
+  TestClock,
+} from "effect";
+import * as TestContext from "effect/TestContext";
 import {
   DeleteMessageCommand,
   ReceiveMessageCommand,
@@ -303,4 +310,149 @@ describe("SQS at-least-once acknowledgement", () => {
     expect(result.success).toBe(false);
     expect(acknowledgements).toBe(0);
   });
+});
+
+describe("SQS polling recovery", () => {
+  it("re-polls after an exhausted transient receive cycle", async () => {
+    const commands: Array<ReceiveMessageCommand | DeleteMessageCommand> = [];
+    let receiveAttempts = 0;
+    const client: SqsClientLike = {
+      send: async (command) => {
+        commands.push(command);
+        if (command instanceof ReceiveMessageCommand) {
+          receiveAttempts += 1;
+          if (receiveAttempts <= 4) {
+            throw new Error("network timeout");
+          }
+          return {
+            Messages: [
+              {
+                MessageId: "message-1",
+                Body: '{"value":1}',
+              },
+            ],
+          };
+        }
+        return {};
+      },
+      destroy: () => undefined,
+    };
+
+    const captured: unknown[] = [];
+    const logMessages: unknown[] = [];
+    const logger = Logger.make<unknown, void>(({ message }) => {
+      logMessages.push(message);
+    });
+
+    const sqsInput = createSqsInput(
+      {
+        queueUrl: "http://localhost:4566/000000000000/test-queue",
+        endpoint: "http://localhost:4566",
+        waitTimeSeconds: 0,
+      },
+      client,
+    );
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fiber = yield* Effect.fork(
+          run({
+            name: "sqs-recovery-test",
+            input: {
+              ...sqsInput,
+              stream: sqsInput.stream.pipe(Stream.take(1)),
+            },
+            processors: [],
+            output: {
+              name: "capture",
+              send: (message) =>
+                Effect.sync(() => {
+                  captured.push(message.content);
+                }),
+            },
+          }).pipe(Effect.provide(Logger.replace(Logger.defaultLogger, logger))),
+        );
+
+        yield* TestClock.adjust("13 seconds");
+        return yield* Fiber.join(fiber);
+      }).pipe(Effect.provide(TestContext.TestContext)),
+    );
+
+    expect(
+      commands.filter((command) => command instanceof ReceiveMessageCommand),
+    ).toHaveLength(5);
+    expect(
+      commands.filter((command) => command instanceof DeleteMessageCommand),
+    ).toHaveLength(0);
+    expect(captured).toEqual([{ value: 1 }]);
+    expect(result.success).toBe(true);
+    expect(result.stats.processed).toBe(1);
+    expect(result.stats.failed).toBe(0);
+    expect(result.metrics?.input?.errorsEncountered).toBe(1);
+    expect(JSON.stringify(logMessages)).toContain("SQS stream error");
+  });
+
+  it.each([
+    ["logical", "validation failed"],
+    ["fatal", "unauthorized"],
+  ] as const)(
+    "terminates on first %s receive error without retrying",
+    async (category, errorMessage) => {
+      const commands: Array<ReceiveMessageCommand | DeleteMessageCommand> = [];
+      const client: SqsClientLike = {
+        send: async (command) => {
+          commands.push(command);
+          if (command instanceof ReceiveMessageCommand) {
+            throw new Error(errorMessage);
+          }
+          return {};
+        },
+        destroy: () => undefined,
+      };
+
+      const captured: unknown[] = [];
+      const sqsInput = createSqsInput(
+        {
+          queueUrl: "http://localhost:4566/000000000000/test-queue",
+          endpoint: "http://localhost:4566",
+          waitTimeSeconds: 0,
+        },
+        client,
+      );
+
+      const result = await Effect.runPromise(
+        run({
+          name: "sqs-terminal-test",
+          input: {
+            ...sqsInput,
+            stream: sqsInput.stream.pipe(Stream.take(1)),
+          },
+          processors: [],
+          output: {
+            name: "capture",
+            send: (message) =>
+              Effect.sync(() => {
+                captured.push(message.content);
+              }),
+          },
+        }),
+      );
+
+      expect(
+        commands.filter((command) => command instanceof ReceiveMessageCommand),
+      ).toHaveLength(1);
+      expect(captured).toEqual([]);
+      expect(result.success).toBe(false);
+      expect(result.stats.failed).toBeGreaterThanOrEqual(1);
+      expect(result.metrics?.input?.errorsEncountered).toBe(1);
+      expect(result.errors).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            _tag: "SqsInputError",
+            category,
+          }),
+        ]),
+      );
+    },
+  );
 });
