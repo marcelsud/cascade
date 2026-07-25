@@ -1,7 +1,7 @@
 /**
  * Stdin Input - Reads messages from standard input
  */
-import { Effect, Queue, Stream } from "effect";
+import { Effect, Option, Queue, Stream } from "effect";
 import * as Schema from "effect/Schema";
 import type { Readable } from "node:stream";
 import type { Input, Message } from "../core/types.js";
@@ -42,6 +42,8 @@ export const StdinInputConfigSchema = Schema.Struct({
   overflow: Schema.optional(Schema.Literal("block", "drop_new", "drop_old")),
 });
 
+/** In-memory terminal marker; never emitted on the public Message stream. */
+const STDIN_EOF: unique symbol = Symbol("cascade.stdin.eof");
 export const createStdinInput = (
   config: StdinInputConfig = {},
   readable: Readable = process.stdin,
@@ -58,11 +60,14 @@ export const createStdinInput = (
   const encoding = (config.encoding ?? "utf8") as BufferEncoding;
   const queueSize = config.queueSize ?? 1_000;
   const overflow = config.overflow ?? "block";
-  const queue = Effect.runSync(createInputQueue<Message>(queueSize, overflow));
+  const queue = Effect.runSync(
+    createInputQueue<Message | typeof STDIN_EOF>(queueSize, overflow),
+  );
   const metrics = new MetricsAccumulator("stdin-input");
   const dropLogState = { lastLogAt: 0, suppressed: 0 };
 
-  let queueClosed = false;
+  let closed = false;
+  let ended = false;
   let lineNumber = 0;
   let bufferedText = "";
   let wholeText = "";
@@ -70,11 +75,40 @@ export const createStdinInput = (
   let work = Promise.resolve();
 
   const shutdownQueue = async (): Promise<void> => {
-    if (queueClosed) {
+    if (closed) {
       return;
     }
-    queueClosed = true;
+    closed = true;
     await Effect.runPromise(Queue.shutdown(queue));
+  };
+
+  /** Normal EOF: enqueue a terminal marker so buffered messages drain first. */
+  const signalEof = async (): Promise<void> => {
+    if (closed || ended) {
+      return;
+    }
+    ended = true;
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        if (overflow === "block") {
+          // Bounded offer suspends until the consumer makes space.
+          yield* Queue.offer(queue, STDIN_EOF);
+          return;
+        }
+
+        // drop_new / drop_old: never reject or evict a message to admit EOF.
+        // Wait for capacity, then offer the marker.
+        while (!(yield* Queue.isShutdown(queue))) {
+          if ((yield* Queue.size(queue)) < queueSize) {
+            if (yield* Queue.offer(queue, STDIN_EOF)) {
+              return;
+            }
+          }
+          yield* Effect.yieldNow();
+        }
+      }).pipe(Effect.catchAllCause(() => Effect.void)),
+    );
   };
 
   const offerMessage = async (value: string, line?: number): Promise<void> => {
@@ -94,6 +128,12 @@ export const createStdinInput = (
         createTextMessage(value, metadata),
         overflow,
         queueSize,
+      ).pipe(
+        // Forced close shuts the queue down under a blocked offer; treat that
+        // as rejection rather than a producer error.
+        Effect.catchAllCause(() =>
+          Effect.succeed({ accepted: false, dropped: 0 }),
+        ),
       ),
     );
     if (offer.dropped > 0) {
@@ -149,7 +189,7 @@ export const createStdinInput = (
           bufferedText = "";
         }
 
-        await shutdownQueue();
+        await signalEof();
       })
       .catch((error) => {
         metrics.recordError();
@@ -179,7 +219,11 @@ export const createStdinInput = (
   return {
     name: "stdin-input",
     getMetrics: () => metrics.getInputMetrics(),
-    stream: Stream.fromQueue(queue),
+    stream: Stream.fromQueue(queue).pipe(
+      Stream.filterMapWhile((element) =>
+        element === STDIN_EOF ? Option.none() : Option.some(element),
+      ),
+    ),
     close: () =>
       Effect.gen(function* () {
         readable.off("data", onData);
@@ -188,10 +232,12 @@ export const createStdinInput = (
         if ("pause" in readable && typeof readable.pause === "function") {
           readable.pause();
         }
-        yield* Effect.promise(() => work).pipe(
+        // Shut down first so blocked offers / EOF admission unblock, then
+        // wait for the producer chain and emit final metrics.
+        yield* Effect.promise(() => shutdownQueue()).pipe(
           Effect.catchAll(() => Effect.void),
         );
-        yield* Effect.promise(() => shutdownQueue()).pipe(
+        yield* Effect.promise(() => work).pipe(
           Effect.catchAll(() => Effect.void),
         );
         yield* emitInputMetrics(metrics.getInputMetrics());
