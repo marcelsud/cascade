@@ -115,29 +115,47 @@ reference and apply that canonical guidance.
 
 | Role | Selector |
 |------|----------|
-| Plan + primary local ship-gate + one independent post-PR review | `openai-codex/gpt-5.6-sol` |
+| Plan | the orchestrating session itself — **never delegated**, see Stage 1 |
+| Primary local ship-gate + one independent post-PR review | `openai-codex/gpt-5.6-sol` |
 | Implement + the other independent post-PR review | `grok-4.5` |
 
 - If a required selector is unavailable, **stop and report the blocker**. Never
   silently substitute another model.
-- If the active agent already is the required GPT selector, it MAY plan/review
+- If the active agent already is the required GPT selector, it MAY review
   itself; otherwise delegate with the exact selector above.
 - Shared lint, format, and project-wide checks run **once centrally** after
   implementation (or after a fix round). Subagents run focused verification
   only — not full-suite or format passes.
 
-#### Stage 1 — Plan (`openai-codex/gpt-5.6-sol`)
+#### Stage 1 — Plan (the orchestrating session; **not delegated**)
 
 1. Read the issue, `AGENTS.md`, canonical Claude instructions, relevant prior
    decisions, and affected code paths.
 2. Reproduce the bug or establish pre-change behavior when the issue is
-   behavioral.
+   behavioral. Run it. Quote the real output in the plan — a plan whose
+   "pre-change behavior" was never executed is not a plan.
 3. Map every acceptance criterion to an implementation step and a verification
    step.
 4. Reuse existing architecture and testing conventions; do not invent a
    parallel pattern.
-5. If the active agent is not `openai-codex/gpt-5.6-sol`, delegate this planning
-   pass with that exact selector.
+5. **Do not spawn a planning subagent.** Planning is the orchestrator's own
+   work; delegation starts at Stage 2.
+
+Why this stage is the exception:
+
+- A planner subagent starts blank. It re-reads the issue, re-derives the code
+  map, and returns a plan the orchestrator must re-verify before it can judge
+  anything — a full round trip that buys **zero** parallelism, because by
+  definition nothing else can run until the plan exists.
+- The plan is exactly the artifact the orchestrator may not hand off: it fixes
+  scope, decomposition, and the contracts every later stage is graded against.
+  Delegating it and then grading it is self-review wearing two hats.
+- Stage 1 has no model-boundary to buy. Stages 2, 3, and 5 cross a real one;
+  this one only adds latency and a lossy handoff.
+
+A read-only scout MAY still be used to *locate* code during planning —
+"where is X", "which tests cover Y". Locating is not planning. Never hand a
+scout the design, the acceptance mapping, or a decision.
 
 #### Stage 2 — Implement (`grok-4.5`)
 
@@ -244,17 +262,22 @@ Before reporting done, verify and link all of the following:
 Report configured model selectors accurately; do not claim upstream model
 identity beyond what the harness records.
 
-#### Worked example — issue #29 → PR #38
+#### Worked example — issue #65 → PR #86
 
 | Stage | What ran |
 |-------|----------|
-| 1 Plan | `openai-codex/gpt-5.6-sol` planned deferred Redis Streams consumer-group `XACK` until pipeline delivery succeeds |
-| 2 Implement | `grok-4.5` implemented deferred `ack`, pipeline failure-channel propagation, unit + real-Redis `XPENDING` coverage |
-| 3 Primary local review | `openai-codex/gpt-5.6-sol` ship-gated the local diff (Blocker/Material only) before delivery |
-| 4 PR | Branch pushed; PR #38 opened with verification commands and `Closes #29` |
-| 5 Independent reviews | Grok posted **APPROVED**; GPT posted **CHANGES REQUESTED** — both as PR comments, neither seeing the other |
-| 6 Fix + follow-up | GPT Material finding: E2E harness forwarded only host/port, dropping Redis URL password/DB (`tests/e2e/redis-streams-ack.test.ts`). Corrective commit parsed password + DB; focused proof: `CASCADE_E2E_REDIS_URL=redis://:secret@127.0.0.1:6380/2 bun test tests/e2e/redis-streams-ack.test.ts`. GPT follow-up **APPROVED** on the PR |
-| 7 Completion proof | Latest CI green, PR mergeable, both reviews + follow-up present, branch fully pushed and clean, temporary Redis/test services stopped |
+| 1 Plan | The orchestrating session planned it directly: reproduced the defect in the worktree (`collected 0 of 32`), read the installed Effect queue/stream internals, chose drain-before-shutdown, recorded three rejected alternatives, and mapped AC-1…AC-5 to steps and commands. No planner subagent |
+| 2 Implement | `grok-4.5` added the drain helper, both `!follow` call sites, and four regression cases; proved fail-first by reverting only `src/` and re-running |
+| 3 Primary local review | `openai-codex/gpt-5.6-sol` ship-gated the local diff — APPROVED, no Blocker/Material |
+| 4 PR | Branch pushed; PR #86 opened with verification commands and `Closes #65` |
+| 5 Independent reviews | Both posted **CHANGES REQUESTED**, neither seeing the other, and both landed the same Material: the drain poll's `Effect.sleep` pinned Node forever on an abandoned one-shot input — a regression the *plan* introduced |
+| 6 Fix + follow-up | Reviewers proposed different fixes; the session ruled for removing the timer entirely over patching one caller, and recorded why on the PR. Round 2: Grok **APPROVED**; GPT raised a *new* Material (chunks widened past `Stream.DefaultChunkSize` for `queue_size > 4096`, breaking the AC-5 backpressure contract). Verified against source, fixed, pinned by a failing-first test (`expected [ 5000 ] to deeply equal [ 4096, 904 ]`), then stopped at the two-round cap |
+| 7 Completion proof | CI green on the latest commit, PR mergeable, both reviews + both follow-ups + two rulings present, branch clean and pushed, no services left running |
+
+Note what Stage 5 caught: a flaw in the plan itself, authored by the same
+session that judged the reviews. That is the argument for keeping Stage 1
+in the main thread *and* keeping Stages 3 and 5 on other models — the
+independence that matters is at review time, not at planning time.
 
 ## Component Guides
 
