@@ -213,11 +213,6 @@ export const createDedupeProcessor = (
       return Effect.gen(function* () {
         const now = Date.now();
 
-        // Evict expired entries
-        yield* Ref.update(stateRef, (state) =>
-          evictExpired(state, now, windowMs),
-        );
-
         // Extract dedupe key — fail with typed error if extraction yields undefined
         const dedupeKey = extractKey(keyPath, msg);
         if (dedupeKey === undefined) {
@@ -237,9 +232,19 @@ export const createDedupeProcessor = (
           );
         }
 
-        // Check for duplicate
-        const state = yield* Ref.get(stateRef);
-        if (state.has(dedupeKey)) {
+        // Atomic admission: expire → membership → insert+overflow on miss.
+        // One Ref.modify so concurrent first-seen for the same key is linearizable.
+        const isDuplicate = yield* Ref.modify(stateRef, (state) => {
+          const afterExpiry = evictExpired(state, now, windowMs);
+          if (afterExpiry.has(dedupeKey)) {
+            return [true, afterExpiry] as const;
+          }
+          const next = new Map(afterExpiry);
+          next.set(dedupeKey, { firstSeen: now });
+          return [false, evictOverflow(next, maxKeys)] as const;
+        });
+
+        if (isDuplicate) {
           yield* Ref.update(countersRef, (c) => ({
             ...c,
             hits: c.hits + 1,
@@ -251,13 +256,6 @@ export const createDedupeProcessor = (
           });
           return [] as Message[];
         }
-
-        // First-seen: record and pass through
-        yield* Ref.update(stateRef, (s) => {
-          const next = new Map(s);
-          next.set(dedupeKey, { firstSeen: now });
-          return evictOverflow(next, maxKeys);
-        });
 
         yield* Ref.update(countersRef, (c) => ({
           ...c,
