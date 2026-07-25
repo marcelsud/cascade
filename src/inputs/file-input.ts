@@ -213,6 +213,11 @@ export const createFileInput = (
       }
 
       if (!follow) {
+        if (bufferedText.length > 0) {
+          const finalLine = bufferedText;
+          bufferedText = "";
+          await emitLineMessages([finalLine]);
+        }
         await finishOneShot();
         return false;
       }

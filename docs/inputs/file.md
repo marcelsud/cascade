@@ -52,6 +52,7 @@ input:
 
 ## Notes
 
-- Partial trailing lines are held until a newline arrives
+- Partial trailing lines are held until a newline arrives while following (`follow: true`)
+- In one-shot mode (`follow: false`), a non-empty final record without a trailing newline is emitted at EOF
 - If the file is truncated or rotated while following, Cascade restarts from the current file contents
 - Stat and read use the same open descriptor, so rotation between them cannot mix file identities
