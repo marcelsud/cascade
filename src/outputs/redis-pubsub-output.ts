@@ -1,48 +1,34 @@
 /**
  * Redis Pub/Sub Output - Publishes messages to Redis Pub/Sub channels
  */
-import { Effect, Schedule } from "effect";
+import { Effect } from "effect";
 import * as Schema from "effect/Schema";
-import Redis from "ioredis";
 import type { Output, Message } from "../core/types.js";
 import {
   ComponentError,
   type ErrorCategory,
   detectCategory,
 } from "../core/errors.js";
+import { MetricsAccumulator } from "../core/metrics.js";
+import { validate, NonEmptyString } from "../core/validation.js";
+import { formatRedisConnectionInfo } from "../core/redis-client-options.js";
 import {
-  MetricsAccumulator,
-  emitOutputMetrics,
-  measureDuration,
-} from "../core/metrics.js";
+  redisAuthSchemaFields,
+  redisHostEndpointSchemaFields,
+} from "../core/redis-connection-schema.js";
 import {
-  validate,
-  NonEmptyString,
-  Hostname,
-  Port,
-  PositiveInt,
-  RetryCount,
-} from "../core/validation.js";
-import {
-  closeRedisClient,
-  observeRedisClientErrors,
-} from "../core/redis-client.js";
+  closeRedisOutput,
+  interpolateMessageTemplate,
+  openRedisOutputClient,
+  recordRedisSendSuccess,
+  redisConnectionSchemaFields,
+  runRedisSendWithRetry,
+  serializeRedisMessagePayload,
+  type RedisConnectionConfig,
+} from "./redis-output-options.js";
 
-export interface RedisPubSubOutputConfig {
-  readonly host: string;
-  readonly port: number;
+export interface RedisPubSubOutputConfig extends RedisConnectionConfig {
   readonly channel: string; // Can use template interpolation like "events:{{content.type}}"
-  readonly password?: string;
-  readonly db?: number;
-  readonly maxRetries?: number; // Retry configuration (default: 3)
-
-  // Connection configuration
-  readonly connectTimeout?: number; // Connection timeout in ms (default: 10000)
-  readonly commandTimeout?: number; // Command timeout in ms (default: undefined)
-  readonly keepAlive?: number; // TCP keep-alive in ms (default: 30000)
-  readonly lazyConnect?: boolean; // Defer connection until first command (default: false)
-  readonly maxRetriesPerRequest?: number; // Max retries per request (default: 20)
-  readonly enableOfflineQueue?: boolean; // Queue commands when offline (default: true)
 }
 
 export class RedisPubSubOutputError extends ComponentError {
@@ -61,39 +47,11 @@ export class RedisPubSubOutputError extends ComponentError {
  * Validation schema for Redis Pub/Sub Output configuration
  */
 export const RedisPubSubOutputConfigSchema = Schema.Struct({
-  host: Schema.Union(Hostname, NonEmptyString),
-  port: Port,
+  ...redisHostEndpointSchemaFields,
   channel: NonEmptyString,
-  password: Schema.optional(NonEmptyString),
-  db: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
-  maxRetries: Schema.optional(RetryCount),
-  connectTimeout: Schema.optional(PositiveInt),
-  commandTimeout: Schema.optional(PositiveInt),
-  keepAlive: Schema.optional(PositiveInt),
-  lazyConnect: Schema.optional(Schema.Boolean),
-  maxRetriesPerRequest: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
-  enableOfflineQueue: Schema.optional(Schema.Boolean),
+  ...redisAuthSchemaFields,
+  ...redisConnectionSchemaFields,
 });
-
-/**
- * Interpolate channel template with message data
- * Supports templates like "events:{{content.type}}" or "user:{{metadata.userId}}"
- */
-const interpolateChannel = (template: string, msg: Message): string => {
-  return template.replace(/\{\{([^}]+)\}\}/g, (_, path) => {
-    const parts = path.trim().split(".");
-    let value: any = msg;
-
-    for (const part of parts) {
-      value = value?.[part];
-      if (value === undefined || value === null) {
-        return "";
-      }
-    }
-
-    return String(value);
-  });
-};
 
 /**
  * Create a Redis Pub/Sub output
@@ -116,28 +74,8 @@ export const createRedisPubSubOutput = (
     ),
   );
 
-  const client = new Redis({
-    host: config.host,
-    port: config.port,
-    password: config.password,
-    db: config.db || 0,
-    connectTimeout: config.connectTimeout ?? 10000,
-    commandTimeout: config.commandTimeout,
-    keepAlive: config.keepAlive ?? 30000,
-    lazyConnect: config.lazyConnect ?? false,
-    maxRetriesPerRequest: config.maxRetriesPerRequest ?? 20,
-    enableOfflineQueue: config.enableOfflineQueue ?? true,
-    retryStrategy: (times) => {
-      const delay = Math.min(times * 50, 2000);
-      return delay;
-    },
-  });
-  observeRedisClientErrors(client, "Redis Pub/Sub output");
-
-  // Log connection info
-  const connectionInfo = `redis://${config.host}:${config.port}/${config.db || 0}`;
-
-  // Metrics tracking
+  const client = openRedisOutputClient(config, "Redis Pub/Sub output");
+  const connectionInfo = formatRedisConnectionInfo(config);
   const metrics = new MetricsAccumulator("redis-pubsub-output");
   let messageCount = 0;
   let connectionLogged = false;
@@ -156,20 +94,11 @@ export const createRedisPubSubOutput = (
         }
 
         // Interpolate channel name with message data
-        const channel = interpolateChannel(config.channel, msg);
-
-        // Prepare message payload (serialize entire message as JSON)
-        const payload = JSON.stringify({
-          id: msg.id,
-          correlationId: msg.correlationId,
-          timestamp: msg.timestamp,
-          content: msg.content,
-          metadata: msg.metadata,
-          trace: msg.trace,
-        });
+        const channel = interpolateMessageTemplate(config.channel, msg);
+        const payload = serializeRedisMessagePayload(msg);
 
         // Publish with retry logic
-        const [numSubscribers, duration] = yield* measureDuration(
+        const [numSubscribers, duration] = yield* runRedisSendWithRetry(
           Effect.tryPromise({
             try: async () => {
               // PUBLISH returns number of subscribers that received the message
@@ -181,19 +110,10 @@ export const createRedisPubSubOutput = (
                 detectCategory(error),
                 error,
               ),
-          }).pipe(
-            // Retry with exponential backoff
-            Effect.retry({
-              times: config.maxRetries ?? 3,
-              schedule: Schedule.exponential("1 second"),
-            }),
-            Effect.tapError((error) => {
-              metrics.recordSendError();
-              return Effect.logError(
-                `Redis publish failed after ${config.maxRetries ?? 3} retries: ${error.message}`,
-              );
-            }),
-          ),
+          }),
+          metrics,
+          config.maxRetries ?? 3,
+          `Redis publish failed after ${config.maxRetries ?? 3} retries: `,
         );
 
         // Log warning if no subscribers received the message
@@ -203,15 +123,11 @@ export const createRedisPubSubOutput = (
           );
         }
 
-        // Record successful send
-        metrics.recordSent(1, duration);
-        messageCount++;
-
-        // Emit metrics every 100 messages
-        if (messageCount >= 100) {
-          yield* emitOutputMetrics(metrics.getOutputMetrics());
-          messageCount = 0;
-        }
+        messageCount = yield* recordRedisSendSuccess(
+          metrics,
+          duration,
+          messageCount,
+        );
 
         // Log successful send (DEBUG level)
         yield* Effect.logDebug(
@@ -220,23 +136,6 @@ export const createRedisPubSubOutput = (
       });
     },
     close: () =>
-      Effect.gen(function* () {
-        // Emit final metrics
-        if (messageCount > 0) {
-          yield* emitOutputMetrics(metrics.getOutputMetrics());
-        }
-        yield* Effect.tryPromise({
-          try: async () => {
-            await closeRedisClient(client);
-          },
-          catch: (error) => {
-            // Log but don't fail on close (best effort cleanup)
-            console.error("Failed to close Redis connection:", error);
-            return undefined;
-          },
-        }).pipe(
-          Effect.catchAll(() => Effect.void), // Never fail on close
-        );
-      }),
+      Effect.suspend(() => closeRedisOutput(client, metrics, messageCount)),
   };
 };

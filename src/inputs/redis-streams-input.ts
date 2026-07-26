@@ -3,7 +3,6 @@
  */
 import { Effect, Stream, Ref } from "effect";
 import * as Schema from "effect/Schema";
-import Redis from "ioredis";
 import type { Input, Message } from "../core/types.js";
 import { createMessage } from "../core/types.js";
 import {
@@ -16,17 +15,18 @@ import {
   emitInputMetrics,
   measureDuration,
 } from "../core/metrics.js";
+import { validate, NonEmptyString, PositiveInt } from "../core/validation.js";
 import {
-  validate,
-  NonEmptyString,
-  Hostname,
-  Port,
-  PositiveInt,
-} from "../core/validation.js";
+  redisAuthSchemaFields,
+  redisClientSchemaFields,
+  redisHostEndpointSchemaFields,
+  redisReconnectSchemaFields,
+} from "../core/redis-connection-schema.js";
+import { closeRedisClient } from "../core/redis-client.js";
 import {
-  closeRedisClient,
-  observeRedisClientErrors,
-} from "../core/redis-client.js";
+  formatRedisConnectionInfo,
+  openConfiguredRedisClient,
+} from "../core/redis-client-options.js";
 import { withReconnect } from "./redis-reconnect.js";
 
 export interface RedisStreamsInputConfig {
@@ -73,25 +73,17 @@ export class RedisStreamsInputError extends ComponentError {
  * Validation schema for Redis Streams Input configuration
  */
 export const RedisStreamsInputConfigSchema = Schema.Struct({
-  host: Schema.Union(Hostname, NonEmptyString),
-  port: Port,
+  ...redisHostEndpointSchemaFields,
   stream: NonEmptyString,
-  password: Schema.optional(NonEmptyString),
-  db: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
+  ...redisAuthSchemaFields,
   mode: Schema.optional(Schema.Literal("simple", "consumer-group")),
   consumerGroup: Schema.optional(NonEmptyString),
   consumerName: Schema.optional(NonEmptyString),
   blockMs: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
   count: Schema.optional(PositiveInt),
   startId: Schema.optional(NonEmptyString),
-  connectTimeout: Schema.optional(PositiveInt),
-  commandTimeout: Schema.optional(PositiveInt),
-  keepAlive: Schema.optional(PositiveInt),
-  lazyConnect: Schema.optional(Schema.Boolean),
-  maxRetriesPerRequest: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
-  enableOfflineQueue: Schema.optional(Schema.Boolean),
-  maxReconnectAttempts: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
-  reconnectBackoffMs: Schema.optional(PositiveInt),
+  ...redisClientSchemaFields,
+  ...redisReconnectSchemaFields,
 });
 
 /**
@@ -155,6 +147,50 @@ const convertRedisEntry = (
     return msg;
   });
 
+const recordStreamBatchMetrics = (
+  metrics: MetricsAccumulator,
+  messageCount: number,
+  batchSize: number,
+  readDuration: number,
+): Effect.Effect<number> =>
+  Effect.gen(function* () {
+    if (batchSize <= 0) return messageCount;
+    const perMessage = readDuration / batchSize;
+    for (let i = 0; i < batchSize; i++) {
+      metrics.recordProcessed(perMessage);
+    }
+    const next = messageCount + batchSize;
+    if (next >= 100) {
+      yield* emitInputMetrics(metrics.getInputMetrics());
+      return 0;
+    }
+    return next;
+  });
+
+const withStreamReconnect = <A, E extends { readonly message: string }>(
+  operation: Effect.Effect<A, E>,
+  config: Pick<
+    RedisStreamsInputConfig,
+    "maxReconnectAttempts" | "reconnectBackoffMs"
+  >,
+  metrics: MetricsAccumulator,
+): Effect.Effect<A, E> =>
+  withReconnect(
+    operation,
+    {
+      maxReconnectAttempts: config.maxReconnectAttempts,
+      reconnectBackoffMs: config.reconnectBackoffMs,
+    },
+    (error, attempt, delayMs) =>
+      Effect.sync(() => metrics.recordError()).pipe(
+        Effect.zipRight(
+          Effect.logWarning(
+            `Redis stream reconnect ${attempt} in ${delayMs}ms: ${error.message}`,
+          ),
+        ),
+      ),
+  );
+
 /**
  * Create a Redis Streams input source
  */
@@ -176,23 +212,7 @@ export const createRedisStreamsInput = (
     ),
   );
 
-  const client = new Redis({
-    host: config.host,
-    port: config.port,
-    password: config.password,
-    db: config.db || 0,
-    connectTimeout: config.connectTimeout ?? 10000,
-    commandTimeout: config.commandTimeout,
-    keepAlive: config.keepAlive ?? 30000,
-    lazyConnect: config.lazyConnect ?? false,
-    maxRetriesPerRequest: config.maxRetriesPerRequest ?? 20,
-    enableOfflineQueue: config.enableOfflineQueue ?? true,
-    retryStrategy: (times) => {
-      const delay = Math.min(times * 50, 2000);
-      return delay;
-    },
-  });
-  observeRedisClientErrors(client, "Redis Streams input");
+  const client = openConfiguredRedisClient(config, "Redis Streams input");
 
   const mode =
     config.mode ?? (config.consumerGroup ? "consumer-group" : "simple");
@@ -213,7 +233,7 @@ export const createRedisStreamsInput = (
       const lastId = yield* Ref.get(lastIdRef);
 
       yield* Effect.logInfo(
-        `Connected to Redis stream: redis://${config.host}:${config.port}/${config.db || 0}`,
+        `Connected to Redis stream: ${formatRedisConnectionInfo(config)}`,
       );
       yield* Effect.logDebug(
         `Polling Redis stream ${config.stream} from ${lastId}`,
@@ -259,38 +279,19 @@ export const createRedisStreamsInput = (
         { concurrency: 5 },
       );
 
-      // Record metrics
-      messages.forEach(() => {
-        metrics.recordProcessed(readDuration / messages.length);
-        messageCount++;
-      });
-
-      // Emit metrics every 100 messages
-      if (messageCount >= 100) {
-        yield* emitInputMetrics(metrics.getInputMetrics());
-        messageCount = 0;
-      }
+      messageCount = yield* recordStreamBatchMetrics(
+        metrics,
+        messageCount,
+        messages.length,
+        readDuration,
+      );
 
       yield* Effect.logDebug(
         `Read ${messages.length} messages from Redis stream`,
       );
       return messages;
     });
-    const resilientRead = withReconnect(
-      readOnce,
-      {
-        maxReconnectAttempts: config.maxReconnectAttempts,
-        reconnectBackoffMs: config.reconnectBackoffMs,
-      },
-      (error, attempt, delayMs) =>
-        Effect.sync(() => metrics.recordError()).pipe(
-          Effect.zipRight(
-            Effect.logWarning(
-              `Redis stream reconnect ${attempt} in ${delayMs}ms: ${error.message}`,
-            ),
-          ),
-        ),
-    );
+    const resilientRead = withStreamReconnect(readOnce, config, metrics);
     const stream = Stream.repeatEffect(resilientRead).pipe(
       Stream.flatMap(Stream.fromIterable),
     );
@@ -363,7 +364,7 @@ export const createRedisStreamsInput = (
     yield* initConsumerGroup;
 
     yield* Effect.logInfo(
-      `Connected to Redis stream: redis://${config.host}:${config.port}/${config.db || 0}`,
+      `Connected to Redis stream: ${formatRedisConnectionInfo(config)}`,
     );
     yield* Effect.logDebug(
       `Polling Redis stream ${config.stream} as ${consumerGroup}/${consumerName}`,
@@ -421,37 +422,22 @@ export const createRedisStreamsInput = (
       { concurrency: 5 },
     );
 
-    // Record metrics
-    messages.forEach(() => {
-      metrics.recordProcessed(readDuration / messages.length);
-      messageCount++;
-    });
-
-    // Emit metrics every 100 messages
-    if (messageCount >= 100) {
-      yield* emitInputMetrics(metrics.getInputMetrics());
-      messageCount = 0;
-    }
+    messageCount = yield* recordStreamBatchMetrics(
+      metrics,
+      messageCount,
+      messages.length,
+      readDuration,
+    );
 
     yield* Effect.logDebug(
       `Read ${messages.length} messages from Redis stream consumer group`,
     );
     return messages;
   });
-  const resilientGroupRead = withReconnect(
+  const resilientGroupRead = withStreamReconnect(
     readGroupOnce,
-    {
-      maxReconnectAttempts: config.maxReconnectAttempts,
-      reconnectBackoffMs: config.reconnectBackoffMs,
-    },
-    (error, attempt, delayMs) =>
-      Effect.sync(() => metrics.recordError()).pipe(
-        Effect.zipRight(
-          Effect.logWarning(
-            `Redis stream reconnect ${attempt} in ${delayMs}ms: ${error.message}`,
-          ),
-        ),
-      ),
+    config,
+    metrics,
   );
   const stream = Stream.repeatEffect(resilientGroupRead).pipe(
     Stream.flatMap(Stream.fromIterable),

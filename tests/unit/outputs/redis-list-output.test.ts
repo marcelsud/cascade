@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { Effect, Logger, LogLevel } from "effect";
+import { Effect, Either, Fiber, Logger, LogLevel, TestClock } from "effect";
+import * as TestContext from "effect/TestContext";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -490,6 +491,100 @@ describe("RedisListOutput", () => {
       if (pipeline.input.close) {
         await Effect.runPromise(pipeline.input.close());
       }
+    });
+  });
+
+  describe("live config and deferred close semantics", () => {
+    it("close Effect built before a final send still flushes remaining metrics", async () => {
+      const logs: unknown[] = [];
+      const logger = Logger.make(({ message }) => {
+        logs.push(message);
+      });
+
+      const output = createRedisListOutput({
+        host: "localhost",
+        port: 6379,
+        key: "tasks-close-defer",
+      });
+
+      // Construct close before any send. Snapshotting messageCount here would
+      // drop the final metrics emission that base emits after the send.
+      const closeEffect = output.close!();
+
+      await Effect.runPromise(
+        output
+          .send(createMessage("m1"))
+          .pipe(Effect.provide(Logger.replace(Logger.defaultLogger, logger))),
+      );
+
+      await Effect.runPromise(
+        closeEffect.pipe(
+          Effect.provide(Logger.replace(Logger.defaultLogger, logger)),
+        ),
+      );
+
+      const metricPayloads = logs
+        .flatMap((entry) => (Array.isArray(entry) ? entry : [entry]))
+        .filter((entry): entry is { type: string; messagesSent: number } => {
+          if (!entry || typeof entry !== "object") return false;
+          if (!("type" in entry) || !("messagesSent" in entry)) return false;
+          return (
+            entry.type === "output" && typeof entry.messagesSent === "number"
+          );
+        });
+
+      expect(
+        metricPayloads.some((payload) => payload.messagesSent === 1),
+      ).toBe(true);
+    });
+
+    it("reads maxRetries from config at send time, not construction", async () => {
+      const config = {
+        host: "localhost",
+        port: 6379,
+        key: "tasks-retry-live",
+        maxRetries: 0,
+      };
+      const output = createRedisListOutput(config);
+      // Mutate after construction — base re-read config on each send/error log.
+      config.maxRetries = 1;
+
+      const client = latestClient();
+      let attempts = 0;
+      client.rpush.mockImplementation(async () => {
+        attempts += 1;
+        throw new Error("boom");
+      });
+
+      const logMessages: unknown[] = [];
+      const logger = Logger.make(({ message }) => {
+        logMessages.push(message);
+      });
+
+      const result = await Effect.runPromise(
+        Effect.either(
+          Effect.gen(function* () {
+            const fiber = yield* Effect.fork(
+              output
+                .send(createMessage("m1"))
+                .pipe(
+                  Effect.provide(
+                    Logger.replace(Logger.defaultLogger, logger),
+                  ),
+                ),
+            );
+            // times=1 => 2 attempts with one 1s exponential gap.
+            yield* TestClock.adjust("1 second");
+            return yield* Fiber.join(fiber);
+          }).pipe(Effect.provide(TestContext.TestContext)),
+        ),
+      );
+
+      expect(attempts).toBe(2);
+      expect(Either.isLeft(result)).toBe(true);
+      expect(JSON.stringify(logMessages)).toContain(
+        "Redis push failed after 1 retries:",
+      );
     });
   });
 
