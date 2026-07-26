@@ -19,5 +19,6 @@ export {
   createAssertProcessor,
   type AssertProcessorConfig,
   AssertProcessorConfigSchema,
+  AssertProcessorConfigError,
   AssertProcessorError,
 } from "./assert-processor.js";

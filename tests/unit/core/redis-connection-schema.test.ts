@@ -115,7 +115,7 @@ describe("redis connection schema field groups", () => {
     );
   });
 
-  it("keeps YAML redis_list diagnostics in host; port; key; password?; db? order", () => {
+  it("keeps YAML redis_list diagnostics in url; key; password?; db? order", () => {
     const result = decode(PipelineConfigSchema, {
       input: { generate: { count: 1, template: {} } },
       output: { redis_list: {} },
@@ -124,11 +124,22 @@ describe("redis connection schema field groups", () => {
     const sliceStart = message.indexOf("redis_list?:");
     const slice = message.slice(sliceStart, sliceStart + 260);
 
+    // List/PubSub YAML now use canonical `url` (issue #72); shared auth group
+    // still lands after the resource key so diagnostics stay ordered.
     expect(slice).toContain(
-      "readonly host: string; readonly port: number; readonly key: string",
+      "readonly url: { string | filter }; readonly key: string",
     );
     expect(slice).toMatch(
-      /readonly host: string; readonly port: number; readonly key: string(?: \| ReadonlyArray<string>)?; readonly password\?: string \| undefined; readonly db\?: number \| undefined/,
+      /readonly url: \{ string \| filter \}; readonly key: string(?: \| ReadonlyArray<string>)?; readonly password\?: string \| undefined; readonly db\?: number \| undefined/,
+    );
+    expect(slice.indexOf("readonly url:")).toBeLessThan(
+      slice.indexOf("readonly key:"),
+    );
+    expect(slice.indexOf("readonly key:")).toBeLessThan(
+      slice.indexOf("readonly password?:"),
+    );
+    expect(slice.indexOf("readonly password?:")).toBeLessThan(
+      slice.indexOf("readonly db?:"),
     );
   });
 });

@@ -163,13 +163,12 @@ describe("reliability settings reach connector factories", () => {
     const configPath = await writeTempYaml({
       input: {
         redis_list: {
-          host: "list-in.example",
-          port: 6382,
+          url: "redis://:list-secret@list-in.example:6382/5",
+          password: "yaml-list-password",
+          db: 9,
           key: ["high", "low"],
           direction: "right",
           timeout: 12,
-          password: "list-secret",
-          db: 5,
           connect_timeout: 2100,
           command_timeout: 3100,
           keep_alive: 41000,
@@ -194,8 +193,8 @@ describe("reliability settings reach connector factories", () => {
       key: ["high", "low"],
       direction: "right",
       timeout: 12,
-      password: "list-secret",
-      db: 5,
+      password: "yaml-list-password",
+      db: 9,
       connectTimeout: 2100,
       commandTimeout: 3100,
       keepAlive: 41000,
@@ -211,12 +210,11 @@ describe("reliability settings reach connector factories", () => {
     const configPath = await writeTempYaml({
       input: {
         redis_pubsub: {
-          host: "pubsub-in.example",
-          port: 6383,
+          url: "redis://:pubsub-secret@pubsub-in.example:6383/6",
+          password: "yaml-pubsub-password",
+          db: 11,
           channels: ["events", "alerts"],
           patterns: ["logs:*"],
-          password: "pubsub-secret",
-          db: 6,
           queue_size: 250,
           overflow: "drop_old",
           connect_timeout: 1800,
@@ -240,8 +238,8 @@ describe("reliability settings reach connector factories", () => {
       port: 6383,
       channels: ["events", "alerts"],
       patterns: ["logs:*"],
-      password: "pubsub-secret",
-      db: 6,
+      password: "yaml-pubsub-password",
+      db: 11,
       queueSize: 250,
       overflow: "drop_old",
       connectTimeout: 1800,
@@ -391,13 +389,12 @@ describe("reliability settings reach connector factories", () => {
       },
       output: {
         redis_list: {
-          host: "redis.example",
-          port: 6380,
+          url: "redis://:secret@redis.example:6380/2",
+          password: "yaml-list-out-password",
+          db: 8,
           key: "tasks",
           direction: "left",
           max_length: 100,
-          password: "secret",
-          db: 2,
           max_retries: 9,
           connect_timeout: 1234,
           command_timeout: 4321,
@@ -418,8 +415,8 @@ describe("reliability settings reach connector factories", () => {
       key: "tasks",
       direction: "left",
       maxLen: 100,
-      password: "secret",
-      db: 2,
+      password: "yaml-list-out-password",
+      db: 8,
       maxRetries: 9,
       connectTimeout: 1234,
       commandTimeout: 4321,
@@ -440,11 +437,10 @@ describe("reliability settings reach connector factories", () => {
       },
       output: {
         redis_pubsub: {
-          host: "pubsub.example",
-          port: 6381,
+          url: "redis://:pw@pubsub.example:6381/3",
+          password: "yaml-pubsub-out-password",
+          db: 10,
           channel: "events",
-          password: "pw",
-          db: 3,
           max_retries: 4,
           connect_timeout: 1500,
           command_timeout: 2500,
@@ -463,8 +459,8 @@ describe("reliability settings reach connector factories", () => {
       host: "pubsub.example",
       port: 6381,
       channel: "events",
-      password: "pw",
-      db: 3,
+      password: "yaml-pubsub-out-password",
+      db: 10,
       maxRetries: 4,
       connectTimeout: 1500,
       commandTimeout: 2500,
@@ -553,6 +549,202 @@ describe("reliability settings reach connector factories", () => {
         expect(result.left.message).toBe("Invalid Redis Streams output URL");
       }
       expect(createRedisStreamsOutputMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      name: "Redis List input with password/db URL",
+      config: {
+        input: {
+          redis_list: {
+            url: "redis://:secret@cache.example:6380/5",
+            key: "tasks",
+          },
+        },
+        output: {
+          capture: {},
+        },
+      },
+      factory: () => createRedisListInputMock,
+      expected: {
+        host: "cache.example",
+        port: 6380,
+        password: "secret",
+        db: 5,
+        key: "tasks",
+      },
+    },
+    {
+      name: "Redis Pub/Sub input with default port",
+      config: {
+        input: {
+          redis_pubsub: {
+            url: "redis://pubsub.example",
+            channels: ["events"],
+          },
+        },
+        output: {
+          capture: {},
+        },
+      },
+      factory: () => createRedisPubSubInputMock,
+      expected: {
+        host: "pubsub.example",
+        port: 6379,
+        password: undefined,
+        db: undefined,
+        channels: ["events"],
+      },
+    },
+    {
+      name: "Redis List output with password/db URL",
+      config: {
+        input: {
+          generate: {
+            count: 1,
+            template: { ok: true },
+          },
+        },
+        output: {
+          redis_list: {
+            url: "redis://:secret@cache.example:6380/5",
+            key: "out-tasks",
+          },
+        },
+      },
+      factory: () => createRedisListOutputMock,
+      expected: {
+        host: "cache.example",
+        port: 6380,
+        password: "secret",
+        db: 5,
+        key: "out-tasks",
+      },
+    },
+    {
+      name: "Redis Pub/Sub output with default port",
+      config: {
+        input: {
+          generate: {
+            count: 1,
+            template: { ok: true },
+          },
+        },
+        output: {
+          redis_pubsub: {
+            url: "redis://pubsub-out.example",
+            channel: "events",
+          },
+        },
+      },
+      factory: () => createRedisPubSubOutputMock,
+      expected: {
+        host: "pubsub-out.example",
+        port: 6379,
+        password: undefined,
+        db: undefined,
+        channel: "events",
+      },
+    },
+  ])(
+    "loads and builds URL-style $name without YAML host/port",
+    async ({ config, factory, expected }) => {
+      const configPath = await writeTempYaml(config);
+      const loaded = await Effect.runPromise(
+        Effect.either(loadConfig(configPath)),
+      );
+      expect(Either.isRight(loaded)).toBe(true);
+      if (Either.isLeft(loaded)) return;
+
+      const built = await Effect.runPromise(
+        Effect.either(buildPipeline(loaded.right)),
+      );
+      expect(Either.isRight(built)).toBe(true);
+
+      const mock = factory();
+      expect(mock).toHaveBeenCalledTimes(1);
+      expect(mock).toHaveBeenCalledWith(expect.objectContaining(expected));
+    },
+  );
+
+  it.each([
+    {
+      name: "Redis List input",
+      config: {
+        input: {
+          redis_list: {
+            url: "%%%not-a-url%%%",
+            key: "tasks",
+          },
+        },
+        output: { capture: {} },
+      },
+      factory: () => createRedisListInputMock,
+      component: "redis_list",
+    },
+    {
+      name: "Redis Pub/Sub input",
+      config: {
+        input: {
+          redis_pubsub: {
+            url: "http://pubsub.example:6379/1",
+            channels: ["events"],
+          },
+        },
+        output: { capture: {} },
+      },
+      factory: () => createRedisPubSubInputMock,
+      component: "redis_pubsub",
+    },
+    {
+      name: "Redis List output",
+      config: {
+        input: {
+          generate: { count: 1, template: { ok: true } },
+        },
+        output: {
+          redis_list: {
+            url: "rediss://secure.example:6379",
+            key: "tasks",
+          },
+        },
+      },
+      factory: () => createRedisListOutputMock,
+      component: "redis_list",
+    },
+    {
+      name: "Redis Pub/Sub output",
+      config: {
+        input: {
+          generate: { count: 1, template: { ok: true } },
+        },
+        output: {
+          redis_pubsub: {
+            url: "redis:opaque.example:6380",
+            channel: "events",
+          },
+        },
+      },
+      factory: () => createRedisPubSubOutputMock,
+      component: "redis_pubsub",
+    },
+  ])(
+    "rejects malformed $name URL before connector construction",
+    async ({ config, factory, component }) => {
+      const configPath = await writeTempYaml(config);
+      const result = await Effect.runPromise(
+        Effect.either(loadConfig(configPath)),
+      );
+
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) {
+        expect(result.left._tag).toBe("ConfigValidationError");
+        const message = String(result.left.message);
+        expect(message).toMatch(new RegExp(component, "i"));
+        expect(message).toMatch(/must be a valid redis:\/\/ URL/i);
+      }
+      expect(factory()).not.toHaveBeenCalled();
     },
   );
 

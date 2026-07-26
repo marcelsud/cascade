@@ -122,6 +122,7 @@ const reportPipelineResult = (result: {
     readonly duration: number;
   };
   readonly errors?: readonly unknown[];
+  readonly errorsOmitted?: number;
   readonly metrics?: Parameters<typeof printPipelineMetrics>[0]["metrics"];
 }) =>
   Effect.gen(function* () {
@@ -135,10 +136,19 @@ const reportPipelineResult = (result: {
     }
 
     yield* Effect.logError("✗ Pipeline failed!");
-    if (result.errors) {
-      yield* Effect.logError(`  Errors: ${result.errors.length}`);
-      for (const error of result.errors) {
-        yield* Effect.logError(`    - ${error}`);
+    if (result.errors || result.stats.failed > 0 || result.errorsOmitted) {
+      const retained = result.errors?.length ?? 0;
+      const omitted = result.errorsOmitted ?? 0;
+      const totalFailures = result.stats.failed;
+      yield* Effect.logError(
+        omitted > 0
+          ? `  Failures: ${totalFailures} total, showing ${retained} retained sample(s), ${omitted} diagnostic(s) omitted`
+          : `  Failures: ${totalFailures} total, showing ${retained} error(s)`,
+      );
+      if (result.errors) {
+        for (const error of result.errors) {
+          yield* Effect.logError(`    - ${error}`);
+        }
       }
     }
     printPipelineMetrics(result);

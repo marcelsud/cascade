@@ -90,26 +90,55 @@ interface EnqueueResult {
 }
 
 /**
- * Serialize Message to SQS format
+ * Serialize Message to SQS format.
+ *
+ * Emits documented top-level message attributes plus the full metadata JSON
+ * blob. Optional fields are omitted when absent.
  */
 const serializeMessage = (
   msg: Message,
   delaySeconds?: number,
-): { body: string; attributes: Record<string, any>; delay?: number } => ({
-  body: JSON.stringify(msg.content),
-  attributes: {
+): { body: string; attributes: Record<string, any>; delay?: number } => {
+  const stringAttr = (value: unknown) =>
+    typeof value === "string"
+      ? { StringValue: value, DataType: "String" as const }
+      : undefined;
+
+  const attributes: Record<string, any> = {
     messageId: { StringValue: msg.id, DataType: "String" },
     timestamp: { StringValue: msg.timestamp.toString(), DataType: "Number" },
-    correlationId: msg.correlationId
-      ? { StringValue: msg.correlationId, DataType: "String" }
-      : undefined,
     metadata: { StringValue: JSON.stringify(msg.metadata), DataType: "String" },
-    trace: msg.trace
-      ? { StringValue: JSON.stringify(msg.trace), DataType: "String" }
-      : undefined,
-  },
-  delay: delaySeconds,
-});
+  };
+
+  if (msg.correlationId) {
+    attributes.correlationId = {
+      StringValue: msg.correlationId,
+      DataType: "String",
+    };
+  }
+
+  const source = stringAttr(msg.metadata.source);
+  if (source) attributes.source = source;
+
+  const receivedAt = stringAttr(msg.metadata.receivedAt);
+  if (receivedAt) attributes.receivedAt = receivedAt;
+
+  const processedAt = stringAttr(msg.metadata.processedAt);
+  if (processedAt) attributes.processedAt = processedAt;
+
+  if (msg.trace) {
+    attributes.trace = {
+      StringValue: JSON.stringify(msg.trace),
+      DataType: "String",
+    };
+  }
+
+  return {
+    body: JSON.stringify(msg.content),
+    attributes,
+    delay: delaySeconds,
+  };
+};
 
 /**
  * Create an SQS output destination
@@ -149,6 +178,7 @@ export const createSqsOutput = (
   if (batchSize === 1) {
     const metrics = new MetricsAccumulator("sqs-output");
     let messageCount = 0;
+    let connectionLogged = false;
 
     return {
       name: "sqs-output",
@@ -157,7 +187,10 @@ export const createSqsOutput = (
         Effect.gen(function* () {
           const serialized = serializeMessage(msg, config.delaySeconds);
 
-          yield* Effect.logInfo(`Connected to SQS queue: ${config.queueUrl}`);
+          if (!connectionLogged) {
+            connectionLogged = true;
+            yield* Effect.logInfo(`Connected to SQS queue: ${config.queueUrl}`);
+          }
 
           const sendEffect = Effect.tryPromise({
             try: async () => {
@@ -229,6 +262,7 @@ export const createSqsOutput = (
   const batchTimerRef = Ref.unsafeMake<BatchTimer | null>(null);
   const metrics = new MetricsAccumulator("sqs-output");
   const batchTimeout = config.batchTimeout ?? DEFAULT_BATCH_TIMEOUT_MS;
+  let connectionLogged = false;
 
   const completeEntries = (entries: readonly PendingBatchMessage[]) =>
     Effect.forEach(
@@ -460,7 +494,10 @@ export const createSqsOutput = (
     getMetrics: () => metrics.getOutputMetrics(),
     send: (msg: Message): Effect.Effect<void, SqsOutputError> =>
       Effect.gen(function* () {
-        yield* Effect.logInfo(`Connected to SQS queue: ${config.queueUrl}`);
+        if (!connectionLogged) {
+          connectionLogged = true;
+          yield* Effect.logInfo(`Connected to SQS queue: ${config.queueUrl}`);
+        }
 
         const completion = yield* Deferred.make<void, SqsOutputError>();
         const pending: PendingBatchMessage = { message: msg, completion };

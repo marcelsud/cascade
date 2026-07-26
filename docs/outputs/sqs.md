@@ -137,14 +137,32 @@ T+5000ms: Timeout expires → Send batch (3 messages)
 
 ## Message Format
 
-Messages are serialized to JSON and sent with metadata as SQS message attributes:
+Messages are serialized to JSON (`MessageBody` = `JSON.stringify(content)`) and
+sent with the following SQS message attributes. Single-message and batch sends
+use the same attribute contract.
 
-**SQS Message Attributes:**
+**Always present:**
 
-- `correlationId`: String
-- `source`: String (e.g., "redis-streams", "sqs")
-- `receivedAt`: String (ISO 8601)
-- `processedAt`: String (ISO 8601)
+| Attribute   | DataType | Encoding / value                                      |
+| ----------- | -------- | ----------------------------------------------------- |
+| `messageId` | String   | Cascade message id                                    |
+| `timestamp` | Number   | Cascade message timestamp (epoch milliseconds string) |
+| `metadata`  | String   | JSON object of the full message metadata map          |
+
+**Present when set on the message:**
+
+| Attribute       | DataType | Encoding / value                                      |
+| --------------- | -------- | ----------------------------------------------------- |
+| `correlationId` | String   | Correlation id                                        |
+| `source`        | String   | Origin component name (e.g. `"sqs-input"`, `"redis-streams"`) from `metadata.source` |
+| `receivedAt`    | String   | ISO 8601 receive time from `metadata.receivedAt`      |
+| `processedAt`   | String   | ISO 8601 process time from `metadata.processedAt`     |
+| `trace`         | String   | JSON object `{ "spanId": string, "traceId": string }` |
+
+`source`, `receivedAt`, and `processedAt` are promoted from message metadata to
+top-level attributes when present as strings so downstream consumers can read
+them without parsing the `metadata` blob. The full metadata map (including those
+keys) is still available in the `metadata` attribute.
 
 ## Use Cases
 

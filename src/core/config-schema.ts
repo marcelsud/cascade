@@ -2,7 +2,15 @@
  * Pipeline configuration schemas
  */
 import * as S from "effect/Schema";
+import { hasEffectiveAssertCheck } from "../testing/assert-processor.js";
 import type { ComponentKind, ComponentRegistry } from "./component-registry.js";
+import { tryParseRedisUrl } from "./redis-url.js";
+
+const RedisUrlSchema = S.String.pipe(
+  S.filter((url) => tryParseRedisUrl(url) !== undefined, {
+    message: () => "must be a valid redis:// URL",
+  }),
+);
 
 const validateExactlyOneComponent = (
   label: string,
@@ -49,11 +57,6 @@ const redisYamlConnectionFields = {
   enable_offline_queue: S.optional(S.Boolean),
 } as const;
 
-/** Host/port Redis endpoints (list/pubsub). */
-const redisYamlHostEndpointFields = {
-  host: S.String,
-  port: S.Number,
-} as const;
 
 /** Optional password/db after resource-specific fields. */
 const redisYamlAuthFields = {
@@ -144,7 +147,7 @@ const StdinInputSchema = S.Struct({
  * Schema for Redis Pub/Sub Input configuration (Bento style)
  */
 const RedisPubSubInputSchema = S.Struct({
-  ...redisYamlHostEndpointFields,
+  url: RedisUrlSchema,
   ...redisYamlAuthFields,
   channels: S.optional(S.Array(S.String)),
   patterns: S.optional(S.Array(S.String)),
@@ -156,7 +159,7 @@ const RedisPubSubInputSchema = S.Struct({
  * Schema for Redis List Input configuration (Bento style)
  */
 const RedisListInputSchema = S.Struct({
-  ...redisYamlHostEndpointFields,
+  url: RedisUrlSchema,
   key: S.Union(S.String, S.Array(S.String)),
   ...redisYamlAuthFields,
   direction: S.optional(S.Union(S.Literal("left"), S.Literal("right"))),
@@ -319,7 +322,12 @@ const AssertProcessorSchema = S.Struct({
   hasFields: S.optional(S.Array(S.String)),
   error: S.optional(S.String),
   logPassing: S.optional(S.Boolean),
-});
+}).pipe(
+  S.filter(hasEffectiveAssertCheck, {
+    message: () =>
+      "Assert Processor requires at least one effective check: a non-blank 'condition' or at least one non-blank 'hasFields' path.",
+  }),
+);
 
 /**
  * Processor configuration - recursive to support nested processors (branch, switch)
@@ -423,7 +431,7 @@ const HttpOutputSchema = S.Struct({
  * Schema for Redis Pub/Sub Output configuration (Bento style)
  */
 const RedisPubSubOutputSchema = S.Struct({
-  ...redisYamlHostEndpointFields,
+  url: RedisUrlSchema,
   channel: S.String,
   ...redisYamlAuthFields,
   max_retries: S.optional(S.Number),
@@ -434,7 +442,7 @@ const RedisPubSubOutputSchema = S.Struct({
  * Schema for Redis List Output configuration (Bento style)
  */
 const RedisListOutputSchema = S.Struct({
-  ...redisYamlHostEndpointFields,
+  url: RedisUrlSchema,
   key: S.String,
   ...redisYamlAuthFields,
   direction: S.optional(S.Union(S.Literal("left"), S.Literal("right"))),
