@@ -82,22 +82,20 @@ export const withDLQ = <E>(config: DLQConfig<E>): Output<E | DLQError> => {
     (close): close is NonNullable<typeof close> => close !== undefined,
   );
 
-  const build = (outputPermits?: Effect.Semaphore): Output<E | DLQError> => ({
+  const build = (primaryOutput: Output<E>): Output<E | DLQError> => ({
     name: `${config.output.name}-with-dlq`,
     send: (msg: Message): Effect.Effect<void, E | DLQError> =>
       Effect.gen(function* () {
         let attempts = 0;
 
         // Count every primary send, including the first attempt.
-        // Hold a primary permit only for the underlying send itself so
-        // retry delays and DLQ routing cannot starve other primaries.
+        // primaryOutput is either the unbound inner or a copy already scoped
+        // so that only underlying primary sends take permits — retry delays
+        // and DLQ routing must not hold a primary permit.
         const sendOnce: Effect.Effect<void, E | DLQError> = Effect.suspend(
           () => {
             attempts += 1;
-            const primarySend = config.output.send(msg);
-            return outputPermits === undefined
-              ? primarySend
-              : outputPermits.withPermits(1)(primarySend);
+            return primaryOutput.send(msg);
           },
         );
 
@@ -170,10 +168,22 @@ export const withDLQ = <E>(config: DLQConfig<E>): Output<E | DLQError> => {
     getMetrics: config.output.getMetrics,
     getDLQMetrics: config.dlq?.getMetrics,
     getDLQOutput: config.dlq ? () => config.dlq : undefined,
-    bindPrimaryOutputPermits: (permits) => build(permits),
+    bindPrimaryOutputPermits: (permits) => {
+      // Recursively bind nested permit-aware wrappers; otherwise guard only
+      // the raw inner send. Build retry/DLQ around that bound primary so this
+      // layer never holds a permit across backoff or DLQ routing.
+      const boundInner =
+        config.output.bindPrimaryOutputPermits?.(permits) ??
+        ({
+          ...config.output,
+          send: (msg: Message) =>
+            permits.withPermits(1)(config.output.send(msg)),
+        } satisfies Output<E>);
+      return build(boundInner);
+    },
   });
 
-  return build();
+  return build(config.output);
 };
 
 /**
