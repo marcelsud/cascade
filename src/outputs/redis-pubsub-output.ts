@@ -140,14 +140,20 @@ export const createRedisPubSubOutput = (
   // Metrics tracking
   const metrics = new MetricsAccumulator("redis-pubsub-output");
   let messageCount = 0;
+  let connectionLogged = false;
 
   return {
     name: "redis-pubsub-output",
     getMetrics: () => metrics.getOutputMetrics(),
     send: (msg: Message): Effect.Effect<void, RedisPubSubOutputError> => {
       return Effect.gen(function* () {
-        // Log connection on first send (INFO level)
-        yield* Effect.logInfo(`Connected to Redis Pub/Sub: ${connectionInfo}`);
+        // Log connection once per output lifecycle (INFO level)
+        if (!connectionLogged) {
+          connectionLogged = true;
+          yield* Effect.logInfo(
+            `Connected to Redis Pub/Sub: ${connectionInfo}`,
+          );
+        }
 
         // Interpolate channel name with message data
         const channel = interpolateChannel(config.channel, msg);

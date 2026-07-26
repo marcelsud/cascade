@@ -1,14 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Effect, Logger, LogLevel } from "effect";
 import Redis from "ioredis";
-import { createRedisPubSubOutput } from "../../../src/outputs/redis-pubsub-output.js";
+import { createRedisStreamsOutput } from "../../../src/outputs/redis-streams-output.js";
 import type { Message } from "../../../src/core/types.js";
 
 vi.mock("ioredis", () => {
   return {
     default: vi.fn(() => ({
       status: "ready",
-      publish: vi.fn().mockResolvedValue(1),
+      xadd: vi.fn().mockResolvedValue("1-0"),
       quit: vi.fn().mockResolvedValue("OK"),
       disconnect: vi.fn(),
       on: vi.fn(),
@@ -24,126 +24,14 @@ const createMessage = (id: string, content: unknown = { id }): Message => ({
   correlationId: `corr-${id}`,
 });
 
-describe("RedisPubSubOutput", () => {
+describe("RedisStreamsOutput", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  describe("Configuration Validation", () => {
-    it("should create output with valid configuration", () => {
-      expect(() =>
-        createRedisPubSubOutput({
-          host: "localhost",
-          port: 6379,
-          channel: "events",
-        }),
-      ).not.toThrow();
-    });
-
-    it("should support channel template interpolation", () => {
-      expect(() =>
-        createRedisPubSubOutput({
-          host: "localhost",
-          port: 6379,
-          channel: "events:{{content.type}}",
-        }),
-      ).not.toThrow();
-    });
-
-    it("should support password authentication", () => {
-      expect(() =>
-        createRedisPubSubOutput({
-          host: "localhost",
-          port: 6379,
-          channel: "events",
-          password: "secret",
-        }),
-      ).not.toThrow();
-    });
-
-    it("should support database selection", () => {
-      expect(() =>
-        createRedisPubSubOutput({
-          host: "localhost",
-          port: 6379,
-          channel: "events",
-          db: 2,
-        }),
-      ).not.toThrow();
-    });
-
-    it("should support retry configuration", () => {
-      expect(() =>
-        createRedisPubSubOutput({
-          host: "localhost",
-          port: 6379,
-          channel: "events",
-          maxRetries: 5,
-        }),
-      ).not.toThrow();
-    });
-
-    it("should support connection pooling options", () => {
-      expect(() =>
-        createRedisPubSubOutput({
-          host: "localhost",
-          port: 6379,
-          channel: "events",
-          connectTimeout: 5000,
-          commandTimeout: 3000,
-          keepAlive: 15000,
-          lazyConnect: true,
-        }),
-      ).not.toThrow();
-    });
-  });
-
-  describe("Validation", () => {
-    it("should fail with empty channel name", () => {
-      expect(() =>
-        createRedisPubSubOutput({
-          host: "localhost",
-          port: 6379,
-          channel: "",
-        }),
-      ).toThrow();
-    });
-
-    it("should fail with invalid hostname", () => {
-      expect(() =>
-        createRedisPubSubOutput({
-          host: "",
-          port: 6379,
-          channel: "events",
-        }),
-      ).toThrow();
-    });
-
-    it("should fail with invalid port", () => {
-      expect(() =>
-        createRedisPubSubOutput({
-          host: "localhost",
-          port: 99999,
-          channel: "events",
-        }),
-      ).toThrow();
-    });
-
-    it("should fail with negative database number", () => {
-      expect(() =>
-        createRedisPubSubOutput({
-          host: "localhost",
-          port: 6379,
-          channel: "events",
-          db: -1,
-        }),
-      ).toThrow();
-    });
-  });
-
   describe("connection logging", () => {
     const connectionMessage =
-      "Connected to Redis Pub/Sub: redis://localhost:6379/0";
+      "Connected to Redis stream: redis://localhost:6379/0";
 
     const captureLogs = <A, E>(effect: Effect.Effect<A, E>) => {
       const messages: unknown[] = [];
@@ -172,10 +60,10 @@ describe("RedisPubSubOutput", () => {
     it("emits zero connection events until the first send", async () => {
       const messages = await captureLogs(
         Effect.sync(() => {
-          createRedisPubSubOutput({
+          createRedisStreamsOutput({
             host: "localhost",
             port: 6379,
-            channel: "events",
+            stream: "events",
           });
         }),
       );
@@ -183,10 +71,10 @@ describe("RedisPubSubOutput", () => {
     });
 
     it("emits exactly one connection event across sequential sends", async () => {
-      const output = createRedisPubSubOutput({
+      const output = createRedisStreamsOutput({
         host: "localhost",
         port: 6379,
-        channel: "events",
+        stream: "events",
       });
 
       const messages = await captureLogs(
@@ -206,10 +94,10 @@ describe("RedisPubSubOutput", () => {
     });
 
     it("emits exactly one connection event for concurrent first sends", async () => {
-      const output = createRedisPubSubOutput({
+      const output = createRedisStreamsOutput({
         host: "localhost",
         port: 6379,
-        channel: "events",
+        stream: "events",
       });
 
       const messages = await captureLogs(
@@ -231,15 +119,15 @@ describe("RedisPubSubOutput", () => {
     });
 
     it("emits one connection event per separately constructed instance", async () => {
-      const first = createRedisPubSubOutput({
+      const first = createRedisStreamsOutput({
         host: "localhost",
         port: 6379,
-        channel: "events-a",
+        stream: "events-a",
       });
-      const second = createRedisPubSubOutput({
+      const second = createRedisStreamsOutput({
         host: "localhost",
         port: 6379,
-        channel: "events-b",
+        stream: "events-b",
       });
 
       const messages = await captureLogs(
