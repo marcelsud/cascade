@@ -200,12 +200,28 @@ export const createFileInput = (
           decoder = new StringDecoder(encoding);
         }
 
+        // Immutable ceiling for this poll. Growth is observed on the next
+        // poll; a mid-drain shrink (copytruncate) is detected by re-stat.
         const snapshotEof = stats.size;
 
         if (snapshotEof > currentPosition) {
           await dependencies.beforeRead?.();
 
           while (!closed && currentPosition < snapshotEof) {
+            // Re-stat the same descriptor before every chunk read that follows
+            // an await (beforeRead above, or emitLineMessages below). Never
+            // extend snapshotEof. If the file shrank, stop before decoding
+            // replacement bytes from the old offset — the next poll restarts
+            // at byte 0.
+            const liveSize = (await handle.stat()).size;
+            if (liveSize < snapshotEof) {
+              currentPosition = 0;
+              bufferedText = "";
+              decoder = new StringDecoder(encoding);
+              pending = null;
+              break;
+            }
+
             const chunk = await readRange(
               handle,
               currentPosition,

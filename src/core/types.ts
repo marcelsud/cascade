@@ -121,18 +121,32 @@ export interface PipelineStats {
  * Pipeline execution result.
  *
  * `errors` is a bounded diagnostic sample (historical nonfatal failures are
- * capped), not a full failure log. Use `stats.failed` for the exact failure
- * count and `errorsOmitted` for how many unique historical diagnostics were
- * dropped from the sample after the retention cap. Fatal causes and terminal
- * close/drain diagnostics are always included when present and are not subject
- * to the historical cap.
+ * capped; distinct fatal causes use fixed first/current slots plus a small
+ * extra sample), not a full failure log. Use `stats.failed` for the exact
+ * failure count and `errorsOmitted` for how many diagnostics were dropped
+ * after a retention cap and are not held in any returned sample.
+ *
+ * Omission axes (orthogonal):
+ * - Identity kind: object/function identities are unique (WeakSet dedupe for
+ *   dropped historical objects); primitive values are counted per observation
+ *   without retaining the value after the cap (strong state stays O(1)).
+ * - Failure class: over-cap historical nonfatals, and fatal overflows past the
+ *   fixed first/extra fatal sample that also miss the historical retained
+ *   sample. A live current-fatal slot that only holds such an overflow is part
+ *   of the returned sample and is not counted as omitted.
+ *
+ * Terminal close/drain diagnostics are always included when present and are
+ * not subject to the historical cap.
  */
 export interface PipelineResult {
   readonly success: boolean;
   readonly stats: PipelineStats;
   /** Bounded diagnostic sample; see interface docs for retention semantics. */
   readonly errors?: ReadonlyArray<unknown>;
-  /** Unique historical diagnostics omitted after the retention cap. */
+  /**
+   * Diagnostics omitted after a retention cap and not held in any sample.
+   * See interface docs for exact counting rules (objects vs primitives, fatals).
+   */
   readonly errorsOmitted?: number;
   readonly shutdown?: "graceful" | "timed-out" | "forced";
   readonly metrics?: {

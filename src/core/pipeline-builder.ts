@@ -72,17 +72,40 @@ const mapCustomBuildError = (name: string, error: unknown): BuildError =>
     `Failed to build registered component '${name}': ${formatBuildErrorMessage(error)}`,
   );
 
-const buildRegisteredComponent = <A>(
-  name: string,
-  build: () => Effect.Effect<A, unknown>,
-): Effect.Effect<A, BuildError> =>
-  Effect.try({
-    try: build,
-    catch: (error) => error,
-  }).pipe(
-    Effect.flatten,
-    Effect.mapError((error) => mapCustomBuildError(name, error)),
+const buildRegisteredComponent = <T>(
+  config: object,
+  kindLabel: string,
+  lookup: (name: string) =>
+    | {
+        readonly build: (
+          cfg: unknown,
+          ctx: ComponentBuildContext,
+        ) => Effect.Effect<T, unknown>;
+      }
+    | undefined,
+  context: ComponentBuildContext,
+): Effect.Effect<T, BuildError> | undefined => {
+  const selected = configuredComponent(config);
+  if (!selected) return undefined;
+  const registered = lookup(selected[0]);
+  if (registered) {
+    // `build` may throw synchronously — a registered factory is free to call a
+    // constructor that validates eagerly. Contain that in `Effect.try` so it
+    // surfaces as a typed BuildError instead of a defect.
+    return Effect.try({
+      try: () => registered.build(selected[1], context),
+      catch: (error) => error,
+    }).pipe(
+      Effect.flatten,
+      Effect.mapError((error) => mapCustomBuildError(selected[0], error)),
+    );
+  }
+  return Effect.fail(
+    new BuildError(
+      `Unknown ${kindLabel} component '${selected[0]}' — is the registry passed to buildPipeline?`,
+    ),
   );
+};
 
 const parseRedisUrl = (
   url: string,
@@ -296,21 +319,13 @@ const buildInputInternal = (
     return Effect.succeed(createGenerateInput((config as any).generate));
   }
 
-  const selected = configuredComponent(config);
-  const registered = selected ? registry?.getInput(selected[0]) : undefined;
-  if (selected && registered) {
-    return buildRegisteredComponent(selected[0], () =>
-      registered.build(selected[1], createBuildContext(registry)),
-    );
-  }
-
-  if (selected) {
-    return Effect.fail(
-      new BuildError(
-        `Unknown input component '${selected[0]}' — is the registry passed to buildPipeline?`,
-      ),
-    );
-  }
+  const registeredInput = buildRegisteredComponent(
+    config,
+    "input",
+    (name) => registry?.getInput(name),
+    createBuildContext(registry),
+  );
+  if (registeredInput) return registeredInput;
 
   return Effect.fail(new BuildError("No valid input configuration found"));
 };
@@ -465,21 +480,13 @@ const buildProcessor = (
     });
   }
 
-  const selected = configuredComponent(config);
-  const registered = selected ? registry?.getProcessor(selected[0]) : undefined;
-  if (selected && registered) {
-    return buildRegisteredComponent(selected[0], () =>
-      registered.build(selected[1], createBuildContext(registry)),
-    );
-  }
-
-  if (selected) {
-    return Effect.fail(
-      new BuildError(
-        `Unknown processor component '${selected[0]}' — is the registry passed to buildPipeline?`,
-      ),
-    );
-  }
+  const registeredProcessor = buildRegisteredComponent(
+    config,
+    "processor",
+    (name) => registry?.getProcessor(name),
+    createBuildContext(registry),
+  );
+  if (registeredProcessor) return registeredProcessor;
 
   return Effect.fail(new BuildError("No valid processor configuration found"));
 };
@@ -626,21 +633,13 @@ const buildOutput = (
     return createCaptureOutput((config as any).capture || {});
   }
 
-  const selected = configuredComponent(config);
-  const registered = selected ? registry?.getOutput(selected[0]) : undefined;
-  if (selected && registered) {
-    return buildRegisteredComponent(selected[0], () =>
-      registered.build(selected[1], createBuildContext(registry)),
-    );
-  }
-
-  if (selected) {
-    return Effect.fail(
-      new BuildError(
-        `Unknown output component '${selected[0]}' — is the registry passed to buildPipeline?`,
-      ),
-    );
-  }
+  const registeredOutput = buildRegisteredComponent(
+    config,
+    "output",
+    (name) => registry?.getOutput(name),
+    createBuildContext(registry),
+  );
+  if (registeredOutput) return registeredOutput;
 
   return Effect.fail(new BuildError("No valid output configuration found"));
 };

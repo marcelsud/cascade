@@ -10,8 +10,10 @@ import {
   checkCoverage,
   checkDuplicates,
   checkTestIntegrity,
+  collectBlockingTestFiles,
   validateIssueRecord,
 } from "./checks.mjs"
+import { fileURLToPath } from "node:url"
 
 const git = (cwd, ...args) =>
   execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
@@ -35,19 +37,46 @@ const makeRepository = () => {
   git(cwd, "config", "user.email", "grading-tests@example.invalid")
   writeRelative(
     cwd,
+    "package.json",
+    `${JSON.stringify(
+      {
+        name: "cascade-grading-fixture",
+        private: true,
+        scripts: {
+          "test:unit": "vitest run tests/unit",
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  )
+  writeRelative(
+    cwd,
     "tests/unit/baseline.test.ts",
     `it.skipIf(process.platform !== "linux")("linux behavior", () => {})\n` +
       `it.runIf(process.platform === "linux")("available behavior", () => {})\n`,
   )
   writeRelative(
     cwd,
-    "vitest.config.ts",
-    `export default { test: { include: ["tests/**/*.test.ts"] } }\n`,
+    "tests/unit/core/sample.test.ts",
+    `it("core sample", () => {})\n`,
   )
+  writeRelative(
+    cwd,
+    "tests/unit/extra/sample.test.ts",
+    `it("extra sample", () => {})\n`,
+  )
+  writeRelative(
+    cwd,
+    "vitest.config.ts",
+    `export default { test: { include: ["tests/**/*.test.ts"], exclude: ["tests/e2e/**"] } }\n`,
+  )
+
   writeRelative(cwd, "src/baseline.ts", `export const baseline = (value: number) => value + 1\n`)
   const base = commit(cwd, "baseline")
   return { cwd, base }
 }
+
 
 const withRepository = (callback) => {
   const repository = makeRepository()
@@ -177,12 +206,774 @@ test("RT-2 rejects a test-discovery exclusion", () => {
     writeRelative(
       cwd,
       "vitest.config.ts",
-      `export default { test: { include: ["tests/**/*.test.ts"], exclude: ["tests/unit/new.test.ts"] } }\n`,
+      `export default { test: { include: ["tests/**/*.test.ts"], exclude: ["tests/e2e/**", "tests/unit/extra/**"] } }\n`,
     )
     commit(cwd, "exclude test")
-    assert.throws(() => checkTestIntegrity({ base, cwd }), /test-integrity regression/)
+    assert.throws(
+      () => checkTestIntegrity({ base, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(detail, /test-integrity regression|dropped|reduced/)
+        assert.match(detail, /tests\/unit\/extra\/sample\.test\.ts/)
+        return true
+      },
+    )
   })
 })
+
+test("RT-2 rejects narrowing the blocking runner filter", () => {
+  withRepository(({ cwd, base }) => {
+    writeRelative(
+      cwd,
+      "package.json",
+      `${JSON.stringify(
+        {
+          name: "cascade-grading-fixture",
+          private: true,
+          scripts: {
+            "test:unit": "vitest run tests/unit/core",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    )
+    commit(cwd, "narrow unit filter")
+    assert.throws(
+      () => checkTestIntegrity({ base, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(detail, /blocking unit/)
+        assert.match(detail, /tests\/unit\/extra\/sample\.test\.ts|tests\/unit\/baseline\.test\.ts|selector reduced|dropped/)
+        return true
+      },
+    )
+  })
+})
+
+test("RT-2 rejects moving a selected test outside the runner filter", () => {
+  withRepository(({ cwd, base }) => {
+    const source = path.join(cwd, "tests/unit/extra/sample.test.ts")
+    const target = path.join(cwd, "tests/other/moved.test.ts")
+    mkdirSync(path.dirname(target), { recursive: true })
+    execFileSync("git", ["mv", source, target], { cwd, stdio: "ignore" })
+    commit(cwd, "move test outside unit filter")
+    assert.throws(
+      () => checkTestIntegrity({ base, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(detail, /tests\/unit\/extra\/sample\.test\.ts/)
+        return true
+      },
+    )
+  })
+})
+
+test("RT-2 mode inventory ignores excluded non-blocking tests", () => {
+  withRepository(({ cwd, base }) => {
+    writeRelative(cwd, "tests/e2e/ignored.test.ts", `it.only("not blocking", () => {})\n`)
+    writeRelative(cwd, "tests/helpers/not-collected.ts", `it.only("helper only", () => {})\n`)
+    commit(cwd, "add excluded e2e and non-test helper")
+    assert.doesNotThrow(() => checkTestIntegrity({ base, cwd }))
+  })
+})
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
+
+const listVitestFiles = (cwd, args) =>
+  execFileSync("npx", ["vitest", "list", ...args, "--filesOnly"], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  })
+    .trim()
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.split(path.sep).join("/"))
+    .sort()
+
+const gradingConfig = ({ approved = [], dependencyTransitions = [] } = {}) =>
+  [
+    "rubric_version: 1.0.1",
+    "mode: report-only",
+    "ratchets:",
+    "  RT-2:",
+    "    enforcement: ci-blocking",
+    "    approved_test_removals:",
+    ...(approved.length === 0
+      ? ["      []"]
+      : approved.map((entry) => `      - ${JSON.stringify(entry)}`)),
+    "    approved_dependency_transitions:",
+    ...(dependencyTransitions.length === 0
+      ? ["      []"]
+      : dependencyTransitions.map((entry) => `      - ${JSON.stringify(entry)}`)),
+    "",
+  ].join("\n")
+
+test("RT-2 blocking set matches vitest list for tests/unit", () => {
+  const expected = listVitestFiles(repoRoot, ["tests/unit"])
+  const actual = collectBlockingTestFiles(repoRoot, undefined).files
+  assert.ok(actual.length > 0)
+  assert.deepEqual(actual, expected)
+})
+
+test("RT-2 --exclude collection matches vitest list", () => {
+  const exclude = "tests/unit/core/**"
+  const script = `vitest run tests/unit --exclude ${exclude}`
+  const unfiltered = listVitestFiles(repoRoot, ["tests/unit"])
+  const expected = listVitestFiles(repoRoot, ["tests/unit", "--exclude", exclude])
+  const actual = collectBlockingTestFiles(repoRoot, undefined, script).files
+  assert.ok(expected.length > 0)
+  assert.ok(expected.length < unfiltered.length)
+  assert.deepEqual(actual, expected)
+})
+
+
+test("RT-2 rejects --exclude narrowing of the blocking set", () => {
+  withRepository(({ cwd, base }) => {
+    writeRelative(
+      cwd,
+      "package.json",
+      `${JSON.stringify(
+        {
+          name: "cascade-grading-fixture",
+          private: true,
+          scripts: {
+            "test:unit": "vitest run tests/unit --exclude tests/unit/extra/**",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    )
+    commit(cwd, "exclude extra via CLI")
+    assert.throws(
+      () => checkTestIntegrity({ base, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(detail, /tests\/unit\/extra\/sample\.test\.ts/)
+        return true
+      },
+    )
+  })
+})
+
+test("RT-2 fails closed on unsupported Vitest selectors", () => {
+  withRepository(({ cwd, base }) => {
+    for (const script of [
+      "vitest run tests/unit -t focused",
+      "vitest run tests/unit --testNamePattern focused",
+      "vitest run tests/unit --project unit",
+      "vitest run tests/unit --changed",
+      "vitest run tests/unit --shard 1/2",
+      "vitest run tests/unit --workspace vitest.workspace.ts",
+    ]) {
+      writeRelative(
+        cwd,
+        "package.json",
+        `${JSON.stringify(
+          {
+            name: "cascade-grading-fixture",
+            private: true,
+            scripts: { "test:unit": script },
+          },
+          null,
+          2,
+        )}\n`,
+      )
+      commit(cwd, `unsupported ${script}`)
+      assert.throws(
+        () => checkTestIntegrity({ base, cwd }),
+        (error) => {
+          assert.ok(error instanceof CheckFailure)
+          assert.match(error.message, /unsupported Vitest selector|cannot model/)
+          return true
+        },
+      )
+    }
+  })
+})
+
+test("RT-2 rejects head-only approved_test_removals", () => {
+  withRepository(({ cwd, base }) => {
+    writeRelative(cwd, ".github/grading/config.yml", gradingConfig({ approved: [] }))
+    // Establish base without the extra file approved.
+    const policyBase = commit(cwd, "empty approval policy")
+
+    writeRelative(cwd, ".github/grading/config.yml", gradingConfig({
+      approved: ["tests/unit/extra/sample.test.ts"],
+    }))
+    writeRelative(cwd, "tests/unit/extra/sample.test.ts", "") // delete via empty then remove
+    execFileSync("git", ["rm", "-f", "tests/unit/extra/sample.test.ts"], {
+      cwd,
+      stdio: "ignore",
+    })
+    commit(cwd, "drop extra and self-approve in head")
+
+    assert.throws(
+      () => checkTestIntegrity({ base: policyBase, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(detail, /tests\/unit\/extra\/sample\.test\.ts/)
+        return true
+      },
+    )
+  })
+})
+
+test("RT-2 accepts removals approved at merge-base", () => {
+  withRepository(({ cwd }) => {
+    writeRelative(cwd, ".github/grading/config.yml", gradingConfig({
+      approved: ["tests/unit/extra/sample.test.ts"],
+    }))
+    const policyBase = commit(cwd, "pre-approve extra removal")
+
+    execFileSync("git", ["rm", "-f", "tests/unit/extra/sample.test.ts"], {
+      cwd,
+      stdio: "ignore",
+    })
+    commit(cwd, "drop pre-approved extra")
+
+    assert.doesNotThrow(() => checkTestIntegrity({ base: policyBase, cwd }))
+  })
+})
+
+test("RT-2 rejects shell short-circuit in test:unit", () => {
+  withRepository(({ cwd, base }) => {
+    writeRelative(
+      cwd,
+      "package.json",
+      `${JSON.stringify(
+        {
+          name: "cascade-grading-fixture",
+          private: true,
+          scripts: {
+            "test:unit": "vitest run tests/unit/core || vitest run tests/unit",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    )
+    commit(cwd, "shell short-circuit unit script")
+    assert.throws(
+      () => checkTestIntegrity({ base, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        assert.match(error.message, /shell operators|shell/)
+        return true
+      },
+    )
+  })
+})
+
+test("RT-2 rejects vitest list non-executing subcommand", () => {
+  withRepository(({ cwd, base }) => {
+    writeRelative(
+      cwd,
+      "package.json",
+      `${JSON.stringify(
+        {
+          name: "cascade-grading-fixture",
+          private: true,
+          scripts: {
+            "test:unit": "vitest list tests/unit",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    )
+    commit(cwd, "list subcommand unit script")
+    assert.throws(
+      () => checkTestIntegrity({ base, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        assert.match(error.message, /vitest run|subcommand 'list'/)
+        return true
+      },
+    )
+  })
+})
+
+test("RT-2 fails closed on defineConfig factory config narrowing", () => {
+  withRepository(({ cwd, base }) => {
+    writeRelative(
+      cwd,
+      "custom.vitest.config.ts",
+      `import { defineConfig } from "vitest/config"\n` +
+        `export default defineConfig(() => ({ test: { include: ["tests/unit/core/**"] } }))\n`,
+    )
+    writeRelative(
+      cwd,
+      "package.json",
+      `${JSON.stringify(
+        {
+          name: "cascade-grading-fixture",
+          private: true,
+          scripts: {
+            "test:unit": "vitest run tests/unit --config custom.vitest.config.ts",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    )
+    commit(cwd, "factory config")
+    assert.throws(
+      () => checkTestIntegrity({ base, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(detail, /blocking unit|dropped|reduced|failed to obtain Vitest collection/)
+        return true
+      },
+    )
+  })
+})
+
+test("RT-2 fails closed on conditional shorthand include config", () => {
+  withRepository(({ cwd, base }) => {
+    writeRelative(
+      cwd,
+      "vitest.config.ts",
+      `const include = process.env.CI ? ["tests/unit/core/**"] : ["tests/**/*.test.ts"]\n` +
+        `export default { test: { include } }\n`,
+    )
+    commit(cwd, "conditional shorthand include")
+    assert.throws(
+      () => checkTestIntegrity({ base, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(detail, /blocking unit|dropped|reduced/)
+        return true
+      },
+    )
+  })
+})
+
+test("RT-2 fails closed on re-exported opaque config narrowing", () => {
+  withRepository(({ cwd, base }) => {
+    writeRelative(
+      cwd,
+      "vitest.shared.ts",
+      `export default { test: { include: ["tests/unit/core/**"] } }\n`,
+    )
+    writeRelative(
+      cwd,
+      "vitest.config.ts",
+      `import cfg from "./vitest.shared"\nexport default cfg\n`,
+    )
+    commit(cwd, "re-export config")
+    assert.throws(
+      () => checkTestIntegrity({ base, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(detail, /blocking unit|dropped|reduced/)
+        return true
+      },
+    )
+  })
+})
+
+test("RT-2 inventories skipped tests under build/ and .mjs files", () => {
+  withRepository(({ cwd, base }) => {
+    writeRelative(cwd, "tests/unit/build/hidden.test.ts", `it.skip("hidden build", () => {})\n`)
+    writeRelative(cwd, "tests/unit/hidden.test.mjs", `it.skip("hidden mjs", () => {})\n`)
+    writeRelative(
+      cwd,
+      "vitest.config.ts",
+      `export default { test: { include: ["tests/**/*.test.ts", "tests/**/*.test.mjs"], exclude: ["tests/e2e/**"] } }\n`,
+    )
+    commit(cwd, "add build and mjs skipped tests")
+    assert.throws(
+      () => checkTestIntegrity({ base, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(detail, /new Vitest skip mode/)
+        return true
+      },
+    )
+
+    const collection = collectBlockingTestFiles(cwd, undefined)
+    assert.ok(collection.files.includes("tests/unit/build/hidden.test.ts"))
+    assert.ok(collection.files.includes("tests/unit/hidden.test.mjs"))
+  })
+})
+
+test("RT-2 accepts in-filter rename with identical content", () => {
+  withRepository(({ cwd, base }) => {
+    const source = path.join(cwd, "tests/unit/extra/sample.test.ts")
+    const target = path.join(cwd, "tests/unit/extra/renamed.test.ts")
+    execFileSync("git", ["mv", source, target], { cwd, stdio: "ignore" })
+    commit(cwd, "rename within unit filter")
+    assert.doesNotThrow(() => checkTestIntegrity({ base, cwd }))
+  })
+})
+
+test("RT-2 accepts move between unit subdirectories with identical content", () => {
+  withRepository(({ cwd, base }) => {
+    const source = path.join(cwd, "tests/unit/extra/sample.test.ts")
+    const target = path.join(cwd, "tests/unit/core/moved-sample.test.ts")
+    mkdirSync(path.dirname(target), { recursive: true })
+    execFileSync("git", ["mv", source, target], { cwd, stdio: "ignore" })
+    commit(cwd, "move between unit subdirs")
+    assert.doesNotThrow(() => checkTestIntegrity({ base, cwd }))
+  })
+})
+
+test("RT-2 accepts reordering include/exclude keys without pattern change", () => {
+  withRepository(({ cwd, base }) => {
+    writeRelative(
+      cwd,
+      "vitest.config.ts",
+      `export default { test: { exclude: ["tests/e2e/**"], include: ["tests/**/*.test.ts"] } }\n`,
+    )
+    commit(cwd, "reorder include exclude keys")
+    assert.doesNotThrow(() => checkTestIntegrity({ base, cwd }))
+  })
+})
+
+test("RT-2 fails closed on head-only workspace narrowing", () => {
+  withRepository(({ cwd, base }) => {
+    writeRelative(cwd, "vitest.workspace.ts", `export default ["tests/unit/core"]\n`)
+    commit(cwd, "head-only workspace subset")
+    assert.throws(
+      () => checkTestIntegrity({ base, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(
+          detail,
+          /blocking unit|dropped|reduced|execution configuration changed|workspace/,
+        )
+        assert.match(
+          detail,
+          /tests\/unit\/extra\/sample\.test\.ts|tests\/unit\/baseline\.test\.ts|execution configuration changed/,
+        )
+        return true
+      },
+    )
+  })
+})
+
+test("RT-2 fails closed on config testNamePattern", () => {
+  withRepository(({ cwd, base }) => {
+    writeRelative(
+      cwd,
+      "vitest.config.ts",
+      `export default { test: { include: ["tests/**/*.test.ts"], exclude: ["tests/e2e/**"], testNamePattern: /core/ } }\n`,
+    )
+    commit(cwd, "testNamePattern core only")
+    assert.throws(
+      () => checkTestIntegrity({ base, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(detail, /execution configuration changed|testNamePattern/)
+        return true
+      },
+    )
+  })
+})
+
+test("RT-2 fails closed on config dir plus passWithNoTests", () => {
+  withRepository(({ cwd, base }) => {
+    writeRelative(
+      cwd,
+      "vitest.config.ts",
+      `export default { test: { include: ["tests/**/*.test.ts"], exclude: ["tests/e2e/**"], dir: "tests/unit/core", passWithNoTests: true } }\n`,
+    )
+    commit(cwd, "dir plus passWithNoTests")
+    assert.throws(
+      () => checkTestIntegrity({ base, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(detail, /execution configuration changed|dir=|passWithNoTests|dropped|reduced/)
+        return true
+      },
+    )
+  })
+})
+
+test("RT-2 fails closed when --mode narrows a config factory collection", () => {
+  withRepository(({ cwd, base }) => {
+    writeRelative(
+      cwd,
+      "vitest.config.ts",
+      `import { defineConfig } from "vitest/config"\n` +
+        `export default defineConfig(({ mode }) => ({\n` +
+        `  test: {\n` +
+        `    include: mode === "narrow" ? ["tests/unit/core/**"] : ["tests/**/*.test.ts"],\n` +
+        `    exclude: ["tests/e2e/**"],\n` +
+        `  },\n` +
+        `}))\n`,
+    )
+    writeRelative(
+      cwd,
+      "package.json",
+      `${JSON.stringify(
+        {
+          name: "cascade-grading-fixture",
+          private: true,
+          scripts: {
+            "test:unit": "vitest run tests/unit --mode narrow",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    )
+    commit(cwd, "mode-narrow factory")
+    assert.throws(
+      () => checkTestIntegrity({ base, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(detail, /blocking unit|dropped|reduced|selector reduced/)
+        assert.match(
+          detail,
+          /tests\/unit\/extra\/sample\.test\.ts|tests\/unit\/baseline\.test\.ts/,
+        )
+        return true
+      },
+    )
+  })
+})
+
+test("RT-2 ignores config stdout and trusts only vitest --json collection", () => {
+  withRepository(({ cwd, base }) => {
+    // Counterfeit every omitted path on stdout. The pre-fix parser treated
+    // unrecognized stdout lines as collected files and restored set equality.
+    writeRelative(
+      cwd,
+      "vitest.config.ts",
+      `console.log("tests/unit/extra/sample.test.ts")\n` +
+        `console.log("tests/unit/baseline.test.ts")\n` +
+        `export default { test: { include: ["tests/unit/core/**"] } }\n`,
+    )
+    commit(cwd, "config logs omitted paths")
+    assert.throws(
+      () => checkTestIntegrity({ base, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(detail, /blocking unit|dropped|reduced/)
+        assert.match(detail, /tests\/unit\/extra\/sample\.test\.ts|tests\/unit\/baseline\.test\.ts/)
+        return true
+      },
+    )
+  })
+})
+test("RT-2 fails closed when lockfile/dependencies differ between base and head", () => {
+  withRepository(({ cwd, base }) => {
+    // No test-file drop: only dependency manifests change. The pre-fix checker
+    // reused head's install for the base worktree and would still report equal
+    // collections. Fail closed on the drift itself instead.
+    writeRelative(
+      cwd,
+      "package.json",
+      `${JSON.stringify(
+        {
+          name: "cascade-grading-fixture",
+          private: true,
+          scripts: {
+            "test:unit": "vitest run tests/unit",
+          },
+          devDependencies: {
+            vitest: "2.1.9",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    )
+    writeRelative(
+      cwd,
+      "bun.lock",
+      `{\n  "lockfileVersion": 1,\n  "workspaces": {\n    "": {\n      "name": "cascade-grading-fixture",\n      "devDependencies": {\n        "vitest": "2.1.8"\n      }\n    }\n  }\n}\n`,
+    )
+    commit(cwd, "dependency drift only")
+    assert.throws(
+      () => checkTestIntegrity({ base, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        assert.match(
+          error.message,
+          /unapproved dependency change/,
+        )
+        assert.match(error.message, /approved_dependency_transitions/)
+        return true
+      },
+    )
+  })
+})
+
+// Writes the dependency change the three approval tests share and returns the
+// exact transition fingerprint RT-2 asks the maintainer to authorize.
+const applyDependencyDrift = (cwd) => {
+  writeRelative(
+    cwd,
+    "package.json",
+    `${JSON.stringify(
+      {
+        name: "cascade-grading-fixture",
+        private: true,
+        scripts: { "test:unit": "vitest run tests/unit" },
+        devDependencies: { vitest: "2.1.9" },
+      },
+      null,
+      2,
+    )}\n`,
+  )
+}
+
+const transitionFromFailure = (cwd, base) => {
+  try {
+    checkTestIntegrity({ base, cwd })
+  } catch (error) {
+    const match = /"([0-9a-f]{64}:[0-9a-f]{64})"/.exec(error.message)
+    assert.ok(match, `expected a transition fingerprint in: ${error.message}`)
+    return match[1]
+  }
+  assert.fail("expected the unapproved dependency transition to fail closed")
+}
+
+test("RT-2 accepts a dependency transition approved at the merge base", () => {
+  withRepository(({ cwd, base }) => {
+    // Discover the exact entry the diagnostic tells a maintainer to land.
+    applyDependencyDrift(cwd)
+    commit(cwd, "probe dependency drift")
+    const transition = transitionFromFailure(cwd, base)
+
+    // Land it as a policy-only PR on top of the original base, exactly as the
+    // diagnostic instructs: revert the dependency change, approve, commit.
+    execFileSync("git", ["revert", "--no-edit", "HEAD"], { cwd, stdio: "ignore" })
+    writeRelative(
+      cwd,
+      ".github/grading/config.yml",
+      gradingConfig({ dependencyTransitions: [transition] }),
+    )
+    const policyBase = commit(cwd, "approve dependency transition")
+
+    // Now rebase the dependency change onto the approved policy.
+    applyDependencyDrift(cwd)
+    commit(cwd, "land approved dependency change")
+
+    assert.doesNotThrow(() => checkTestIntegrity({ base: policyBase, cwd }))
+  })
+})
+
+test("RT-2 rejects a head-only approved dependency transition", () => {
+  withRepository(({ cwd, base }) => {
+    applyDependencyDrift(cwd)
+    commit(cwd, "probe dependency drift")
+    const transition = transitionFromFailure(cwd, base)
+    execFileSync("git", ["revert", "--no-edit", "HEAD"], { cwd, stdio: "ignore" })
+    // Base carries the approvals list but not this entry.
+    writeRelative(cwd, ".github/grading/config.yml", gradingConfig({}))
+    const policyBase = commit(cwd, "no approval at base")
+
+    // Self-approval: the same PR both changes dependencies and authorizes it.
+    applyDependencyDrift(cwd)
+    writeRelative(
+      cwd,
+      ".github/grading/config.yml",
+      gradingConfig({ dependencyTransitions: [transition] }),
+    )
+    commit(cwd, "dependency change self-approved in head")
+
+    assert.throws(
+      () => checkTestIntegrity({ base: policyBase, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        assert.match(error.message, /unapproved dependency change/)
+        return true
+      },
+    )
+  })
+})
+
+test("RT-2 rejects a dependency transition approved for different fingerprints", () => {
+  withRepository(({ cwd, base }) => {
+    // An approval must authorize one exact base->head pair, not any change.
+    const unrelated = `${"a".repeat(64)}:${"b".repeat(64)}`
+    writeRelative(
+      cwd,
+      ".github/grading/config.yml",
+      gradingConfig({ dependencyTransitions: [unrelated] }),
+    )
+    const policyBase = commit(cwd, "approve an unrelated transition")
+    assert.notEqual(policyBase, base)
+
+    applyDependencyDrift(cwd)
+    commit(cwd, "unrelated dependency change")
+
+    assert.throws(
+      () => checkTestIntegrity({ base: policyBase, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        assert.match(error.message, /unapproved dependency change/)
+        return true
+      },
+    )
+  })
+})
+
+test("RT-2 fails closed on nested workspace project testNamePattern", () => {
+  withRepository(({ cwd, base }) => {
+    writeRelative(cwd, "vitest.workspace.ts", `export default ["packages/*"]\n`)
+    writeRelative(
+      cwd,
+      "packages/a/vitest.config.ts",
+      `export default {\n` +
+        `  test: {\n` +
+        `    name: "a",\n` +
+        `    include: ["../../tests/**/*.test.ts"],\n` +
+        `  },\n` +
+        `}\n`,
+    )
+    // Establish the workspace at the merge-base so the nested project config
+    // change is the only execution-key delta under test.
+    const workspaceBase = commit(cwd, "workspace baseline")
+
+    writeRelative(
+      cwd,
+      "packages/a/vitest.config.ts",
+      `export default {\n` +
+        `  test: {\n` +
+        `    name: "a",\n` +
+        `    include: ["../../tests/**/*.test.ts"],\n` +
+        `    testNamePattern: /core/,\n` +
+        `  },\n` +
+        `}\n`,
+    )
+    commit(cwd, "nested project testNamePattern")
+    assert.throws(
+      () => checkTestIntegrity({ base: workspaceBase, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(detail, /execution configuration changed|testNamePattern/)
+        return true
+      },
+    )
+  })
+})
+
+
+
+
 
 const branchingFunction = (name, branches) => {
   const conditions = Array.from(

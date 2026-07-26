@@ -47,6 +47,39 @@ const customSchemaFields = (
   );
 };
 
+/** Shared ioredis connection knobs used by Redis input/output YAML schemas. */
+const redisYamlConnectionFields = {
+  connect_timeout: S.optional(S.Number),
+  command_timeout: S.optional(S.Number),
+  keep_alive: S.optional(S.Number),
+  lazy_connect: S.optional(S.Boolean),
+  max_retries_per_request: S.optional(S.Number),
+  enable_offline_queue: S.optional(S.Boolean),
+} as const;
+
+
+/** Optional password/db after resource-specific fields. */
+const redisYamlAuthFields = {
+  password: S.optional(S.String),
+  db: S.optional(S.Number),
+} as const;
+
+/** Shared HTTP basic/bearer auth block. */
+const httpAuthSchema = S.optional(
+  S.Struct({
+    type: S.Union(S.Literal("basic"), S.Literal("bearer")),
+    username: S.optional(S.String),
+    password: S.optional(S.String),
+    token: S.optional(S.String),
+  }),
+);
+
+/** Shared queue backpressure knobs for stream inputs. */
+const queueBackpressureFields = {
+  queue_size: S.optional(S.Int.pipe(S.positive())),
+  overflow: S.optional(S.Literal("block", "drop_new", "drop_old")),
+} as const;
+
 /**
  * Schema for AWS SQS Input configuration (Bento style)
  */
@@ -75,12 +108,7 @@ const RedisStreamsInputSchema = S.Struct({
   start_id: S.optional(S.String),
   max_reconnect_attempts: S.optional(S.Int.pipe(S.nonNegative())),
   reconnect_backoff_ms: S.optional(S.Int.pipe(S.positive())),
-  connect_timeout: S.optional(S.Number),
-  command_timeout: S.optional(S.Number),
-  keep_alive: S.optional(S.Number),
-  lazy_connect: S.optional(S.Boolean),
-  max_retries_per_request: S.optional(S.Number),
-  enable_offline_queue: S.optional(S.Boolean),
+  ...redisYamlConnectionFields,
 });
 
 /**
@@ -91,8 +119,7 @@ const HttpInputSchema = S.Struct({
   host: S.optional(S.String),
   path: S.optional(S.String),
   timeout: S.optional(S.Number),
-  queue_size: S.optional(S.Int.pipe(S.positive())),
-  overflow: S.optional(S.Literal("block", "drop_new", "drop_old")),
+  ...queueBackpressureFields,
 });
 
 /**
@@ -104,8 +131,7 @@ const FileInputSchema = S.Struct({
   start_at: S.optional(S.Union(S.Literal("end"), S.Literal("beginning"))),
   poll_interval_ms: S.optional(S.Number),
   encoding: S.optional(S.String),
-  queue_size: S.optional(S.Int.pipe(S.positive())),
-  overflow: S.optional(S.Literal("block", "drop_new", "drop_old")),
+  ...queueBackpressureFields,
 });
 
 /**
@@ -114,8 +140,7 @@ const FileInputSchema = S.Struct({
 const StdinInputSchema = S.Struct({
   mode: S.optional(S.Union(S.Literal("lines"), S.Literal("whole"))),
   encoding: S.optional(S.String),
-  queue_size: S.optional(S.Int.pipe(S.positive())),
-  overflow: S.optional(S.Literal("block", "drop_new", "drop_old")),
+  ...queueBackpressureFields,
 });
 
 /**
@@ -123,18 +148,11 @@ const StdinInputSchema = S.Struct({
  */
 const RedisPubSubInputSchema = S.Struct({
   url: RedisUrlSchema,
-  password: S.optional(S.String),
-  db: S.optional(S.Number),
+  ...redisYamlAuthFields,
   channels: S.optional(S.Array(S.String)),
   patterns: S.optional(S.Array(S.String)),
-  queue_size: S.optional(S.Int.pipe(S.positive())),
-  overflow: S.optional(S.Literal("block", "drop_new", "drop_old")),
-  connect_timeout: S.optional(S.Number),
-  command_timeout: S.optional(S.Number),
-  keep_alive: S.optional(S.Number),
-  lazy_connect: S.optional(S.Boolean),
-  max_retries_per_request: S.optional(S.Number),
-  enable_offline_queue: S.optional(S.Boolean),
+  ...queueBackpressureFields,
+  ...redisYamlConnectionFields,
 });
 
 /**
@@ -143,16 +161,10 @@ const RedisPubSubInputSchema = S.Struct({
 const RedisListInputSchema = S.Struct({
   url: RedisUrlSchema,
   key: S.Union(S.String, S.Array(S.String)),
-  password: S.optional(S.String),
-  db: S.optional(S.Number),
+  ...redisYamlAuthFields,
   direction: S.optional(S.Union(S.Literal("left"), S.Literal("right"))),
   timeout: S.optional(S.Number),
-  connect_timeout: S.optional(S.Number),
-  command_timeout: S.optional(S.Number),
-  keep_alive: S.optional(S.Number),
-  lazy_connect: S.optional(S.Boolean),
-  max_retries_per_request: S.optional(S.Number),
-  enable_offline_queue: S.optional(S.Boolean),
+  ...redisYamlConnectionFields,
   max_reconnect_attempts: S.optional(S.Int.pipe(S.nonNegative())),
   reconnect_backoff_ms: S.optional(S.Int.pipe(S.positive())),
 });
@@ -260,14 +272,7 @@ const HttpProcessorSchema = S.Struct({
   result_mapping: S.optional(S.String),
   timeout: S.optional(S.Number),
   max_retries: S.optional(S.Number),
-  auth: S.optional(
-    S.Struct({
-      type: S.Union(S.Literal("basic"), S.Literal("bearer")),
-      username: S.optional(S.String),
-      password: S.optional(S.String),
-      token: S.optional(S.String),
-    }),
-  ),
+  auth: httpAuthSchema,
 });
 
 /**
@@ -389,12 +394,7 @@ const RedisStreamsOutputSchema = S.Struct({
   stream: S.String,
   max_length: S.optional(S.Number),
   max_retries: S.optional(S.Number),
-  connect_timeout: S.optional(S.Number),
-  command_timeout: S.optional(S.Number),
-  keep_alive: S.optional(S.Number),
-  lazy_connect: S.optional(S.Boolean),
-  max_retries_per_request: S.optional(S.Number),
-  enable_offline_queue: S.optional(S.Boolean),
+  ...redisYamlConnectionFields,
 });
 
 /**
@@ -424,14 +424,7 @@ const HttpOutputSchema = S.Struct({
   headers: S.optional(S.Record({ key: S.String, value: S.String })),
   timeout: S.optional(S.Number),
   max_retries: S.optional(S.Number),
-  auth: S.optional(
-    S.Struct({
-      type: S.Union(S.Literal("basic"), S.Literal("bearer")),
-      username: S.optional(S.String),
-      password: S.optional(S.String),
-      token: S.optional(S.String),
-    }),
-  ),
+  auth: httpAuthSchema,
 });
 
 /**
@@ -440,15 +433,9 @@ const HttpOutputSchema = S.Struct({
 const RedisPubSubOutputSchema = S.Struct({
   url: RedisUrlSchema,
   channel: S.String,
-  password: S.optional(S.String),
-  db: S.optional(S.Number),
+  ...redisYamlAuthFields,
   max_retries: S.optional(S.Number),
-  connect_timeout: S.optional(S.Number),
-  command_timeout: S.optional(S.Number),
-  keep_alive: S.optional(S.Number),
-  lazy_connect: S.optional(S.Boolean),
-  max_retries_per_request: S.optional(S.Number),
-  enable_offline_queue: S.optional(S.Boolean),
+  ...redisYamlConnectionFields,
 });
 
 /**
@@ -457,19 +444,13 @@ const RedisPubSubOutputSchema = S.Struct({
 const RedisListOutputSchema = S.Struct({
   url: RedisUrlSchema,
   key: S.String,
-  password: S.optional(S.String),
-  db: S.optional(S.Number),
+  ...redisYamlAuthFields,
   direction: S.optional(S.Union(S.Literal("left"), S.Literal("right"))),
   max_length: S.optional(S.Number),
   // Compatibility alias for the documented YAML key; canonical is max_length.
   max_len: S.optional(S.Number),
   max_retries: S.optional(S.Number),
-  connect_timeout: S.optional(S.Number),
-  command_timeout: S.optional(S.Number),
-  keep_alive: S.optional(S.Number),
-  lazy_connect: S.optional(S.Boolean),
-  max_retries_per_request: S.optional(S.Number),
-  enable_offline_queue: S.optional(S.Boolean),
+  ...redisYamlConnectionFields,
 });
 
 /**

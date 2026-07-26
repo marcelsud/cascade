@@ -3,7 +3,6 @@
  */
 import { Effect, Stream, Option } from "effect";
 import * as Schema from "effect/Schema";
-import Redis from "ioredis";
 import type { Input, Message } from "../core/types.js";
 import { createMessage } from "../core/types.js";
 import {
@@ -16,17 +15,18 @@ import {
   emitInputMetrics,
   measureDuration,
 } from "../core/metrics.js";
+import { validate, NonEmptyString, PositiveInt } from "../core/validation.js";
 import {
-  validate,
-  NonEmptyString,
-  Hostname,
-  Port,
-  PositiveInt,
-} from "../core/validation.js";
+  redisAuthSchemaFields,
+  redisClientSchemaFields,
+  redisHostEndpointSchemaFields,
+  redisReconnectSchemaFields,
+} from "../core/redis-connection-schema.js";
+import { closeRedisClient } from "../core/redis-client.js";
 import {
-  closeRedisClient,
-  observeRedisClientErrors,
-} from "../core/redis-client.js";
+  formatRedisConnectionInfo,
+  openConfiguredRedisClient,
+} from "../core/redis-client-options.js";
 import { withReconnect } from "./redis-reconnect.js";
 
 export interface RedisListInputConfig {
@@ -67,24 +67,16 @@ export class RedisListInputError extends ComponentError {
  * Validation schema for Redis List Input configuration
  */
 export const RedisListInputConfigSchema = Schema.Struct({
-  host: Schema.Union(Hostname, NonEmptyString),
-  port: Port,
+  ...redisHostEndpointSchemaFields,
   key: Schema.Union(
     NonEmptyString,
     Schema.Array(NonEmptyString).pipe(Schema.minItems(1)),
   ),
-  password: Schema.optional(NonEmptyString),
-  db: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
+  ...redisAuthSchemaFields,
   direction: Schema.optional(Schema.Literal("left", "right")),
   timeout: Schema.optional(PositiveInt),
-  connectTimeout: Schema.optional(PositiveInt),
-  commandTimeout: Schema.optional(PositiveInt),
-  keepAlive: Schema.optional(PositiveInt),
-  lazyConnect: Schema.optional(Schema.Boolean),
-  maxRetriesPerRequest: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
-  enableOfflineQueue: Schema.optional(Schema.Boolean),
-  maxReconnectAttempts: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
-  reconnectBackoffMs: Schema.optional(PositiveInt),
+  ...redisClientSchemaFields,
+  ...redisReconnectSchemaFields,
 });
 
 /**
@@ -139,23 +131,7 @@ export const createRedisListInput = (
     ),
   );
 
-  const client = new Redis({
-    host: config.host,
-    port: config.port,
-    password: config.password,
-    db: config.db || 0,
-    connectTimeout: config.connectTimeout ?? 10000,
-    commandTimeout: config.commandTimeout,
-    keepAlive: config.keepAlive ?? 30000,
-    lazyConnect: config.lazyConnect ?? false,
-    maxRetriesPerRequest: config.maxRetriesPerRequest ?? 20,
-    enableOfflineQueue: config.enableOfflineQueue ?? true,
-    retryStrategy: (times) => {
-      const delay = Math.min(times * 50, 2000);
-      return delay;
-    },
-  });
-  observeRedisClientErrors(client, "Redis List input");
+  const client = openConfiguredRedisClient(config, "Redis List input");
 
   const direction = config.direction ?? "left";
   const timeout = config.timeout ?? 5;
@@ -169,7 +145,7 @@ export const createRedisListInput = (
    */
   const blockingPop = Effect.gen(function* () {
     yield* Effect.logInfo(
-      `Connected to Redis: redis://${config.host}:${config.port}/${config.db || 0}`,
+      `Connected to Redis: ${formatRedisConnectionInfo(config)}`,
     );
     yield* Effect.logDebug(
       `Polling Redis list(s) ${keys.join(", ")} with ${direction === "left" ? "BLPOP" : "BRPOP"}`,

@@ -209,46 +209,46 @@ const classifyStatus = (status: number): ErrorCategory | undefined => {
   return undefined;
 };
 
+const categoryFromStatusTag = (status: unknown): ErrorCategory | undefined => {
+  if (typeof status !== "number") return undefined;
+  return classifyStatus(status);
+};
+
 /**
  * Detect error category from HTTP / Effect errors.
  * Recognizes Effect platform ResponseError with reason "StatusCode".
  */
 const detectHttpErrorCategory = (error: unknown): ErrorCategory => {
-  if (error && typeof error === "object" && "_tag" in error) {
-    const tagged = error as TaggedHttpError;
-    const tag = tagged._tag;
+  if (!error || typeof error !== "object" || !("_tag" in error)) {
+    return detectCategory(error);
+  }
 
-    // Network/transport errors - retry
-    if (tag === "RequestError" || tag === "Transport") {
-      return "intermittent";
-    }
+  const tagged = error as TaggedHttpError;
+  const tag = tagged._tag;
 
-    // Effect timeout
-    if (tag === "TimeoutException") {
-      return "intermittent";
-    }
+  // Network/transport errors and Effect timeouts - retry
+  if (
+    tag === "RequestError" ||
+    tag === "Transport" ||
+    tag === "TimeoutException"
+  ) {
+    return "intermittent";
+  }
 
-    // Effect platform ResponseError: { _tag: "ResponseError", reason: "StatusCode", response.status }
-    if (tag === "ResponseError") {
-      if (tagged.reason === "StatusCode") {
-        const status = tagged.response?.status;
-        if (typeof status === "number") {
-          const category = classifyStatus(status);
-          if (category) return category;
-        }
-      }
-      // Decode / EmptyBody are logical
-      return "logical";
+  // Effect platform ResponseError: { _tag: "ResponseError", reason: "StatusCode", response.status }
+  if (tag === "ResponseError") {
+    if (tagged.reason === "StatusCode") {
+      const category = categoryFromStatusTag(tagged.response?.status);
+      if (category) return category;
     }
+    // Decode / EmptyBody are logical
+    return "logical";
+  }
 
-    // Legacy / direct status shapes
-    if (tag === "StatusCode") {
-      const status = tagged.status;
-      if (typeof status === "number") {
-        const category = classifyStatus(status);
-        if (category) return category;
-      }
-    }
+  // Legacy / direct status shapes
+  if (tag === "StatusCode") {
+    const category = categoryFromStatusTag(tagged.status);
+    if (category) return category;
   }
 
   // Use default detection
@@ -407,7 +407,8 @@ export const createHttpProcessor = (
           };
 
           const mappedContent = yield* Effect.tryPromise({
-            try: async () => compiledResultMapping!.evaluate(mappingContext, mappingContext),
+            try: async () =>
+              compiledResultMapping!.evaluate(mappingContext, mappingContext),
             catch: (error) =>
               new HttpProcessorError(
                 `Failed to map HTTP response: ${error instanceof Error ? error.message : String(error)}`,
