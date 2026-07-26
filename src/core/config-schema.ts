@@ -119,6 +119,7 @@ const HttpInputSchema = S.Struct({
   host: S.optional(S.String),
   path: S.optional(S.String),
   timeout: S.optional(S.Number),
+  max_body_bytes: S.optional(S.Int.pipe(S.positive())),
   ...queueBackpressureFields,
 });
 

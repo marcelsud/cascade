@@ -17,6 +17,7 @@ input:
     host: "0.0.0.0"
     path: "/webhook"
     timeout: 30000
+    max_body_bytes: 1048576
 
 pipeline:
   processors:
