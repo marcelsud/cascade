@@ -88,7 +88,7 @@ const withRepository = (callback) => {
 }
 
 const issueRecord = ({ valueRule, issueGrade, severity }) => ({
-  rubric_version: "1.0.1",
+  rubric_version: "1.1.0",
   eligibility: Object.fromEntries(
     Array.from({ length: 9 }, (_, index) => [
       `IE-${index + 1}`,
@@ -121,7 +121,7 @@ test("issue-grade parses the grading YAML from Markdown", () => {
   const eligibility = Object.entries(record.eligibility)
     .map(([id, entry]) => `  ${id}: { answer: yes, evidence: "${entry.evidence}" }`)
     .join("\n")
-  const markdown = `## Slop\n\n\`\`\`yaml\nslop_delta: {}\n\`\`\`\n\n## Grading record\n\n\`\`\`yaml\nrubric_version: 1.0.1\neligibility:\n${eligibility}\nseverity: blocker\nvalue_rule: A-blocker\nissue_grade: A\ngrade_rationale: Direct evidence changes the release decision. Rule A-blocker applies.\n\`\`\`\n`
+  const markdown = `## Slop\n\n\`\`\`yaml\nslop_delta: {}\n\`\`\`\n\n## Grading record\n\n\`\`\`yaml\nrubric_version: 1.1.0\neligibility:\n${eligibility}\nseverity: blocker\nvalue_rule: A-blocker\nissue_grade: A\ngrade_rationale: Direct evidence changes the release decision. Rule A-blocker applies.\n\`\`\`\n`
   assert.equal(validateIssueRecord(markdown).grade, "A")
 })
 
@@ -298,7 +298,7 @@ const listVitestFiles = (cwd, args) =>
 
 const gradingConfig = ({ approved = [], dependencyTransitions = [] } = {}) =>
   [
-    "rubric_version: 1.0.1",
+    "rubric_version: 1.1.0",
     "mode: report-only",
     "ratchets:",
     "  RT-2:",

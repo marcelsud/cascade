@@ -1,13 +1,17 @@
 # Grading configuration for marcelsud/cascade.
-# Spec: https://github.com/marcelsud/specs/blob/main/grading-methodology.md
-# Changing thresholds, exclusions, or mode is a policy change and MUST be its
-# own reviewed PR (spec §10.1), never part of a feature PR.
-rubric_version: 1.0.1
+# This is the project configuration artifact required by grading-methodology
+# §4.7. Spec: https://github.com/marcelsud/specs/blob/main/grading-methodology.md
+# Changing thresholds, exclusions, objectives, topics, or mode is a policy
+# change and MUST be its own reviewed PR (spec §10.1, §4.8), never part of a
+# feature PR.
+rubric_version: 1.1.0
 mode: report-only
 
-# Objective registry for IE-7. Issues cite an ID from this list. A recorded
-# administrative request may satisfy IE-7 without an objective, but only via
-# the D path (issue grade D, spec §5.1).
+# Objective registry (spec §4.8), cited by IE-7. Issues cite an ID from this
+# list. Identifiers are stable and are never reused for a different guarantee,
+# because stored grade records cite them. A recorded administrative request may
+# satisfy IE-7 without an objective, but only via the D path (issue grade D,
+# spec §5.1).
 objectives:
   REL-1: >-
     Delivery guarantees: documented reliable/at-least-once delivery paths hold
@@ -19,7 +23,74 @@ objectives:
     Release gates and test tooling are trustworthy: runnable from a clean
     checkout and free of false positives.
 
-# RT-3 is intentionally unused in rubric 1.0.1. Behavioral proof is a reviewer
+# Topic registry for the continuous audit loop.
+# Spec: https://github.com/marcelsud/specs/blob/main/continuous-audit.md §5
+# One topic is audited per run, selected by weighted staleness x churn. Every
+# objective listed here MUST exist in the registry above; a topic citing an
+# absent objective is not selectable, because its findings would fail IE-7
+# only after the reproduction has already been paid for.
+topics:
+  - id: input-acquisition-lifecycle
+    paths: [src/inputs/]
+    objectives: [REL-1, REL-2]
+  - id: input-backpressure-and-overflow
+    paths: [src/inputs/input-queue.ts]
+    objectives: [REL-1]
+  - id: output-delivery-and-retry
+    paths: [src/outputs/]
+    objectives: [REL-1, REL-2]
+  - id: dlq-and-failure-routing
+    paths: [src/core/dlq.ts, src/core/error-collector.ts, src/core/pipeline.ts]
+    objectives: [REL-1]
+  - id: shutdown-and-drain
+    paths: [src/core/pipeline.ts, src/inputs/]
+    objectives: [REL-1]
+  - id: expression-evaluation
+    paths:
+      - src/processors/mapping-processor.ts
+      - src/processors/filter-processor.ts
+      - src/processors/switch-processor.ts
+    objectives: [REL-2]
+  - id: processor-contracts
+    paths: [src/processors/]
+    objectives: [REL-2]
+  - id: config-schema-and-builder
+    paths:
+      - src/core/config-schema.ts
+      - src/core/config-loader.ts
+      - src/core/pipeline-builder.ts
+      - src/core/component-registry.ts
+    objectives: [REL-2]
+  - id: error-classification
+    paths: [src/core/errors.ts, src/core/validation.ts]
+    objectives: [REL-2]
+  - id: metrics-and-observability
+    paths: [src/core/metrics.ts]
+    objectives: [REL-2]
+  - id: redis-connection-lifecycle
+    paths:
+      - src/core/redis-client.ts
+      - src/core/redis-client-options.ts
+      - src/core/redis-url.ts
+      - src/inputs/redis-reconnect.ts
+    objectives: [REL-1, REL-2]
+  - id: cli-surface
+    paths:
+      - src/cli.ts
+      - src/cli-args.ts
+      - src/cli-config.ts
+      - src/cli-dispatch.ts
+      - src/cli-errors.ts
+      - src/cli-metrics.ts
+    objectives: [REL-2]
+  - id: gate-trustworthiness
+    paths: [.github/grading/, .github/workflows/]
+    objectives: [TEST-1]
+  - id: test-utilities
+    paths: [src/testing/]
+    objectives: [TEST-1]
+
+# RT-3 is intentionally unused in rubric 1.1.0. Behavioral proof is a reviewer
 # duty under SG-5, not a machine ratchet.
 ratchets:
   RT-1:

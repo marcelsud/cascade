@@ -1,4 +1,4 @@
-<!-- Grading methodology rubric 1.0.1 — spec §13.2. Config: .github/grading/config.yml -->
+<!-- Grading methodology rubric 1.1.0 — spec §13.2. Config: .github/grading/config.yml -->
 
 Closes #<primary-issue>
 

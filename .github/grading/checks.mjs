@@ -18,7 +18,7 @@ import ts from "typescript"
 import { parse as parseYaml } from "yaml"
 
 
-const RUBRIC_VERSION = "1.0.1"
+const RUBRIC_VERSION = "1.1.0"
 const ELIGIBILITY_IDS = Array.from({ length: 9 }, (_, index) => `IE-${index + 1}`)
 const VALUE_RULE_GRADES = new Map([
   ["D-nonconsequential", "D"],

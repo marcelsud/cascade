@@ -1,5 +1,5 @@
 name: Graded issue
-description: Issue carrying the grading record required by the grading methodology (rubric 1.0.1)
+description: Issue carrying the grading record required by the grading methodology (rubric 1.1.0)
 title: "<component>: <problem>"
 body:
   - type: markdown
@@ -96,7 +96,7 @@ body:
       description: "Machine-readable record (spec §5.4). Triager selects the first matching §5.3 value_rule and runs `.github/grading/checks.mjs issue-grade`; a label without this complete record is not authoritative."
       render: yaml
       value: |
-        rubric_version: 1.0.1
+        rubric_version: 1.1.0
         eligibility:
           IE-1: { answer: yes, evidence: "Problem" }
           IE-2: { answer: yes, evidence: "Evidence" }
