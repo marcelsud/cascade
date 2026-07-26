@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync } from "node:fs"
+import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { minimatch } from "minimatch"
 import ts from "typescript"
 import { parse as parseYaml } from "yaml"
 
@@ -21,14 +21,6 @@ const VALUE_RULE_GRADES = new Map([
   ["B-localized-material", "B"],
 ])
 const TEST_MODES = ["only", "skip", "todo", "skipIf", "runIf", "fails"]
-const DEFAULT_VITEST_INCLUDE = ["**/*.{test,spec}.?(c|m)[jt]s?(x)"]
-const DEFAULT_VITEST_EXCLUDE = [
-  "**/node_modules/**",
-  "**/dist/**",
-  "**/cypress/**",
-  "**/.{idea,git,cache,output,temp}/**",
-  "**/{karma,rollup,webpack,vite,vitest,jest,ava,babel,nyc,cypress,tsup,build,eslint,prettier}.config.*",
-]
 const VITEST_CONFIG_CANDIDATES = [
   "vitest.config.ts",
   "vitest.config.mts",
@@ -40,6 +32,29 @@ const VITEST_CONFIG_CANDIDATES = [
   "vite.config.js",
   "vite.config.mjs",
 ]
+const VITEST_WORKSPACE_CANDIDATES = [
+  "vitest.workspace.ts",
+  "vitest.workspace.mts",
+  "vitest.workspace.js",
+  "vitest.workspace.mjs",
+  "vitest.workspace.cjs",
+  "vitest.projects.ts",
+  "vitest.projects.mts",
+  "vitest.projects.js",
+  "vitest.projects.mjs",
+  "vitest.projects.cjs",
+]
+// Config keys that can change which tests execute without changing the file set
+// returned by `vitest list --filesOnly`. Any add/change between base and head
+// fails RT-2 closed — list alone cannot see them.
+const VITEST_EXECUTION_AFFECTING_KEYS = new Set([
+  "dir",
+  "testNamePattern",
+  "passWithNoTests",
+  "includeSource",
+  "allowOnly",
+])
+const VITEST_LIST_TIMEOUT_MS = 60_000
 const VITEST_RUN_SUBCOMMAND = "run"
 const VITEST_NON_RUN_SUBCOMMANDS = new Set(["watch", "dev", "related", "bench", "list"])
 // Runner flags that do not change which files Vitest collects. Value forms
@@ -119,7 +134,7 @@ const SHELL_OPERATOR_TOKENS = new Set([
   "2>&1",
   ">&2",
 ])
-// Selection-affecting options we do not replicate. Presence fails RT-2 closed.
+// Selection-affecting CLI options. Presence fails RT-2 closed at parse time.
 const VITEST_UNSUPPORTED_SELECTORS = new Set([
   "-t",
   "--testNamePattern",
@@ -132,8 +147,7 @@ const VITEST_UNSUPPORTED_SELECTORS = new Set([
   "--mergeReports",
   "--related",
 ])
-// Only skip VCS/package trees while walking. Discovery excludes come solely from
-// the resolved Vitest include/exclude rules (no hard-coded build/coverage skips).
+// Only skip VCS/package trees while walking source for RT-5/RT-6.
 const SKIP_WALK_DIRECTORIES = new Set([".git", "node_modules"])
 
 const SOURCE_EXTENSIONS = new Set([
@@ -147,6 +161,8 @@ const SOURCE_EXTENSIONS = new Set([
   ".cjs",
 ])
 const MODE_SCAN_EXTENSIONS = SOURCE_EXTENSIONS
+
+const CHECKER_REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 
 export class CheckFailure extends Error {
   constructor(message, findings = []) {
@@ -472,6 +488,8 @@ const parseVitestUnitCommand = (script) => {
   let configPath
   let dir
   let root
+  let passWithNoTests = false
+  let allowOnly = false
 
   const takeValue = (flag, inline) => {
     const value = inline !== undefined ? inline : tokens[++index]
@@ -507,6 +525,10 @@ const parseVitestUnitCommand = (script) => {
         dir = takeValue(flag, inline).split(path.sep).join("/")
       } else if (flag === "--root" || flag === "-r") {
         root = takeValue(flag, inline).split(path.sep).join("/")
+      } else if (flag === "--passWithNoTests") {
+        passWithNoTests = true
+      } else if (flag === "--allowOnly") {
+        allowOnly = true
       } else if (VITEST_UNSUPPORTED_SELECTORS.has(flag) || flag.startsWith("--project")) {
         throw new CheckFailure(
           `RT-2 cannot model unsupported Vitest selector in test:unit: ${flag} (script: ${script})`,
@@ -560,6 +582,8 @@ const parseVitestUnitCommand = (script) => {
   if (cliExcludes.length > 0) selectorParts.push(`exclude=${JSON.stringify(cliExcludes)}`)
   if (dir) selectorParts.push(`dir=${dir}`)
   if (root) selectorParts.push(`root=${root}`)
+  if (passWithNoTests) selectorParts.push("passWithNoTests")
+  if (allowOnly) selectorParts.push("allowOnly")
 
   return {
     script,
@@ -568,6 +592,8 @@ const parseVitestUnitCommand = (script) => {
     dir,
     root,
     configPath,
+    passWithNoTests,
+    allowOnly,
     selector: selectorParts.length > 0 ? selectorParts.join(" ") : "(all included files)",
   }
 }
@@ -590,276 +616,236 @@ const readPackageUnitScript = (cwd, revision) => {
   return script.trim()
 }
 
-const isConfigDefaultsExclude = (node) => {
-  if (ts.isSpreadElement(node)) node = node.expression
-  return (
-    ts.isPropertyAccessExpression(node) &&
-    node.name.text === "exclude" &&
-    ts.isIdentifier(node.expression) &&
-    node.expression.text === "configDefaults"
+const normalizeRepoPath = (file) => file.split(path.sep).join("/").replace(/^\.\//, "")
+
+const resolveVitestEntry = () => {
+  const candidates = [
+    path.join(CHECKER_REPO_ROOT, "node_modules", "vitest", "vitest.mjs"),
+    path.join(CHECKER_REPO_ROOT, "node_modules", "vitest", "vitest.js"),
+    path.join(process.cwd(), "node_modules", "vitest", "vitest.mjs"),
+    path.join(process.cwd(), "node_modules", "vitest", "vitest.js"),
+  ]
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate
+  }
+  throw new CheckFailure(
+    "RT-2 cannot locate the repository Vitest binary (node_modules/vitest/vitest.mjs)",
   )
 }
 
-// Resolve a static string-array pattern expression. Returns {ok, values} or
-// {ok:false} when the expression is present but not fully statically resolvable.
-const resolveStringArray = (node) => {
-  if (!node) return { ok: true, values: undefined, present: false }
-
-  const values = []
-  const walk = (current) => {
-    if (!current) return false
-    if (ts.isStringLiteral(current) || ts.isNoSubstitutionTemplateLiteral(current)) {
-      values.push(current.text)
-      return true
-    }
-    if (ts.isArrayLiteralExpression(current)) {
-      for (const element of current.elements) {
-        if (isConfigDefaultsExclude(element)) {
-          values.push(...DEFAULT_VITEST_EXCLUDE)
-          continue
-        }
-        if (ts.isSpreadElement(element)) {
-          if (isConfigDefaultsExclude(element)) {
-            values.push(...DEFAULT_VITEST_EXCLUDE)
-            continue
-          }
-          // Non-configDefaults spread is opaque (identifier, call, etc.).
-          return false
-        }
-        if (ts.isStringLiteral(element) || ts.isNoSubstitutionTemplateLiteral(element)) {
-          values.push(element.text)
-          continue
-        }
-        // Conditional, identifier, call, object shorthand value, etc.
-        return false
-      }
-      return true
-    }
-    if (ts.isSpreadElement(current)) {
-      if (isConfigDefaultsExclude(current)) {
-        values.push(...DEFAULT_VITEST_EXCLUDE)
-        return true
-      }
-      return false
-    }
-    // Identifier shorthand, conditional, factory, call — opaque.
-    return false
+const buildVitestListArgs = (command) => {
+  const args = ["list"]
+  if (command.configPath) {
+    args.push("--config", command.configPath)
   }
-
-  if (!walk(node)) return { ok: false, present: true }
-  return { ok: true, values, present: true }
+  if (command.dir) {
+    args.push("--dir", command.dir)
+  }
+  if (command.root) {
+    args.push("--root", command.root)
+  }
+  for (const pattern of command.cliExcludes) {
+    args.push("--exclude", pattern)
+  }
+  for (const filter of command.filters) {
+    args.push(filter)
+  }
+  args.push("--filesOnly")
+  return args
 }
 
-const objectPropertyEntry = (objectNode, name) => {
-  if (!objectNode || !ts.isObjectLiteralExpression(objectNode)) {
-    return { found: false }
+const parseVitestListOutput = (output, cwd) => {
+  const files = []
+  for (const rawLine of output.split("\n")) {
+    let line = rawLine.trim()
+    if (!line) continue
+    // Workspace/project mode prefixes rows as `[name] path/to/file`.
+    const projectPrefix = line.match(/^\[[^\]]+\]\s+(.+)$/)
+    if (projectPrefix) line = projectPrefix[1].trim()
+    if (!line || line.startsWith("✓") || line.startsWith("×") || line.startsWith("-")) continue
+    // Ignore noisy non-path lines Vitest may still emit on stdout.
+    if (/^(DEV|WAR|ERR|The CJS build)\b/i.test(line)) continue
+    let file = line
+    if (path.isAbsolute(file)) {
+      file = path.relative(cwd, file)
+      if (file.startsWith("..") || path.isAbsolute(file)) continue
+    }
+    file = normalizeRepoPath(file)
+    if (!file || file.includes("\u0000")) continue
+    files.push(file)
   }
-  for (const property of objectNode.properties) {
-    if (ts.isSpreadAssignment(property)) {
-      // Spread into the config/test object is opaque — caller fails closed.
-      return { found: true, opaque: true }
-    }
-    if (ts.isShorthandPropertyAssignment(property) && property.name.text === name) {
-      return { found: true, opaque: true, shorthand: true }
-    }
-    if (!ts.isPropertyAssignment(property)) {
-      // Method/accessor forms are opaque if they collide with discovery keys.
-      const key =
-        property.name && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))
-          ? property.name.text
-          : undefined
-      if (key === name) return { found: true, opaque: true }
-      continue
-    }
-    const key =
-      ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)
-        ? property.name.text
-        : undefined
-    if (key === name) return { found: true, initializer: property.initializer }
-  }
-  return { found: false }
+  return [...new Set(files)].sort()
 }
 
-const unwrapConfigExport = (expression) => {
-  if (!expression) return { kind: "missing" }
-  if (
-    ts.isCallExpression(expression) &&
-    ts.isIdentifier(expression.expression) &&
-    expression.expression.text === "defineConfig"
-  ) {
-    const arg = expression.arguments[0]
-    if (!arg) return { kind: "opaque", reason: "empty defineConfig()" }
-    // defineConfig(() => ({...})) / defineConfig(async () => ...) factory form.
-    if (ts.isArrowFunction(arg) || ts.isFunctionExpression(arg)) {
-      return { kind: "opaque", reason: "defineConfig factory" }
-    }
-    if (!ts.isObjectLiteralExpression(arg)) {
-      return { kind: "opaque", reason: "defineConfig non-object argument" }
-    }
-    return { kind: "object", node: arg }
-  }
-  if (ts.isObjectLiteralExpression(expression)) {
-    return { kind: "object", node: expression }
-  }
-  // Re-export (`export default cfg`), identifier, conditional, call, etc.
-  return { kind: "opaque", reason: "non-literal config export" }
-}
-
-const extractVitestPatterns = (content, file) => {
-  const source = ts.createSourceFile(file, content, ts.ScriptTarget.Latest, true, sourceKind(file))
-
-  const failOpaque = (reason) => {
+const runVitestList = (cwd, command) => {
+  const vitestEntry = resolveVitestEntry()
+  const args = buildVitestListArgs(command)
+  const nodePathEntries = [
+    path.join(CHECKER_REPO_ROOT, "node_modules"),
+    path.join(path.resolve(cwd), "node_modules"),
+  ]
+  if (process.env.NODE_PATH) nodePathEntries.push(process.env.NODE_PATH)
+  try {
+    const output = execFileSync(process.execPath, [vitestEntry, ...args], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: VITEST_LIST_TIMEOUT_MS,
+      env: {
+        ...process.env,
+        // Match the CI blocking run environment so env-gated configs resolve
+        // the same way the unit job does.
+        CI: "true",
+        // Keep list output machine-readable.
+        NO_COLOR: "1",
+        FORCE_COLOR: "0",
+        // Allow fixtures / detached base worktrees without local installs to
+        // resolve `vitest/config` from the checker repository.
+        NODE_PATH: nodePathEntries.join(path.delimiter),
+      },
+    })
+    return parseVitestListOutput(output, cwd)
+  } catch (error) {
+    if (error instanceof CheckFailure) throw error
+    const timedOut = error?.killed || /ETIMEDOUT|timed out/i.test(String(error?.message ?? ""))
+    const stderr = error?.stderr?.toString().trim() || ""
+    const stdout = error?.stdout?.toString().trim() || ""
+    const detail = stderr || stdout || error?.message || String(error)
     throw new CheckFailure(
-      `RT-2 cannot statically resolve Vitest config patterns in ${file}: ${reason}`,
+      timedOut
+        ? `RT-2 timed out obtaining Vitest collection via \`vitest list\` (limit ${VITEST_LIST_TIMEOUT_MS}ms)`
+        : `RT-2 failed to obtain Vitest collection via \`vitest list\`: ${detail}`,
     )
   }
-
-  const readPatternsFromObject = (configObject) => {
-    // Any object-level spread makes include/exclude resolution unreliable.
-    for (const property of configObject.properties) {
-      if (ts.isSpreadAssignment(property)) {
-        failOpaque("object spread in config")
-      }
-    }
-
-    const testEntry = objectPropertyEntry(configObject, "test")
-    if (testEntry.opaque) failOpaque("opaque test config property")
-    if (!testEntry.found) {
-      // No test key → real Vitest defaults apply.
-      return {
-        include: [...DEFAULT_VITEST_INCLUDE],
-        exclude: [...DEFAULT_VITEST_EXCLUDE],
-      }
-    }
-    if (!testEntry.initializer || !ts.isObjectLiteralExpression(testEntry.initializer)) {
-      failOpaque("test is not a static object literal")
-    }
-    const testNode = testEntry.initializer
-    for (const property of testNode.properties) {
-      if (ts.isSpreadAssignment(property)) {
-        failOpaque("object spread in test config")
-      }
-    }
-
-    const includeEntry = objectPropertyEntry(testNode, "include")
-    const excludeEntry = objectPropertyEntry(testNode, "exclude")
-    if (includeEntry.opaque) failOpaque("opaque include (shorthand/identifier/non-literal)")
-    if (excludeEntry.opaque) failOpaque("opaque exclude (shorthand/identifier/non-literal)")
-
-    let include
-    let exclude
-    if (includeEntry.found) {
-      const resolved = resolveStringArray(includeEntry.initializer)
-      if (!resolved.ok) failOpaque("include is present but not a static string array")
-      include = resolved.values
-    }
-    if (excludeEntry.found) {
-      const resolved = resolveStringArray(excludeEntry.initializer)
-      if (!resolved.ok) failOpaque("exclude is present but not a static string array")
-      exclude = resolved.values
-    }
-
-    return {
-      // Omitted keys intentionally fall back to real Vitest defaults.
-      include: include ?? [...DEFAULT_VITEST_INCLUDE],
-      exclude: exclude ?? [...DEFAULT_VITEST_EXCLUDE],
-    }
-  }
-
-  // Prefer the default export; fall back to a top-level config-shaped variable
-  // only when there is no export assignment.
-  let exportExpression
-  const variableInitializers = []
-  for (const statement of source.statements) {
-    if (ts.isExportAssignment(statement) && !statement.isExportEquals) {
-      exportExpression = statement.expression
-    }
-    if (ts.isVariableStatement(statement)) {
-      for (const declaration of statement.declarationList.declarations) {
-        if (declaration.initializer) variableInitializers.push(declaration.initializer)
-      }
-    }
-  }
-
-  if (exportExpression) {
-    const unwrapped = unwrapConfigExport(exportExpression)
-    if (unwrapped.kind === "opaque") failOpaque(unwrapped.reason)
-    if (unwrapped.kind === "object") return readPatternsFromObject(unwrapped.node)
-    failOpaque("missing config export value")
-  }
-
-  // No export default — try the first resolvable object initializer (legacy).
-  for (const initializer of variableInitializers) {
-    const unwrapped = unwrapConfigExport(initializer)
-    if (unwrapped.kind === "object") return readPatternsFromObject(unwrapped.node)
-    if (unwrapped.kind === "opaque") failOpaque(unwrapped.reason)
-  }
-
-  // Config file exists but has no recognizable config object → opaque, not defaults.
-  failOpaque("no resolvable config object export")
 }
 
-const resolveVitestConfig = (cwd, revision, preferredConfig) => {
-  if (preferredConfig) {
-    const preferred = preferredConfig.split(path.sep).join("/")
-    const content = readTextAt(cwd, preferred, revision)
-    if (!content) {
+const withRevisionWorktree = (repoCwd, revision, fn) => {
+  const absoluteRepo = path.resolve(repoCwd)
+  const worktree = mkdtempSync(path.join(tmpdir(), "cascade-rt2-"))
+  let added = false
+  try {
+    try {
+      git(absoluteRepo, ["worktree", "add", "--detach", worktree, revision])
+      added = true
+    } catch (error) {
+      const detail = error instanceof CheckFailure ? error.message : String(error)
       throw new CheckFailure(
-        `RT-2 cannot read Vitest config selected by --config: ${preferred}`,
+        `RT-2 cannot check out merge base ${revision} to obtain Vitest collection: ${detail}`,
       )
     }
-    const patterns = extractVitestPatterns(content, preferred)
-    return { file: preferred, ...patterns }
-  }
 
-  for (const candidate of VITEST_CONFIG_CANDIDATES) {
-    const content = readTextAt(cwd, candidate, revision)
+    // Detached base trees do not carry gitignored node_modules. Point Vitest at
+    // an existing install so ESM config imports (`vitest/config`) resolve.
+    const worktreeModules = path.join(worktree, "node_modules")
+    if (!existsSync(worktreeModules)) {
+      const moduleSources = [
+        path.join(absoluteRepo, "node_modules"),
+        path.join(CHECKER_REPO_ROOT, "node_modules"),
+      ]
+      for (const source of moduleSources) {
+        if (!existsSync(source)) continue
+        try {
+          symlinkSync(source, worktreeModules, "dir")
+          break
+        } catch {
+          // Try the next candidate; failure to link is handled when list runs.
+        }
+      }
+    }
+
+    return fn(worktree)
+  } finally {
+    if (added) {
+      try {
+        // Drop the temporary install link before worktree removal.
+        rmSync(path.join(worktree, "node_modules"), { recursive: true, force: true })
+      } catch {
+        // ignore
+      }
+      try {
+        git(absoluteRepo, ["worktree", "remove", "--force", worktree], { allowFailure: true })
+      } catch {
+        // Best-effort cleanup; rmSync below still runs.
+      }
+    }
+    rmSync(worktree, { recursive: true, force: true })
+  }
+}
+
+const scanExecutionAffectingKeys = (content, file) => {
+  const source = ts.createSourceFile(file, content, ts.ScriptTarget.Latest, true, sourceKind(file))
+  const found = []
+  const visit = (node) => {
+    if (ts.isObjectLiteralExpression(node)) {
+      for (const property of node.properties) {
+        if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) {
+          continue
+        }
+        const key =
+          property.name && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))
+            ? property.name.text
+            : undefined
+        if (!key || !VITEST_EXECUTION_AFFECTING_KEYS.has(key)) continue
+        if (ts.isShorthandPropertyAssignment(property)) {
+          found.push(`${key}=<shorthand>`)
+          continue
+        }
+        const valueText = property.initializer.getText(source).replace(/\s+/g, " ").trim()
+        found.push(`${key}=${valueText}`)
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(source)
+  return found.sort()
+}
+
+const executionConfigFingerprint = (cwd, revision, preferredConfig) => {
+  const files = new Set([
+    ...VITEST_CONFIG_CANDIDATES,
+    ...VITEST_WORKSPACE_CANDIDATES,
+  ])
+  if (preferredConfig) files.add(normalizeRepoPath(preferredConfig))
+
+  const entries = []
+  for (const file of [...files].sort()) {
+    const content = readTextAt(cwd, file, revision)
     if (!content) continue
-    const patterns = extractVitestPatterns(content, candidate)
-    return { file: candidate, ...patterns }
+    const isWorkspace = VITEST_WORKSPACE_CANDIDATES.includes(file)
+    if (isWorkspace) {
+      const digest = createHash("sha256").update(content).digest("hex").slice(0, 16)
+      entries.push(`${file}:workspace:${digest}`)
+    }
+    for (const key of scanExecutionAffectingKeys(content, file)) {
+      entries.push(`${file}:${key}`)
+    }
   }
-  // No config file present at all → genuine Vitest defaults.
-  return {
-    file: "(vitest defaults)",
-    include: [...DEFAULT_VITEST_INCLUDE],
-    exclude: [...DEFAULT_VITEST_EXCLUDE],
-  }
+  return entries
 }
 
-const matchesAny = (file, patterns) =>
-  patterns.some((pattern) => minimatch(file, pattern, { dot: true }))
-
-const normalizeRepoPath = (file) => file.split(path.sep).join("/").replace(/^\.\//, "")
-
-const underRoot = (file, root) => {
-  const normalizedFile = normalizeRepoPath(file)
-  const normalizedRoot = normalizeRepoPath(root).replace(/\/+$/, "")
-  if (normalizedRoot === "" || normalizedRoot === ".") return { inside: true, relative: normalizedFile }
-  if (normalizedFile === normalizedRoot) return { inside: true, relative: "" }
-  if (normalizedFile.startsWith(`${normalizedRoot}/`)) {
-    return { inside: true, relative: normalizedFile.slice(normalizedRoot.length + 1) }
-  }
-  return { inside: false, relative: normalizedFile }
-}
-
-const filterByPositional = (files, filters, scanRoot = ".") => {
-  if (!filters || filters.length === 0) return files
-  return files.filter((file) => {
-    const { relative } = underRoot(file, scanRoot)
-    const testFile = relative.toLocaleLowerCase()
-    const absoluteStyle = normalizeRepoPath(file).toLocaleLowerCase()
-    return filters.some((filter) => {
-      const normalized = normalizeRepoPath(filter).toLocaleLowerCase()
-      const relativePath = normalized.endsWith("/") ? normalized : normalized
-      return (
-        testFile.includes(relativePath) ||
-        absoluteStyle.includes(relativePath) ||
-        absoluteStyle.includes(normalized)
-      )
-    })
+const executionCommandFingerprint = (command) =>
+  JSON.stringify({
+    passWithNoTests: Boolean(command.passWithNoTests),
+    allowOnly: Boolean(command.allowOnly),
   })
-}
 
+const describeConfigSurface = (cwd, revision, command) => {
+  const present = []
+  if (command.configPath && readTextAt(cwd, command.configPath, revision)) {
+    present.push(command.configPath)
+  } else {
+    for (const candidate of VITEST_CONFIG_CANDIDATES) {
+      if (readTextAt(cwd, candidate, revision)) {
+        present.push(candidate)
+        break
+      }
+    }
+  }
+  for (const candidate of VITEST_WORKSPACE_CANDIDATES) {
+    if (readTextAt(cwd, candidate, revision)) present.push(candidate)
+  }
+  return present.length > 0 ? present.join(",") : "(vitest defaults)"
+}
 
 export const collectBlockingTestFiles = (cwd, revision, unitScriptOverride) => {
   const unitScript =
@@ -867,45 +853,27 @@ export const collectBlockingTestFiles = (cwd, revision, unitScriptOverride) => {
       ? unitScriptOverride.trim()
       : readPackageUnitScript(cwd, revision)
   const command = parseVitestUnitCommand(unitScript)
-  const config = resolveVitestConfig(cwd, revision, command.configPath)
 
-  const toScanRoot = (value) => {
-    if (!value) return "."
-    if (path.isAbsolute(value)) {
-      const relative = path.relative(cwd, value).split(path.sep).join("/")
-      if (relative.startsWith("..") || path.isAbsolute(relative)) {
-        throw new CheckFailure(
-          `RT-2 cannot model Vitest --dir/--root outside the repository: ${value}`,
-        )
-      }
-      return relative === "" ? "." : relative
+  const collectFromTree = (treeCwd, treeRevision) => {
+    const files = runVitestList(treeCwd, command)
+    const configLabel = describeConfigSurface(treeCwd, treeRevision, command)
+    const executionKeys = executionConfigFingerprint(treeCwd, treeRevision, command.configPath)
+    return {
+      files,
+      command,
+      config: {
+        file: configLabel,
+        executionKeys,
+        executionCommand: executionCommandFingerprint(command),
+      },
+      unitScript,
     }
-    const normalized = normalizeRepoPath(value)
-    return normalized === "" ? "." : normalized
   }
 
-  const scanRoot = toScanRoot(command.dir || command.root || ".")
-  const exclude = [...config.exclude, ...command.cliExcludes]
-  const candidates = revision
-    ? listRevisionFiles(cwd, revision, ".")
-    : listWorkingFiles(cwd, ".")
-  const discovered = candidates
-    .map((file) => normalizeRepoPath(file))
-    .filter((file) => {
-      const { inside, relative } = underRoot(file, scanRoot)
-      if (!inside) return false
-      // Vitest matches include/exclude against paths relative to dir||root.
-      const matchPath = relative === "" ? normalizeRepoPath(path.basename(file)) : relative
-      return matchesAny(matchPath, config.include) && !matchesAny(matchPath, exclude)
-    })
-    .sort()
-  const selected = filterByPositional(discovered, command.filters, scanRoot).sort()
-  return {
-    files: selected,
-    command,
-    config: { ...config, exclude, scanRoot },
-    unitScript,
+  if (revision) {
+    return withRevisionWorktree(cwd, revision, (worktree) => collectFromTree(worktree, undefined))
   }
+  return collectFromTree(cwd, undefined)
 }
 
 const readApprovedRemovals = (cwd, base) => {
@@ -924,7 +892,12 @@ const readApprovedRemovals = (cwd, base) => {
 }
 
 const describeSelector = (collection) =>
-  `${collection.unitScript} [include=${JSON.stringify(collection.config.include)} exclude=${JSON.stringify(collection.config.exclude)} selector=${collection.command.selector}]`
+  `${collection.unitScript} [config=${collection.config.file} selector=${collection.command.selector} size=${collection.files.length}]`
+
+const sameStringList = (left = [], right = []) => {
+  if (left.length !== right.length) return false
+  return left.every((value, index) => value === right[index])
+}
 
 export const checkTestIntegrity = ({ base, cwd = process.cwd() }) => {
   requireValue(base, "RT-2 requires --base <sha>")
@@ -936,6 +909,18 @@ export const checkTestIntegrity = ({ base, cwd = process.cwd() }) => {
   const baseSet = new Set(baseCollection.files)
   const approvedRemovals = readApprovedRemovals(cwd, base)
   const findings = []
+
+  // Execution-affecting config/CLI keys do not always change `vitest list`
+  // file sets (e.g. testNamePattern, passWithNoTests). Fail closed on any
+  // add/change between merge base and head.
+  if (
+    !sameStringList(baseCollection.config.executionKeys, headCollection.config.executionKeys) ||
+    baseCollection.config.executionCommand !== headCollection.config.executionCommand
+  ) {
+    findings.push(
+      `blocking unit execution configuration changed (fail closed): base keys=${JSON.stringify(baseCollection.config.executionKeys)} cmd=${baseCollection.config.executionCommand}; head keys=${JSON.stringify(headCollection.config.executionKeys)} cmd=${headCollection.config.executionCommand}`,
+    )
+  }
 
   // Path-set difference alone treats renames/moves inside the blocking set as
   // drops. Net out base-only paths that still have a same-content successor in
@@ -969,10 +954,8 @@ export const checkTestIntegrity = ({ base, cwd = process.cwd() }) => {
         JSON.stringify(headCollection.command.cliExcludes) ||
       baseCollection.command.dir !== headCollection.command.dir ||
       baseCollection.command.root !== headCollection.command.root ||
-      JSON.stringify(baseCollection.config.include) !==
-        JSON.stringify(headCollection.config.include) ||
-      JSON.stringify(baseCollection.config.exclude) !==
-        JSON.stringify(headCollection.config.exclude)
+      baseCollection.config.file !== headCollection.config.file ||
+      !sameStringList(baseCollection.config.executionKeys, headCollection.config.executionKeys)
     if (selectorChanged) {
       findings.push(
         `blocking unit selector reduced effective test set: base=${describeSelector(baseCollection)} head=${describeSelector(headCollection)}`,
@@ -1005,20 +988,6 @@ export const checkTestIntegrity = ({ base, cwd = process.cwd() }) => {
         )
       }
     }
-  }
-  const samePatternSet = (left, right) => {
-    if (left.length !== right.length) return false
-    const sortedLeft = [...left].sort()
-    const sortedRight = [...right].sort()
-    return sortedLeft.every((value, index) => value === sortedRight[index])
-  }
-  if (
-    !samePatternSet(baseCollection.config.include, headCollection.config.include) ||
-    !samePatternSet(baseCollection.config.exclude, headCollection.config.exclude)
-  ) {
-    findings.push(
-      `test discovery configuration changed: include/exclude patterns differ (base include=${JSON.stringify(baseCollection.config.include)} exclude=${JSON.stringify(baseCollection.config.exclude)}; head include=${JSON.stringify(headCollection.config.include)} exclude=${JSON.stringify(headCollection.config.exclude)})`,
-    )
   }
 
   if (findings.length > 0) {

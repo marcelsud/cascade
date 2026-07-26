@@ -206,10 +206,19 @@ test("RT-2 rejects a test-discovery exclusion", () => {
     writeRelative(
       cwd,
       "vitest.config.ts",
-      `export default { test: { include: ["tests/**/*.test.ts"], exclude: ["tests/unit/new.test.ts"] } }\n`,
+      `export default { test: { include: ["tests/**/*.test.ts"], exclude: ["tests/e2e/**", "tests/unit/extra/**"] } }\n`,
     )
     commit(cwd, "exclude test")
-    assert.throws(() => checkTestIntegrity({ base, cwd }), /test-integrity regression/)
+    assert.throws(
+      () => checkTestIntegrity({ base, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(detail, /test-integrity regression|dropped|reduced/)
+        assert.match(detail, /tests\/unit\/extra\/sample\.test\.ts/)
+        return true
+      },
+    )
   })
 })
 
@@ -489,7 +498,7 @@ test("RT-2 rejects vitest list non-executing subcommand", () => {
   })
 })
 
-test("RT-2 fails closed on defineConfig factory config", () => {
+test("RT-2 fails closed on defineConfig factory config narrowing", () => {
   withRepository(({ cwd, base }) => {
     writeRelative(
       cwd,
@@ -517,7 +526,8 @@ test("RT-2 fails closed on defineConfig factory config", () => {
       () => checkTestIntegrity({ base, cwd }),
       (error) => {
         assert.ok(error instanceof CheckFailure)
-        assert.match(error.message, /cannot statically resolve|defineConfig factory/)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(detail, /blocking unit|dropped|reduced|failed to obtain Vitest collection/)
         return true
       },
     )
@@ -537,14 +547,15 @@ test("RT-2 fails closed on conditional shorthand include config", () => {
       () => checkTestIntegrity({ base, cwd }),
       (error) => {
         assert.ok(error instanceof CheckFailure)
-        assert.match(error.message, /cannot statically resolve|opaque include|shorthand/)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(detail, /blocking unit|dropped|reduced/)
         return true
       },
     )
   })
 })
 
-test("RT-2 fails closed on re-exported opaque config", () => {
+test("RT-2 fails closed on re-exported opaque config narrowing", () => {
   withRepository(({ cwd, base }) => {
     writeRelative(
       cwd,
@@ -561,7 +572,8 @@ test("RT-2 fails closed on re-exported opaque config", () => {
       () => checkTestIntegrity({ base, cwd }),
       (error) => {
         assert.ok(error instanceof CheckFailure)
-        assert.match(error.message, /cannot statically resolve|non-literal config export/)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(detail, /blocking unit|dropped|reduced/)
         return true
       },
     )
@@ -624,6 +636,69 @@ test("RT-2 accepts reordering include/exclude keys without pattern change", () =
     )
     commit(cwd, "reorder include exclude keys")
     assert.doesNotThrow(() => checkTestIntegrity({ base, cwd }))
+  })
+})
+
+test("RT-2 fails closed on head-only workspace narrowing", () => {
+  withRepository(({ cwd, base }) => {
+    writeRelative(cwd, "vitest.workspace.ts", `export default ["tests/unit/core"]\n`)
+    commit(cwd, "head-only workspace subset")
+    assert.throws(
+      () => checkTestIntegrity({ base, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(
+          detail,
+          /blocking unit|dropped|reduced|execution configuration changed|workspace/,
+        )
+        assert.match(
+          detail,
+          /tests\/unit\/extra\/sample\.test\.ts|tests\/unit\/baseline\.test\.ts|execution configuration changed/,
+        )
+        return true
+      },
+    )
+  })
+})
+
+test("RT-2 fails closed on config testNamePattern", () => {
+  withRepository(({ cwd, base }) => {
+    writeRelative(
+      cwd,
+      "vitest.config.ts",
+      `export default { test: { include: ["tests/**/*.test.ts"], exclude: ["tests/e2e/**"], testNamePattern: /core/ } }\n`,
+    )
+    commit(cwd, "testNamePattern core only")
+    assert.throws(
+      () => checkTestIntegrity({ base, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(detail, /execution configuration changed|testNamePattern/)
+        return true
+      },
+    )
+  })
+})
+
+test("RT-2 fails closed on config dir plus passWithNoTests", () => {
+  withRepository(({ cwd, base }) => {
+    writeRelative(
+      cwd,
+      "vitest.config.ts",
+      `export default { test: { include: ["tests/**/*.test.ts"], exclude: ["tests/e2e/**"], dir: "tests/unit/core", passWithNoTests: true } }\n`,
+    )
+    commit(cwd, "dir plus passWithNoTests")
+    assert.throws(
+      () => checkTestIntegrity({ base, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(detail, /execution configuration changed|dir=|passWithNoTests|dropped|reduced/)
+        return true
+      },
+    )
   })
 })
 
