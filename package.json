@@ -51,7 +51,7 @@
     "effect": "^3.19.3",
     "glob": "^10.5.0",
     "ioredis": "^5.4.2",
-    "jsonata": "^2.1.0",
+    "jsonata": "^2.2.2",
     "quickjs-emscripten": "^0.32.0",
     "yaml": "^2.6.1"
   },

@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { Effect } from "effect";
-import { createMappingProcessor } from "../../../src/processors/mapping-processor.js";
+import { Effect, Either } from "effect";
+import {
+  createMappingProcessor,
+  MappingError,
+} from "../../../src/processors/mapping-processor.js";
 import { createMessage } from "../../../src/core/types.js";
 
 describe("MappingProcessor", () => {
@@ -286,6 +289,64 @@ describe("MappingProcessor", () => {
       expect(result.content.boundMessageId).toBe(source.id);
       expect(result.content.boundSource).toBe(`source-${index}`);
       expect(result.content.boundToken).toBe(`token-${index}`);
+    }
+  });
+});
+
+describe("GHSA-86vw-mfpg-wwv9 / CVE-2026-52746 regression", () => {
+  // Vulnerable jsonata@2.1.0 took ~741 ms on this exact input size; the patched
+  // 2.2.x path is sub-millisecond. 250 ms separates the two with a wide margin
+  // and is not a flaky micro-benchmark.
+  it(
+    "evaluates $toMillis on crafted non-matching input within a bounded window",
+    async () => {
+      const crafted = "2020" + "-01".repeat(16_000) + "X";
+      const processor = createMappingProcessor({
+        expression: "$toMillis(date)",
+      });
+      const message = createMessage({ date: crafted });
+
+      const started = Date.now();
+      const result = await Effect.runPromise(
+        Effect.either(processor.process(message)),
+      );
+      const elapsedMs = Date.now() - started;
+
+      // Settled (success or typed failure) — only elapsed time is asserted.
+      expect(result._tag === "Left" || result._tag === "Right").toBe(true);
+      expect(elapsedMs).toBeLessThan(250);
+    },
+    10_000,
+  );
+
+  it("preserves $toMillis for valid ISO-8601 epoch start", async () => {
+    const processor = createMappingProcessor({
+      expression: "$toMillis(date)",
+    });
+    const message = createMessage({
+      date: "1970-01-01T00:00:00.000Z",
+    });
+
+    const result = await Effect.runPromise(processor.process(message));
+
+    // Unix epoch start → 0 ms since 1970-01-01T00:00:00.000Z
+    expect(result.content).toBe(0);
+  });
+
+  it("surfaces invalid $toMillis input as a typed MappingError", async () => {
+    const processor = createMappingProcessor({
+      expression: "$toMillis(date)",
+    });
+    const message = createMessage({ date: "not-a-timestamp" });
+
+    const result = await Effect.runPromise(
+      Effect.either(processor.process(message)),
+    );
+
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isLeft(result)) {
+      expect(result.left).toBeInstanceOf(MappingError);
+      expect(result.left.message).toContain("JSONata evaluation failed");
     }
   });
 });
