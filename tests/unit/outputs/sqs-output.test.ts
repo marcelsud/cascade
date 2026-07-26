@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Effect, Exit, Fiber, Stream } from "effect";
+import {
+  Effect,
+  Exit,
+  Fiber,
+  Logger,
+  LogLevel,
+  Schedule,
+  Stream,
+} from "effect";
 import { createSqsOutput } from "../../../src/outputs/sqs-output.js";
 import { withDLQ } from "../../../src/core/dlq.js";
 import { run as runPipeline } from "../../../src/core/pipeline.js";
@@ -580,6 +588,194 @@ describe("SQSOutput", () => {
         StringValue: "{}",
         DataType: "String",
       });
+    });
+  });
+
+  describe("connection logging", () => {
+    const queueUrl = "http://localhost:4566/000000000000/test-queue";
+    const connectionMessage = `Connected to SQS queue: ${queueUrl}`;
+
+    const captureLogs = <A, E>(effect: Effect.Effect<A, E>) => {
+      const messages: unknown[] = [];
+      const logger = Logger.make<unknown, void>(({ message }) => {
+        messages.push(message);
+      });
+      return Effect.runPromise(
+        effect.pipe(
+          Logger.withMinimumLogLevel(LogLevel.Info),
+          Effect.provide(Logger.replace(Logger.defaultLogger, logger)),
+        ),
+      ).then(() => messages);
+    };
+
+    const connectionEvents = (messages: unknown[]) =>
+      messages.filter((message) => {
+        if (typeof message === "string") {
+          return message === connectionMessage;
+        }
+        if (Array.isArray(message)) {
+          return message.some((part) => part === connectionMessage);
+        }
+        return false;
+      });
+
+    it("emits zero connection events until the first send", async () => {
+      const messages = await captureLogs(
+        Effect.sync(() => {
+          createSqsOutput({ queueUrl, maxBatchSize: 1 });
+          createSqsOutput({
+            queueUrl,
+            maxBatchSize: 10,
+            batchTimeout: 20,
+          });
+        }),
+      );
+      expect(connectionEvents(messages)).toHaveLength(0);
+    });
+
+    it("emits exactly one connection event across sequential single sends", async () => {
+      const output = createSqsOutput({
+        queueUrl,
+        maxBatchSize: 1,
+      });
+
+      const messages = await captureLogs(
+        Effect.gen(function* () {
+          yield* output.send(createMessage({ id: "A" }));
+          yield* output.send(createMessage({ id: "B" }));
+          yield* output.send(createMessage({ id: "C" }));
+        }),
+      );
+
+      expect(connectionEvents(messages)).toHaveLength(1);
+
+      if (output.close) {
+        await Effect.runPromise(output.close());
+      }
+    });
+
+    it("emits exactly one connection event when batching multiple messages", async () => {
+      const output = createSqsOutput({
+        queueUrl,
+        maxBatchSize: 10,
+        batchTimeout: 20,
+      });
+
+      const messages = await captureLogs(
+        Effect.gen(function* () {
+          yield* output.send(createMessage({ id: "A" }));
+          yield* output.send(createMessage({ id: "B" }));
+          yield* output.send(createMessage({ id: "C" }));
+        }),
+      );
+
+      expect(connectionEvents(messages)).toHaveLength(1);
+
+      if (output.close) {
+        await Effect.runPromise(output.close());
+      }
+    });
+
+    it("emits exactly one connection event for concurrent first single sends", async () => {
+      const output = createSqsOutput({
+        queueUrl,
+        maxBatchSize: 1,
+      });
+
+      const messages = await captureLogs(
+        Effect.all(
+          [
+            output.send(createMessage({ id: "A" })),
+            output.send(createMessage({ id: "B" })),
+            output.send(createMessage({ id: "C" })),
+          ],
+          { concurrency: "unbounded" },
+        ),
+      );
+
+      expect(connectionEvents(messages)).toHaveLength(1);
+
+      if (output.close) {
+        await Effect.runPromise(output.close());
+      }
+    });
+
+    it("emits exactly one connection event for concurrent first batch sends", async () => {
+      const output = createSqsOutput({
+        queueUrl,
+        maxBatchSize: 3,
+        batchTimeout: 5_000,
+      });
+
+      const messages = await captureLogs(
+        Effect.all(
+          [
+            output.send(createMessage({ id: "A" })),
+            output.send(createMessage({ id: "B" })),
+            output.send(createMessage({ id: "C" })),
+          ],
+          { concurrency: "unbounded" },
+        ),
+      );
+
+      expect(connectionEvents(messages)).toHaveLength(1);
+
+      if (output.close) {
+        await Effect.runPromise(output.close());
+      }
+    });
+
+    it("emits one connection event per separately constructed instance", async () => {
+      const first = createSqsOutput({ queueUrl, maxBatchSize: 1 });
+      const second = createSqsOutput({ queueUrl, maxBatchSize: 1 });
+
+      const messages = await captureLogs(
+        Effect.gen(function* () {
+          yield* first.send(createMessage({ id: "A" }));
+          yield* second.send(createMessage({ id: "B" }));
+        }),
+      );
+
+      expect(connectionEvents(messages)).toHaveLength(2);
+
+      if (first.close) {
+        await Effect.runPromise(first.close());
+      }
+      if (second.close) {
+        await Effect.runPromise(second.close());
+      }
+    });
+
+    it("does not restore per-attempt connection logging under withDLQ retries", async () => {
+      const mockClient = await getMockClient();
+      mockClient.send
+        .mockRejectedValueOnce(new Error("ECONNRESET temporary"))
+        .mockResolvedValueOnce({ MessageId: "ok" });
+
+      const primary = createSqsOutput({
+        queueUrl,
+        maxBatchSize: 1,
+        maxRetries: 0,
+      });
+      const dlqSend = vi.fn().mockReturnValue(Effect.void);
+      const wrapped = withDLQ({
+        output: primary,
+        dlq: { name: "test-dlq", send: dlqSend },
+        maxRetries: 1,
+        retrySchedule: Schedule.spaced(0),
+      });
+
+      const messages = await captureLogs(
+        wrapped.send(createMessage({ id: "retry-me" })),
+      );
+
+      expect(connectionEvents(messages)).toHaveLength(1);
+      expect(mockClient.send).toHaveBeenCalledTimes(2);
+      expect(dlqSend).not.toHaveBeenCalled();
+
+      if (primary.close) {
+        await Effect.runPromise(primary.close());
+      }
     });
   });
 });

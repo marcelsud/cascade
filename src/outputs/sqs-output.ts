@@ -178,6 +178,7 @@ export const createSqsOutput = (
   if (batchSize === 1) {
     const metrics = new MetricsAccumulator("sqs-output");
     let messageCount = 0;
+    let connectionLogged = false;
 
     return {
       name: "sqs-output",
@@ -186,7 +187,10 @@ export const createSqsOutput = (
         Effect.gen(function* () {
           const serialized = serializeMessage(msg, config.delaySeconds);
 
-          yield* Effect.logInfo(`Connected to SQS queue: ${config.queueUrl}`);
+          if (!connectionLogged) {
+            connectionLogged = true;
+            yield* Effect.logInfo(`Connected to SQS queue: ${config.queueUrl}`);
+          }
 
           const sendEffect = Effect.tryPromise({
             try: async () => {
@@ -258,6 +262,7 @@ export const createSqsOutput = (
   const batchTimerRef = Ref.unsafeMake<BatchTimer | null>(null);
   const metrics = new MetricsAccumulator("sqs-output");
   const batchTimeout = config.batchTimeout ?? DEFAULT_BATCH_TIMEOUT_MS;
+  let connectionLogged = false;
 
   const completeEntries = (entries: readonly PendingBatchMessage[]) =>
     Effect.forEach(
@@ -489,7 +494,10 @@ export const createSqsOutput = (
     getMetrics: () => metrics.getOutputMetrics(),
     send: (msg: Message): Effect.Effect<void, SqsOutputError> =>
       Effect.gen(function* () {
-        yield* Effect.logInfo(`Connected to SQS queue: ${config.queueUrl}`);
+        if (!connectionLogged) {
+          connectionLogged = true;
+          yield* Effect.logInfo(`Connected to SQS queue: ${config.queueUrl}`);
+        }
 
         const completion = yield* Deferred.make<void, SqsOutputError>();
         const pending: PendingBatchMessage = { message: msg, completion };

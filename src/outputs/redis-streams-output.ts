@@ -120,14 +120,18 @@ export const createRedisStreamsOutput = (
   // Metrics tracking
   const metrics = new MetricsAccumulator("redis-streams-output");
   let messageCount = 0;
+  let connectionLogged = false;
 
   return {
     name: "redis-streams-output",
     getMetrics: () => metrics.getOutputMetrics(),
     send: (msg: Message): Effect.Effect<void, RedisOutputError> => {
       return Effect.gen(function* () {
-        // Log connection on first send (INFO level)
-        yield* Effect.logInfo(`Connected to Redis stream: ${connectionInfo}`);
+        // Log connection once per output lifecycle (INFO level)
+        if (!connectionLogged) {
+          connectionLogged = true;
+          yield* Effect.logInfo(`Connected to Redis stream: ${connectionInfo}`);
+        }
 
         // Prepare fields for XADD with trace context
         const fields: Record<string, string> = {
