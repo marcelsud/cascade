@@ -5,6 +5,7 @@ import {
   type ErrorCategory,
 } from "../../../src/core/errors.js";
 import {
+  __errorCollectorTestUtils,
   makeShutdownController,
   PipelineFatalDrainTimeoutError,
   PipelineShutdownError,
@@ -571,5 +572,264 @@ describe("pipeline error categories", () => {
           error instanceof PipelineShutdownError && error.shutdown === "forced",
       ),
     ).toBe(true);
+  });
+
+  it("bounds retained historical failures while keeping exact failed count", async () => {
+    const inputMessages = Array.from({ length: 1_000 }, (_, i) =>
+      createMessage(i),
+    );
+
+    const result = await Effect.runPromise(
+      run({
+        name: "bounded-historical-failures",
+        input: {
+          name: "thousand",
+          stream: Stream.fromIterable(inputMessages),
+        },
+        processors: [
+          {
+            name: "always-logical-fail",
+            process: (msg) =>
+              Effect.fail(new CategorizedTestError(`bad-${msg.id}`, "logical")),
+          },
+        ],
+        output: {
+          name: "unused",
+          send: () => Effect.void,
+        },
+        backpressure: { maxConcurrentMessages: 1 },
+      }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.stats.failed).toBe(1_000);
+    expect(result.stats.processed).toBe(0);
+    // Historical sample is capped; exact failure count lives on stats.failed.
+    expect(result.errors?.length).toBeLessThanOrEqual(100);
+    expect(result.errorsOmitted).toBe(900);
+    // First-error order preserved for the retained prefix.
+    expect(
+      result.errors?.[0] instanceof CategorizedTestError &&
+        result.errors[0].message === `bad-${inputMessages[0]!.id}`,
+    ).toBe(true);
+    expect(
+      result.errors?.[99] instanceof CategorizedTestError &&
+        result.errors[99].message === `bad-${inputMessages[99]!.id}`,
+    ).toBe(true);
+  });
+
+  it("keeps late fatal cause first and close diagnostic after history cap", async () => {
+    const closeError = new Error("close-sentinel");
+    const inputMessages = Array.from({ length: 1_001 }, (_, i) =>
+      createMessage(i),
+    );
+
+    const result = await Effect.runPromise(
+      run({
+        name: "fatal-after-history-cap",
+        input: {
+          name: "thousand-then-fatal",
+          stream: Stream.fromIterable(inputMessages),
+          close: () => Effect.void,
+        },
+        processors: [
+          {
+            name: "logical-then-fatal",
+            process: (msg) => {
+              if (msg.content === 1_000) {
+                return Effect.fail(
+                  new CategorizedTestError("late-fatal", "fatal"),
+                );
+              }
+              return Effect.fail(
+                new CategorizedTestError(`bad-${msg.id}`, "logical"),
+              );
+            },
+          },
+        ],
+        output: {
+          name: "close-fails",
+          send: () => Effect.void,
+          close: () => Effect.fail(closeError),
+        },
+        backpressure: { maxConcurrentMessages: 1 },
+      }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.shutdown).toBeUndefined();
+    // 1000 logical + 1 fatal message failures.
+    expect(result.stats.failed).toBe(1_001);
+    // Historical sample stays bounded; terminal close is extra and uncapped.
+    const errors = result.errors ?? [];
+    const historical = errors.filter((error) => error !== closeError);
+    // At most 100 historical samples + fatal (if not already in sample) + close.
+    expect(historical.length).toBeLessThanOrEqual(101);
+    expect(errors.length).toBeLessThanOrEqual(102);
+    expect(result.errorsOmitted).toBe(900);
+
+    // Fatal cause is first exactly once (AC-4).
+    const fatalMatches = errors.filter(
+      (error) =>
+        error instanceof CategorizedTestError && error.message === "late-fatal",
+    );
+    expect(fatalMatches).toHaveLength(1);
+    expect(errors[0]).toBe(fatalMatches[0]);
+
+    // Close diagnostic remains observable and is not subject to the cap.
+    expect(errors.some((error) => error === closeError)).toBe(true);
+  });
+
+  it("does not strongly retain over-cap historical error identities", () => {
+    const {
+      MAX_RETAINED_HISTORICAL_ERRORS,
+      createErrorCollector,
+      collectHistoricalError,
+      strongHistoricalIdentityCount,
+    } = __errorCollectorTestUtils;
+
+    const collector = createErrorCollector();
+    const retained: Error[] = [];
+    const dropped: Error[] = [];
+
+    for (let i = 0; i < MAX_RETAINED_HISTORICAL_ERRORS; i++) {
+      const error = new Error(`retained-${i}`);
+      retained.push(error);
+      collectHistoricalError(collector, error);
+    }
+    for (let i = 0; i < 250; i++) {
+      const error = new Error(`dropped-${i}`);
+      dropped.push(error);
+      collectHistoricalError(collector, error);
+    }
+
+    // Public sample is capped; omitted count tracks unique drops.
+    expect(collector.retained).toHaveLength(MAX_RETAINED_HISTORICAL_ERRORS);
+    expect(collector.omitted).toBe(250);
+    // Strong identity state must stay bounded to the retained sample.
+    // Dropped object identities live only in WeakSet (non-owning).
+    expect(strongHistoricalIdentityCount(collector)).toBe(
+      MAX_RETAINED_HISTORICAL_ERRORS,
+    );
+
+    // Prove over-cap objects are not pinned by any strong collector field.
+    const weakDropped = dropped.map((error) => new WeakRef(error));
+    dropped.length = 0;
+    // Keep retained alive so the collector's legitimate strong set stays valid.
+    expect(retained).toHaveLength(MAX_RETAINED_HISTORICAL_ERRORS);
+
+    // Best-effort GC when exposed; structural bound above is the hard assert.
+    if ("gc" in globalThis && typeof globalThis.gc === "function") {
+      globalThis.gc();
+      const stillPinned = weakDropped.filter(
+        (ref) => ref.deref() !== undefined,
+      );
+      expect(stillPinned.length).toBe(0);
+    }
+  });
+
+  it("preserves over-cap processor fatal after later fatal DLQ replace", async () => {
+    const originalFatal = new CategorizedTestError(
+      "processor poison after cap",
+      "fatal",
+    );
+    const dlqFatal = new CategorizedTestError("dlq unavailable", "fatal");
+    const inputMessages = Array.from({ length: 101 }, (_, i) =>
+      createMessage(i),
+    );
+
+    const result = await Effect.runPromise(
+      run({
+        name: "fatal-dlq-after-history-cap",
+        input: {
+          name: "hundred-logical-then-fatal",
+          stream: Stream.fromIterable(inputMessages),
+        },
+        processors: [
+          {
+            name: "logical-then-fatal",
+            process: (msg) => {
+              if (msg.content === 100) {
+                return Effect.fail(originalFatal);
+              }
+              return Effect.fail(
+                new CategorizedTestError(`bad-${msg.id}`, "logical"),
+              );
+            },
+          },
+        ],
+        output: {
+          name: "primary",
+          send: () => Effect.void,
+        },
+        dlqOutput: {
+          name: "fatal-dlq",
+          send: (msg) =>
+            // Only the over-cap processor-fatal path should hit a fatal DLQ.
+            // Earlier logical failures must succeed so the history cap fills.
+            msg.metadata?.dlqReason === originalFatal.message
+              ? Effect.fail(dlqFatal)
+              : Effect.void,
+        },
+        backpressure: { maxConcurrentMessages: 1 },
+      }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.shutdown).toBeUndefined();
+    // 100 logical + 1 fatal message; DLQ failure is recorded but does not
+    // inflate stats.failed (same accounting as the non-cap fatal-DLQ test).
+    expect(result.stats.failed).toBe(101);
+    // No nonfatal diagnostics were dropped — only the over-cap fatals sit outside the sample.
+    expect(result.errorsOmitted ?? 0).toBe(0);
+
+    const errors = result.errors ?? [];
+    // Current (replaced) cause first. withSpan may clone error objects, so
+    // match on message rather than outer reference identity.
+    expect(
+      errors[0] instanceof CategorizedTestError &&
+        errors[0].message === "dlq unavailable",
+    ).toBe(true);
+    // Displaced over-cap processor fatal remains exactly once.
+    const originalMatches = errors.filter(
+      (error) =>
+        error instanceof CategorizedTestError &&
+        error.message === "processor poison after cap",
+    );
+    expect(originalMatches).toHaveLength(1);
+    expect(
+      errors.some(
+        (error) =>
+          error instanceof CategorizedTestError &&
+          error.message === "dlq unavailable",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps reused close sentinel after it was omitted post-cap", () => {
+    // Unit-level: withSpan clones processor failures, so end-to-end identity
+    // cannot observe the old all-history `seen` rejection. Exercise the
+    // collector contract directly — terminal must not consult dropped ids.
+    const {
+      MAX_RETAINED_HISTORICAL_ERRORS,
+      createErrorCollector,
+      collectHistoricalError,
+      collectTerminalError,
+    } = __errorCollectorTestUtils;
+
+    const collector = createErrorCollector();
+    for (let i = 0; i < MAX_RETAINED_HISTORICAL_ERRORS; i++) {
+      collectHistoricalError(collector, new Error(`retained-${i}`));
+    }
+    const sharedSentinel = new Error("shared-omitted-then-close");
+    collectHistoricalError(collector, sharedSentinel);
+    expect(collector.omitted).toBe(1);
+    expect(collector.retained.includes(sharedSentinel)).toBe(false);
+
+    collectTerminalError(collector, sharedSentinel);
+    expect(collector.terminal).toContain(sharedSentinel);
+    expect(collector.terminal.filter((e) => e === sharedSentinel)).toHaveLength(
+      1,
+    );
   });
 });
