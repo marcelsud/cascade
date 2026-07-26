@@ -215,9 +215,24 @@ describe("pipeline-builder input construction errors", () => {
       expect(failure.message).toContain("Assert Processor");
     }
 
-    // Processors are built before inputs, so a failed assert must leave the
-    // reserved HTTP port free (no abandoned listening server).
+    // Input is built first; on processor failure the built input must be
+    // closed so a failed assert leaves the reserved HTTP port free.
     await expect(assertPortIsFree(port)).resolves.toBeUndefined();
+  });
+
+  it("reports invalid input before invalid processors", async () => {
+    await expectBuildFailure(
+      {
+        input: {},
+        pipeline: {
+          processors: [{ assert: {} }],
+        },
+        output: {
+          capture: {},
+        },
+      } as PipelineConfig,
+      "No valid input configuration found",
+    );
   });
 
   it("still builds a valid file input configuration", async () => {

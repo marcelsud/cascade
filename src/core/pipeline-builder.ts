@@ -1,7 +1,7 @@
 /**
  * Pipeline Builder - Constructs pipeline from configuration
  */
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
 import type {
   PipelineConfig,
   InputConfig,
@@ -660,14 +660,25 @@ export const buildPipeline = (
       );
     }
 
+    const input = yield* buildInput(config.input, debug, registry);
+
     const processorConfigs = config.pipeline?.processors || [];
+    // Build processors after the input so dual-invalid configs keep reporting
+    // the input diagnostic first. If processor construction fails (Fail or
+    // defect), close the already-built input before re-emitting that cause;
+    // a close failure must not mask the original build error.
     const processors = yield* Effect.forEach(
       processorConfigs,
       (processorConfig) => buildProcessor(processorConfig, registry),
       { concurrency: 1 },
+    ).pipe(
+      Effect.onExit((exit) => {
+        if (Exit.isSuccess(exit) || !input.close) {
+          return Effect.void;
+        }
+        return input.close().pipe(Effect.catchAllCause(() => Effect.void));
+      }),
     );
-
-    const input = yield* buildInput(config.input, debug, registry);
 
     const primaryOutput = yield* buildOutput(config.output, registry);
     let output = primaryOutput;
