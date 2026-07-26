@@ -20,7 +20,6 @@
         "@types/node": "^22.10.2",
         "@vitest/coverage-v8": "^2.1.8",
         "knip": "^6.29.0",
-        "minimatch": "^9.0.5",
         "prettier": "^3.4.2",
         "tsx": "^4.19.2",
         "typescript": "^5.7.2",
