@@ -1,16 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { Deferred, Effect, Fiber, Stream } from "effect";
+import { Chunk, Deferred, Effect, Fiber, Stream } from "effect";
 import {
   ComponentError,
   type ErrorCategory,
 } from "../../../src/core/errors.js";
 import {
-  __errorCollectorTestUtils,
   makeShutdownController,
   PipelineFatalDrainTimeoutError,
   PipelineShutdownError,
   run,
 } from "../../../src/core/pipeline.js";
+import {
+  MAX_ADDITIONAL_FATAL_SAMPLES,
+  MAX_RETAINED_HISTORICAL_ERRORS,
+  assembleErrorSample,
+  collectHistoricalError,
+  collectTerminalError,
+  createErrorCollector,
+  strongFatalIdentityCount,
+  strongHistoricalIdentityCount,
+} from "../../../src/core/error-collector.js";
 import { createMessage, type Message } from "../../../src/core/types.js";
 
 class CategorizedTestError extends ComponentError {
@@ -681,13 +690,6 @@ describe("pipeline error categories", () => {
   });
 
   it("does not strongly retain over-cap historical error identities", () => {
-    const {
-      MAX_RETAINED_HISTORICAL_ERRORS,
-      createErrorCollector,
-      collectHistoricalError,
-      strongHistoricalIdentityCount,
-    } = __errorCollectorTestUtils;
-
     const collector = createErrorCollector();
     const retained: Error[] = [];
     const dropped: Error[] = [];
@@ -810,13 +812,6 @@ describe("pipeline error categories", () => {
     // Unit-level: withSpan clones processor failures, so end-to-end identity
     // cannot observe the old all-history `seen` rejection. Exercise the
     // collector contract directly — terminal must not consult dropped ids.
-    const {
-      MAX_RETAINED_HISTORICAL_ERRORS,
-      createErrorCollector,
-      collectHistoricalError,
-      collectTerminalError,
-    } = __errorCollectorTestUtils;
-
     const collector = createErrorCollector();
     for (let i = 0; i < MAX_RETAINED_HISTORICAL_ERRORS; i++) {
       collectHistoricalError(collector, new Error(`retained-${i}`));
@@ -831,5 +826,314 @@ describe("pipeline error categories", () => {
     expect(collector.terminal.filter((e) => e === sharedSentinel)).toHaveLength(
       1,
     );
+  });
+
+  it("does not strongly retain over-cap distinct primitive failures", async () => {
+    // End-to-end: 1_000 distinct string failures must not grow strong collector
+    // identity state past the retained sample (AC-3). Dropped primitives are
+    // counted via errorsOmitted without storing their values.
+    const inputMessages = Array.from({ length: 1_000 }, (_, i) =>
+      createMessage(i),
+    );
+
+    const result = await Effect.runPromise(
+      run({
+        name: "primitive-string-cap",
+        input: {
+          name: "thousand-strings",
+          stream: Stream.fromIterable(inputMessages),
+        },
+        processors: [
+          {
+            name: "fail-string",
+            process: (msg) => Effect.fail(`bad-string-${msg.content}`),
+          },
+        ],
+        output: {
+          name: "unused",
+          send: () => Effect.void,
+        },
+        backpressure: { maxConcurrentMessages: 1 },
+      }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.stats.failed).toBe(1_000);
+    expect(result.errors?.length).toBeLessThanOrEqual(
+      MAX_RETAINED_HISTORICAL_ERRORS,
+    );
+    // Each over-cap primitive observation is omitted without value retention.
+    expect(result.errorsOmitted).toBe(900);
+
+    // Structural proof: strong historical identity stays capped even when the
+    // failure values are primitives (no WeakSet path).
+    const collector = createErrorCollector();
+    for (let i = 0; i < MAX_RETAINED_HISTORICAL_ERRORS + 250; i++) {
+      collectHistoricalError(collector, `primitive-${i}`);
+    }
+    expect(collector.retained).toHaveLength(MAX_RETAINED_HISTORICAL_ERRORS);
+    expect(collector.omitted).toBe(250);
+    expect(strongHistoricalIdentityCount(collector)).toBe(
+      MAX_RETAINED_HISTORICAL_ERRORS,
+    );
+  });
+
+  it("bounds many distinct fatal failures under finish-current drain", async () => {
+    // finish-current drains an already-emitted chunk after the first halt, so
+    // many fatal processor failures can still reach the collector. Fatal state
+    // must stay fixed-slot + small sample, not O(F).
+    const inputMessages = Array.from({ length: 1_000 }, (_, i) =>
+      createMessage(i),
+    );
+
+    const result = await Effect.runPromise(
+      run({
+        name: "many-fatal-finish-current",
+        input: {
+          name: "thousand-fatal",
+          shutdownMode: "finish-current",
+          // Single chunk so haltWhenDeferred still drains every element after
+          // the first fatal (mirrors the reviewer's finish-current probe).
+          stream: Stream.fromChunk(Chunk.fromIterable(inputMessages)),
+        },
+        processors: [
+          {
+            name: "always-fatal",
+            process: (msg) =>
+              Effect.fail(
+                new CategorizedTestError(`fatal-${msg.content}`, "fatal"),
+              ),
+          },
+        ],
+        output: {
+          name: "unused",
+          send: () => Effect.void,
+        },
+        backpressure: { maxConcurrentMessages: 1 },
+      }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.stats.failed).toBe(1_000);
+    const errors = result.errors ?? [];
+    // Historical sample (≤100) + first fatal + ≤8 extra fatals. Current fatal
+    // may already be in that set. Hard upper bound stays far below 1_000.
+    const maxFatalSamples = 1 + MAX_ADDITIONAL_FATAL_SAMPLES;
+    expect(errors.length).toBeLessThanOrEqual(
+      MAX_RETAINED_HISTORICAL_ERRORS + maxFatalSamples,
+    );
+    // Fatals past first+extra that miss the historical sample are omitted.
+    // 1000 fatals: first 100 enter retained (+ first/extra slots among them);
+    // remaining 900 are overflow past fatal sample once first+extra are full.
+    expect(result.errorsOmitted).toBe(900);
+
+    // Collector-level: fatal strong identity never exceeds fixed capacity.
+    const collector = createErrorCollector();
+    for (let i = 0; i < 500; i++) {
+      collectHistoricalError(
+        collector,
+        new CategorizedTestError(`unit-fatal-${i}`, "fatal"),
+      );
+    }
+    expect(strongFatalIdentityCount(collector)).toBeLessThanOrEqual(
+      maxFatalSamples,
+    );
+    expect(strongHistoricalIdentityCount(collector)).toBe(
+      MAX_RETAINED_HISTORICAL_ERRORS,
+    );
+  });
+
+  it("retains undefined processor and fatal-close diagnostics", async () => {
+    // undefined is a valid Effect failure value and must appear in samples.
+    const processorResult = await Effect.runPromise(
+      run({
+        name: "undefined-processor-fail",
+        input: {
+          name: "one",
+          stream: Stream.make(createMessage("x")),
+        },
+        processors: [
+          {
+            name: "fail-undefined",
+            process: () => Effect.fail(undefined),
+          },
+        ],
+        output: {
+          name: "unused",
+          send: () => Effect.void,
+        },
+        backpressure: { maxConcurrentMessages: 1 },
+      }),
+    );
+
+    expect(processorResult.success).toBe(false);
+    expect(processorResult.stats.failed).toBe(1);
+    expect(processorResult.errors).toBeDefined();
+    expect(processorResult.errors?.some((error) => error === undefined)).toBe(
+      true,
+    );
+
+    const fatal = new CategorizedTestError("poison", "fatal");
+    const closeResult = await Effect.runPromise(
+      run(
+        {
+          name: "fatal-then-undefined-close",
+          input: {
+            name: "one",
+            stream: Stream.make(createMessage("poison")),
+            close: () => Effect.void,
+          },
+          processors: [],
+          output: {
+            name: "fatal-then-undefined-close",
+            send: () => Effect.fail(fatal),
+            close: () => Effect.fail(undefined),
+          },
+          backpressure: { maxConcurrentMessages: 1 },
+        },
+        { shutdownTimeoutMs: 1_000 },
+      ),
+    );
+
+    expect(closeResult.success).toBe(false);
+    expect(
+      closeResult.errors?.some(
+        (error) =>
+          error instanceof CategorizedTestError &&
+          error.message === "poison",
+      ),
+    ).toBe(true);
+    expect(closeResult.errors?.some((error) => error === undefined)).toBe(true);
+  });
+
+  it("includes retained historical samples on non-fatal close failure", async () => {
+    // failedResult must assemble primary + retained + terminal, not primary alone.
+    const closeError = new Error("close-after-history");
+    const inputMessages = Array.from({ length: 150 }, (_, i) =>
+      createMessage(i),
+    );
+
+    const result = await Effect.runPromise(
+      run({
+        name: "close-after-150-logical",
+        input: {
+          name: "hundred-fifty",
+          stream: Stream.fromIterable(inputMessages),
+          close: () => Effect.void,
+        },
+        processors: [
+          {
+            name: "always-logical",
+            process: (msg) =>
+              Effect.fail(
+                new CategorizedTestError(`bad-${msg.content}`, "logical"),
+              ),
+          },
+        ],
+        output: {
+          name: "close-fails",
+          send: () => Effect.void,
+          close: () => Effect.fail(closeError),
+        },
+        backpressure: { maxConcurrentMessages: 1 },
+      }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.stats.failed).toBe(150);
+    expect(result.errorsOmitted).toBe(50);
+    const errors = result.errors ?? [];
+    // Primary close error first.
+    expect(errors[0]).toBe(closeError);
+    // Retained historical samples are present (not discarded by failedResult).
+    const historical = errors.filter((error) => error !== closeError);
+    expect(historical.length).toBe(MAX_RETAINED_HISTORICAL_ERRORS);
+    expect(
+      historical.every(
+        (error) =>
+          error instanceof CategorizedTestError && error.category === "logical",
+      ),
+    ).toBe(true);
+    // Total = primary + retained (close not already in retained).
+    expect(errors.length).toBe(1 + MAX_RETAINED_HISTORICAL_ERRORS);
+  });
+
+  it("does not count a current overflow fatal as omitted", () => {
+    // After first + extra fatal slots and the historical sample are full, a
+    // replacement current-fatal still appears in the assembled sample and must
+    // not inflate errorsOmitted (CLI would claim a shown diagnostic is missing).
+    const collector = createErrorCollector();
+    for (let i = 0; i < MAX_RETAINED_HISTORICAL_ERRORS; i++) {
+      collectHistoricalError(
+        collector,
+        new CategorizedTestError(`seed-fatal-${i}`, "fatal"),
+      );
+    }
+    expect(collector.extraFatals).toHaveLength(MAX_ADDITIONAL_FATAL_SAMPLES);
+    expect(collector.retained).toHaveLength(MAX_RETAINED_HISTORICAL_ERRORS);
+
+    const replacement = new CategorizedTestError(
+      "replacement-current-overflow",
+      "fatal",
+    );
+    collectHistoricalError(collector, replacement);
+
+    const { errors, errorsOmitted } = assembleErrorSample({
+      hasCurrentFatal: true,
+      currentFatal: replacement,
+      collector,
+    });
+
+    expect(errors).toContain(replacement);
+    expect(errorsOmitted).toBe(0);
+  });
+
+  it("counts repeated primitive fatal overflows per observation minus current slot", () => {
+    // Primitive fatal overflows are not identity-deduped after the cap (same
+    // axis as nonfatal primitives). Each observation counts, but the live
+    // current-fatal slot holding that value is in the sample once, so one
+    // observation is excluded from the reported omission total.
+    const collector = createErrorCollector();
+    for (let i = 0; i < MAX_RETAINED_HISTORICAL_ERRORS; i++) {
+      collectHistoricalError(
+        collector,
+        new CategorizedTestError(`seed-fatal-${i}`, "fatal"),
+      );
+    }
+    // detectCategory classifies messages containing "unauthorized" as fatal.
+    const primitiveFatal = "unauthorized-primitive-overflow";
+    collectHistoricalError(collector, primitiveFatal);
+    collectHistoricalError(collector, primitiveFatal);
+    collectHistoricalError(collector, primitiveFatal);
+
+    const { errors, errorsOmitted } = assembleErrorSample({
+      hasCurrentFatal: true,
+      currentFatal: primitiveFatal,
+      collector,
+    });
+
+    expect(errors).toContain(primitiveFatal);
+    expect(errors.filter((error) => error === primitiveFatal)).toHaveLength(1);
+    expect(errorsOmitted).toBe(2);
+  });
+
+  it("does not export error collector test utils from the package root", async () => {
+    // Export-surface check: static namespace imports of known modules (not a
+    // runtime-selected specifier) so the root/pipeline barrels stay free of
+    // the internal collector seam.
+    const root = await import("../../../src/index.js");
+    const pipeline = await import("../../../src/core/pipeline.js");
+    expect(
+      Object.prototype.hasOwnProperty.call(root, "__errorCollectorTestUtils"),
+    ).toBe(false);
+    expect(
+      Object.prototype.hasOwnProperty.call(root, "createErrorCollector"),
+    ).toBe(false);
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        pipeline,
+        "__errorCollectorTestUtils",
+      ),
+    ).toBe(false);
   });
 });
