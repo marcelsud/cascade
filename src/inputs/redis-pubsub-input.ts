@@ -3,7 +3,6 @@
  */
 import { Effect, Stream } from "effect";
 import * as Schema from "effect/Schema";
-import Redis from "ioredis";
 import type { Input, Message } from "../core/types.js";
 import { createMessage } from "../core/types.js";
 import {
@@ -12,14 +11,14 @@ import {
   detectCategory,
 } from "../core/errors.js";
 import { MetricsAccumulator, emitInputMetrics } from "../core/metrics.js";
+import { validate, NonEmptyString, PositiveInt } from "../core/validation.js";
 import {
-  validate,
-  NonEmptyString,
-  Hostname,
-  Port,
-  PositiveInt,
-} from "../core/validation.js";
+  redisAuthSchemaFields,
+  redisClientSchemaFields,
+  redisHostEndpointSchemaFields,
+} from "../core/redis-connection-schema.js";
 import { closeRedisClient } from "../core/redis-client.js";
+import { createConfiguredRedisClient } from "../core/redis-client-options.js";
 import {
   createInputQueue,
   offerInputQueue,
@@ -66,22 +65,15 @@ export class RedisPubSubInputError extends ComponentError {
  * Validation schema for Redis Pub/Sub Input configuration
  */
 export const RedisPubSubInputConfigSchema = Schema.Struct({
-  host: Schema.Union(Hostname, NonEmptyString),
-  port: Port,
-  password: Schema.optional(NonEmptyString),
-  db: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
+  ...redisHostEndpointSchemaFields,
+  ...redisAuthSchemaFields,
   channels: Schema.optional(
     Schema.Array(NonEmptyString).pipe(Schema.minItems(1)),
   ),
   patterns: Schema.optional(
     Schema.Array(NonEmptyString).pipe(Schema.minItems(1)),
   ),
-  connectTimeout: Schema.optional(PositiveInt),
-  commandTimeout: Schema.optional(PositiveInt),
-  keepAlive: Schema.optional(PositiveInt),
-  lazyConnect: Schema.optional(Schema.Boolean),
-  maxRetriesPerRequest: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
-  enableOfflineQueue: Schema.optional(Schema.Boolean),
+  ...redisClientSchemaFields,
   queueSize: Schema.optional(PositiveInt),
   overflow: Schema.optional(Schema.Literal("block", "drop_new", "drop_old")),
 });
@@ -156,22 +148,7 @@ export const createRedisPubSubInput = (
   }
 
   // Create subscriber client (separate client for pub/sub)
-  const subscriber = new Redis({
-    host: config.host,
-    port: config.port,
-    password: config.password,
-    db: config.db || 0,
-    connectTimeout: config.connectTimeout ?? 10000,
-    commandTimeout: config.commandTimeout,
-    keepAlive: config.keepAlive ?? 30000,
-    lazyConnect: config.lazyConnect ?? false,
-    maxRetriesPerRequest: config.maxRetriesPerRequest ?? 20,
-    enableOfflineQueue: config.enableOfflineQueue ?? true,
-    retryStrategy: (times) => {
-      const delay = Math.min(times * 50, 2000);
-      return delay;
-    },
-  });
+  const subscriber = createConfiguredRedisClient(config);
 
   const queueSize = config.queueSize ?? 1_000;
   const overflow = config.overflow ?? "block";

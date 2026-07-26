@@ -10,6 +10,14 @@ import {
   validateConfig,
 } from "./cli-config.js";
 import { parseCliArgs } from "./cli-args.js";
+import {
+  dispatchCliCommand,
+  isHelpRequest,
+  isVersionRequest,
+  type CliDispatch,
+} from "./cli-dispatch.js";
+import { formatCliFatalError } from "./cli-errors.js";
+import { printPipelineMetrics } from "./cli-metrics.js";
 import { runYamlTests, formatTestResults } from "./testing/yaml-test-runner.js";
 import packageJson from "../package.json" with { type: "json" };
 
@@ -51,43 +59,8 @@ Note:
 `);
 }
 
-/**
- * Main CLI function
- */
-const main = Effect.gen(function* () {
-  const args = process.argv.slice(2);
-
-  // Handle help flag
-  if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
-    showHelp();
-    return;
-  }
-
-  // Handle version flag
-  if (args.includes("--version") || args.includes("-v")) {
-    console.log(`cascade v${appVersion}`);
-    return;
-  }
-
-  const parsed = yield* Effect.try({
-    try: () => parseCliArgs(args),
-    catch: (error) =>
-      error instanceof Error ? error : new Error(String(error)),
-  });
-  const { command, configPath, debug: debugMode, registryPath } = parsed;
-  const registry = registryPath ? yield* loadRegistry(registryPath) : undefined;
-
-  // Handle test command
-  if (command === "test") {
-    const pattern = configPath;
-    if (!pattern) {
-      console.error("Error: Missing test pattern argument");
-      console.error("Usage: cascade test <pattern>");
-      console.error('Example: cascade test "tests/**/*.yaml"');
-      yield* Effect.fail(new Error("Missing test pattern"));
-      return;
-    }
-
+const runTestCommand = (pattern: string) =>
+  Effect.gen(function* () {
     yield* Effect.log(`Running tests matching pattern: ${pattern}`);
 
     // Run YAML tests
@@ -102,28 +75,13 @@ const main = Effect.gen(function* () {
     } else {
       yield* Effect.log("All tests passed!");
     }
-    return;
-  }
+  });
 
-  // Check for pipeline commands
-  if (command !== "run" && command !== "validate") {
-    console.error(`Error: Unknown command '${command}'`);
-    console.error('Run "cascade --help" for usage information.');
-    yield* Effect.fail(new Error("Invalid command"));
-    return;
-  }
-
-  // Get config file path (filter out flags)
-  if (!configPath) {
-    console.error("Error: Missing config file argument");
-    console.error(`Usage: cascade ${command} <config-file.yaml>`);
-    yield* Effect.fail(new Error("Missing config file"));
-    return;
-  }
-
-  yield* Effect.log(`Loading configuration from: ${configPath}`);
-
-  if (command === "validate") {
+const runValidateCommand = (
+  configPath: string,
+  registry: Parameters<typeof validateConfig>[1],
+) =>
+  Effect.gen(function* () {
     const summary = yield* validateConfig(configPath, registry);
     console.log("Configuration is valid");
     console.log(`  Input: ${summary.input}`);
@@ -132,109 +90,50 @@ const main = Effect.gen(function* () {
     );
     console.log(`  Output: ${summary.output}`);
     console.log(`  DLQ: ${summary.dlq ? "yes" : "no"}`);
-    return;
-  }
+  });
 
-  // Load, validate, and build config with the same registry instance.
-  const { config, pipeline } = yield* loadAndBuildPipeline(
-    configPath,
-    debugMode,
-    registry,
-  );
-
-  yield* Effect.log(`Configuration loaded successfully`);
-
-  if (debugMode) {
-    yield* Effect.logDebug(`Loaded config: ${JSON.stringify(config, null, 2)}`);
-  }
-
-  yield* Effect.log(
-    `Pipeline built successfully with ${pipeline.processors.length} processors`,
-  );
-
-  // Run the pipeline. Signal handlers only complete Effect shutdown signals;
-  // draining, timeouts, and resource closure stay in the pipeline runtime.
-  yield* Effect.log("Starting pipeline execution...");
-  const shutdown = yield* makeShutdownController();
-  const result = yield* Effect.acquireUseRelease(
-    Effect.sync(() => {
-      let signalCount = 0;
-      const handleSignal = (signal: NodeJS.Signals) => {
-        signalCount += 1;
-        if (signalCount === 1) {
-          Effect.runFork(
-            Effect.log(`Received ${signal}; draining pipeline...`).pipe(
-              Effect.zipRight(shutdown.request),
-            ),
+const installPipelineSignalHandlers = (shutdown: {
+  readonly request: Effect.Effect<void>;
+  readonly requestForce: Effect.Effect<void>;
+}) => {
+  let signalCount = 0;
+  const handleSignal = (signal: NodeJS.Signals) => {
+    signalCount += 1;
+    const effect =
+      signalCount === 1
+        ? Effect.log(`Received ${signal}; draining pipeline...`).pipe(
+            Effect.zipRight(shutdown.request),
+          )
+        : Effect.logError(`Received ${signal} again; forcing shutdown`).pipe(
+            Effect.zipRight(shutdown.requestForce),
           );
-        } else {
-          Effect.runFork(
-            Effect.logError(`Received ${signal} again; forcing shutdown`).pipe(
-              Effect.zipRight(shutdown.requestForce),
-            ),
-          );
-        }
-      };
-      process.on("SIGINT", handleSignal);
-      process.on("SIGTERM", handleSignal);
-      return handleSignal;
-    }),
-    () => run(pipeline, { shutdown }),
-    (handleSignal) =>
-      Effect.sync(() => {
-        process.off("SIGINT", handleSignal);
-        process.off("SIGTERM", handleSignal);
-      }),
-  );
-
-  const printMetrics = () => {
-    if (!result.metrics) return;
-
-    const rows = [];
-    if (result.metrics.input) {
-      rows.push({
-        component: result.metrics.input.component,
-        type: "input",
-        processed: result.metrics.input.messagesProcessed,
-        dropped: result.metrics.input.messagesDropped,
-        sent: "-",
-        errors: result.metrics.input.errorsEncountered,
-        averageMs: result.metrics.input.averageDuration,
-      });
-    }
-    if (result.metrics.output) {
-      rows.push({
-        component: result.metrics.output.component,
-        type: "output",
-        processed: "-",
-        dropped: "-",
-        sent: result.metrics.output.messagesSent,
-        errors: result.metrics.output.sendErrors,
-        averageMs: result.metrics.output.averageDuration,
-      });
-    }
-    if (result.metrics.dlq) {
-      rows.push({
-        component: result.metrics.dlq.component,
-        type: "dlq",
-        processed: "-",
-        dropped: "-",
-        sent: result.metrics.dlq.messagesSent,
-        errors: result.metrics.dlq.sendErrors,
-        averageMs: result.metrics.dlq.averageDuration,
-      });
-    }
-    console.table(rows);
+    Effect.runFork(effect);
   };
+  process.on("SIGINT", handleSignal);
+  process.on("SIGTERM", handleSignal);
+  return handleSignal;
+};
 
-  // Display results
-  if (result.success) {
-    yield* Effect.log("✓ Pipeline completed successfully!");
-    yield* Effect.log(`  Processed: ${result.stats.processed} messages`);
-    yield* Effect.log(`  Failed: ${result.stats.failed} messages`);
-    yield* Effect.log(`  Duration: ${result.stats.duration}ms`);
-    printMetrics();
-  } else {
+const reportPipelineResult = (result: {
+  readonly success: boolean;
+  readonly stats: {
+    readonly processed: number;
+    readonly failed: number;
+    readonly duration: number;
+  };
+  readonly errors?: readonly unknown[];
+  readonly metrics?: Parameters<typeof printPipelineMetrics>[0]["metrics"];
+}) =>
+  Effect.gen(function* () {
+    if (result.success) {
+      yield* Effect.log("✓ Pipeline completed successfully!");
+      yield* Effect.log(`  Processed: ${result.stats.processed} messages`);
+      yield* Effect.log(`  Failed: ${result.stats.failed} messages`);
+      yield* Effect.log(`  Duration: ${result.stats.duration}ms`);
+      printPipelineMetrics(result);
+      return;
+    }
+
     yield* Effect.logError("✗ Pipeline failed!");
     if (result.errors) {
       yield* Effect.logError(`  Errors: ${result.errors.length}`);
@@ -242,67 +141,133 @@ const main = Effect.gen(function* () {
         yield* Effect.logError(`    - ${error}`);
       }
     }
-    printMetrics();
+    printPipelineMetrics(result);
     yield* Effect.fail(new Error("Pipeline execution failed"));
+  });
+
+const runPipelineCommand = (
+  configPath: string,
+  debugMode: boolean,
+  registry: Parameters<typeof loadAndBuildPipeline>[2],
+) =>
+  Effect.gen(function* () {
+    // Load, validate, and build config with the same registry instance.
+    const { config, pipeline } = yield* loadAndBuildPipeline(
+      configPath,
+      debugMode,
+      registry,
+    );
+
+    yield* Effect.log(`Configuration loaded successfully`);
+
+    if (debugMode) {
+      yield* Effect.logDebug(
+        `Loaded config: ${JSON.stringify(config, null, 2)}`,
+      );
+    }
+
+    yield* Effect.log(
+      `Pipeline built successfully with ${pipeline.processors.length} processors`,
+    );
+
+    // Run the pipeline. Signal handlers only complete Effect shutdown signals;
+    // draining, timeouts, and resource closure stay in the pipeline runtime.
+    yield* Effect.log("Starting pipeline execution...");
+    const shutdown = yield* makeShutdownController();
+    const result = yield* Effect.acquireUseRelease(
+      Effect.sync(() => installPipelineSignalHandlers(shutdown)),
+      () => run(pipeline, { shutdown }),
+      (handleSignal) =>
+        Effect.sync(() => {
+          process.off("SIGINT", handleSignal);
+          process.off("SIGTERM", handleSignal);
+        }),
+    );
+
+    yield* reportPipelineResult(result);
+  });
+const runLoadedConfigCommand = (
+  decision: Extract<CliDispatch, { kind: "run" | "validate" }>,
+  registry: Parameters<typeof validateConfig>[1],
+) =>
+  Effect.gen(function* () {
+    yield* Effect.log(`Loading configuration from: ${decision.configPath}`);
+    if (decision.kind === "validate") {
+      yield* runValidateCommand(decision.configPath, registry);
+      return;
+    }
+    yield* runPipelineCommand(decision.configPath, decision.debug, registry);
+  });
+
+const executeCliDecision = (
+  decision: CliDispatch,
+  registry: Parameters<typeof validateConfig>[1],
+) => {
+  if (decision.kind === "usage-error") {
+    for (const line of decision.lines) {
+      console.error(line);
+    }
+    return Effect.fail(new Error(decision.errorMessage));
   }
-}).pipe(
+  if (decision.kind === "test") {
+    return runTestCommand(decision.pattern);
+  }
+  return runLoadedConfigCommand(decision, registry);
+};
+
+const parseArgsOrError = (args: readonly string[]) =>
+  Effect.try({
+    try: () => parseCliArgs(args),
+    catch: (error) =>
+      error instanceof Error ? error : new Error(String(error)),
+  });
+
+const loadOptionalRegistry = (registryPath: string | undefined) =>
+  registryPath ? loadRegistry(registryPath) : Effect.succeed(undefined);
+
+const runParsedCommand = (parsed: {
+  readonly command?: string;
+  readonly configPath?: string;
+  readonly debug: boolean;
+  readonly registryPath?: string;
+}) =>
+  Effect.gen(function* () {
+    // Load optional registry immediately after parsing so every command
+    // (including test and usage-error paths) retains the original failure order.
+    const registry = yield* loadOptionalRegistry(parsed.registryPath);
+    yield* executeCliDecision(
+      dispatchCliCommand({
+        command: parsed.command ?? "",
+        configPath: parsed.configPath,
+        debug: parsed.debug,
+        registryPath: parsed.registryPath,
+      }),
+      registry,
+    );
+  });
+
+/**
+ * Main CLI function
+ */
+const mainProgram = Effect.gen(function* () {
+  const args = process.argv.slice(2);
+  if (isHelpRequest(args)) {
+    showHelp();
+    return;
+  }
+  if (isVersionRequest(args)) {
+    console.log(`cascade v${appVersion}`);
+    return;
+  }
+
+  const parsed = yield* parseArgsOrError(args);
+  yield* runParsedCommand(parsed);
+});
+
+const main = mainProgram.pipe(
   Effect.catchAll((error) =>
     Effect.gen(function* () {
-      // Format error message properly
-      let errorMessage = "Unknown error";
-
-      if (error instanceof Error) {
-        errorMessage = error.message;
-      } else if (typeof error === "string") {
-        errorMessage = error;
-      } else if (error && typeof error === "object") {
-        // Handle Effect errors with _tag
-        if ("_tag" in error && typeof error._tag === "string") {
-          const tag = error._tag;
-
-          // Handle ConfigValidationError specially
-          if (tag === "ConfigValidationError" && "message" in error) {
-            const msg = String(error.message);
-            // Extract the useful part from the validation error
-            if (msg.includes("Schema validation failed:")) {
-              const parts = msg.split("Schema validation failed:");
-              errorMessage = `Configuration validation failed\n${parts[1]?.trim() || ""}`;
-            } else {
-              errorMessage = `Configuration validation failed: ${msg}`;
-            }
-          }
-          // Handle FileReadError
-          else if (tag === "FileReadError") {
-            if ("path" in error) {
-              errorMessage = `Cannot read file: ${error.path}`;
-            } else {
-              errorMessage = "Cannot read configuration file";
-            }
-          }
-          // Handle YamlParseError
-          else if (tag === "YamlParseError") {
-            if ("message" in error) {
-              errorMessage = `Invalid YAML syntax: ${error.message}`;
-            } else {
-              errorMessage = "Invalid YAML syntax";
-            }
-          }
-          // Generic tagged error
-          else {
-            errorMessage = tag;
-            if ("message" in error) {
-              errorMessage += `: ${error.message}`;
-            } else if ("error" in error) {
-              const err = error as { error: unknown };
-              errorMessage += `: ${JSON.stringify(err.error)}`;
-            }
-          }
-        } else {
-          errorMessage = JSON.stringify(error, null, 2);
-        }
-      }
-
-      yield* Effect.logError(`Fatal error: ${errorMessage}`);
+      yield* Effect.logError(`Fatal error: ${formatCliFatalError(error)}`);
       return yield* Effect.fail(error);
     }),
   ),
