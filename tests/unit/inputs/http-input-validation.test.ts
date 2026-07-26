@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { createServer } from "node:http";
+import { createServer, Server } from "node:http";
 import { createConnection, type Socket } from "node:net";
-import { Cause, Effect, Either, Exit, Fiber, Option } from "effect";
+import {
+  Cause,
+  Effect,
+  Either,
+  Exit,
+  Fiber,
+  FiberId,
+  Option,
+} from "effect";
+import type { Input } from "../../../src/core/types.js";
 import {
   createHttpInput,
   HttpInputError,
@@ -173,6 +182,73 @@ describe("HTTP input bind lifecycle", () => {
 
     // If the interrupted attempt leaked a bound server, this rebind would fail
     // with EADDRINUSE. Success proves the cancellation finalizer released the port.
+    const input = await Effect.runPromise(
+      createHttpInput({
+        port,
+        host: "127.0.0.1",
+      }),
+    );
+
+    try {
+      expect(input.name).toBe("http-input");
+    } finally {
+      await Effect.runPromise(input.close());
+    }
+  });
+
+  it("releases the port when interrupted after bind resume before ownership transfers", async () => {
+    // Targets the resume/interrupt race: onListening has called resume (settled
+    // + boundServer set) but ownershipTransferred is still false. Interrupt is
+    // injected on the same listening turn, after createHttpInput's handler, so
+    // the fiber message queue is [RESUME, INTERRUPT] before the runtime drains
+    // it — no wall-clock sleeps.
+    //
+    // Covers: async canceler with settled=true + outer onInterrupt while the
+    // construction Effect has not yet returned the Input.
+    // Does not separately assert which of those two cleanups ran first.
+    const port = await reserveFreePort();
+    const originalListen = Server.prototype.listen;
+    let targetFiber:
+      | Fiber.RuntimeFiber<Input<HttpInputError>, HttpInputError>
+      | undefined;
+
+    Server.prototype.listen = function (
+      this: Server,
+      ...args: Parameters<Server["listen"]>
+    ) {
+      // Callers register `once("listening")` before listen(); this runs after.
+      const result = originalListen.apply(this, args as never);
+      this.on("listening", () => {
+        targetFiber?.unsafeInterruptAsFork(FiberId.none);
+      });
+      return result;
+    };
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.fork(
+            createHttpInput({
+              port,
+              host: "127.0.0.1",
+            }),
+          );
+          // Child has registered listen and is suspended on the async bind;
+          // listening has not fired yet (next I/O turn).
+          targetFiber = fiber;
+          const exit = yield* Fiber.await(fiber);
+          expect(Exit.isFailure(exit)).toBe(true);
+          if (Exit.isFailure(exit)) {
+            expect(Cause.isInterruptedOnly(exit.cause)).toBe(true);
+          }
+        }),
+      );
+    } finally {
+      Server.prototype.listen = originalListen;
+      targetFiber = undefined;
+    }
+
+    // Unowned bound server would leave EADDRINUSE; success proves release.
     const input = await Effect.runPromise(
       createHttpInput({
         port,

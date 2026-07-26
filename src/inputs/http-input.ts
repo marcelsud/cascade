@@ -234,190 +234,263 @@ const destroyUnboundServer = (server: Server): void => {
 export const createHttpInput = (
   config: HttpInputConfig,
 ): Effect.Effect<Input<HttpInputError>, HttpInputError> =>
-  Effect.gen(function* () {
-    yield* validateHttpInputConfig(config);
+  // Suspend so the acquisition state below is per-run, not per-factory-call.
+  // The returned Effect is an ordinary value a caller may run more than once
+  // (a retry after a bind failure, for one); sharing these flags across runs
+  // would let a later run see `serverReleased` already true and leak its server.
+  Effect.suspend(() => {
+    // Separate from async double-resume protection (`settled`): the server is
+    // released on interrupt until the caller actually receives the Input.
+    let ownershipTransferred = false;
+    // Visible outside Effect.async so an interrupt after resume (and after the
+    // async effect completes) can still release a bound server.
+    let boundServer: Server | null = null;
+    // Idempotent release guard (independent of `settled` and ownership).
+    let serverReleased = false;
+    let messageQueueRef: Queue.Queue<Message> | null = null;
+    let queueShutdown = false;
 
-    const host = config.host ?? "0.0.0.0";
-    const path = config.path ?? "/webhook";
-    const timeout = config.timeout ?? 30_000;
-    const maxBodyBytes = config.maxBodyBytes ?? 1_048_576;
-    const queueSize = config.queueSize ?? 1_000;
-    const overflow = config.overflow ?? "block";
+    const releaseServer = (server: Server): void => {
+      if (serverReleased || ownershipTransferred) {
+        return;
+      }
+      serverReleased = true;
+      if (boundServer === server) {
+        boundServer = null;
+      }
+      destroyUnboundServer(server);
+    };
 
-    const metrics = new MetricsAccumulator("http-input");
-    const messageQueue = yield* createInputQueue<Message>(queueSize, overflow);
-    const dropLogState = { lastLogAt: 0, suppressed: 0 };
-
-    const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
-      try {
-        // Only accept POST requests on the specified path
-        if (req.method !== "POST" || req.url !== path) {
-          res.writeHead(404, { "Content-Type": "text/plain" });
-          res.end("Not Found");
-          return;
-        }
-
-        const declaredLength = Number(req.headers["content-length"]);
-        if (Number.isFinite(declaredLength) && declaredLength > maxBodyBytes) {
-          throw new RequestBodyTooLargeError(maxBodyBytes);
-        }
-
-        // Read request body with configured absolute timeout and byte limit
-        const body = await readBody(req, timeout, maxBodyBytes);
-
-        // Convert to message and measure duration
-        const result = await Effect.runPromise(
-          measureDuration(convertHttpRequest(req, body)),
-        );
-
-        const [message, duration] = result;
-
-        // Add to queue
-        const offer = await Effect.runPromise(
-          offerInputQueue(messageQueue, message, overflow, queueSize),
-        );
-        if (offer.dropped > 0) {
-          await Effect.runPromise(recordQueueDrop(metrics, dropLogState, "HTTP"));
-        }
-
-        if (offer.accepted) {
-          metrics.recordProcessed(duration);
-
-          // Emit metrics every 100 accepted messages
-          const metricsSnapshot = metrics.getInputMetrics();
-          if (metricsSnapshot.messagesProcessed % 100 === 0) {
-            await Effect.runPromise(emitInputMetrics(metricsSnapshot));
-          }
-        }
-
-        // Return 200 OK
-        res.writeHead(200, { "Content-Type": "text/plain" });
-        res.end("OK");
-      } catch (error) {
-        metrics.recordError();
-
-        const canWrite = !res.headersSent && !res.writableEnded && !res.destroyed;
-        const endAndClose = (status: number, text: string) => {
-          if (canWrite) {
-            res.writeHead(status, {
-              "Content-Type": "text/plain",
-              Connection: "close",
-            });
-            res.end(text, () => {
-              if (!req.destroyed) {
-                req.destroy();
-              }
-            });
-          } else if (!req.destroyed) {
-            req.destroy();
-          }
-        };
-
-        if (isRequestBodyTimeoutError(error)) {
-          endAndClose(408, "Request Timeout");
-        } else if (isRequestBodyTooLargeError(error)) {
-          endAndClose(413, "Payload Too Large");
-        } else if (canWrite) {
-          res.writeHead(500, { "Content-Type": "text/plain" });
-          res.end("Internal Server Error");
-        }
-
-        await Effect.runPromise(
-          Effect.logError(`HTTP Input error: ${error}`),
-        ).catch(() => undefined);
+    const releaseUnownedServer = (): void => {
+      if (boundServer !== null) {
+        releaseServer(boundServer);
       }
     };
 
-    // Bind before returning a ready input: resolve on listening, fail on error.
-    // Interruption while listen is pending must release the server and queue
-    // (same resource contract as the failure path).
-    const server: Server = yield* Effect.async<Server, HttpInputError>(
-      (resume) => {
-        const candidate = createServer(handleRequest);
-        let settled = false;
+    const shutdownQueueOnce = (): Effect.Effect<void> =>
+      Effect.suspend(() => {
+        if (queueShutdown || messageQueueRef === null) {
+          return Effect.void;
+        }
+        queueShutdown = true;
+        return Queue.shutdown(messageQueueRef);
+      });
 
-        const onListening = () => {
-          if (settled) {
+    return Effect.gen(function* () {
+      yield* validateHttpInputConfig(config);
+
+      const host = config.host ?? "0.0.0.0";
+      const path = config.path ?? "/webhook";
+      const timeout = config.timeout ?? 30_000;
+      const maxBodyBytes = config.maxBodyBytes ?? 1_048_576;
+      const queueSize = config.queueSize ?? 1_000;
+      const overflow = config.overflow ?? "block";
+
+      const metrics = new MetricsAccumulator("http-input");
+      const messageQueue = yield* createInputQueue<Message>(
+        queueSize,
+        overflow,
+      );
+      messageQueueRef = messageQueue;
+      const dropLogState = { lastLogAt: 0, suppressed: 0 };
+
+      const handleRequest = async (
+        req: IncomingMessage,
+        res: ServerResponse,
+      ) => {
+        try {
+          // Only accept POST requests on the specified path
+          if (req.method !== "POST" || req.url !== path) {
+            res.writeHead(404, { "Content-Type": "text/plain" });
+            res.end("Not Found");
             return;
           }
-          settled = true;
-          candidate.removeListener("error", onError);
-          // Post-bind errors must not become unhandled events.
-          candidate.on("error", (error) => {
-            Effect.runSync(
-              Effect.logError(`HTTP Input server error: ${error}`),
-            );
-          });
-          resume(Effect.succeed(candidate));
-        };
 
-        const onError = (error: Error) => {
-          if (settled) {
-            return;
+          const declaredLength = Number(req.headers["content-length"]);
+          if (
+            Number.isFinite(declaredLength) &&
+            declaredLength > maxBodyBytes
+          ) {
+            throw new RequestBodyTooLargeError(maxBodyBytes);
           }
-          settled = true;
-          candidate.removeListener("listening", onListening);
-          destroyUnboundServer(candidate);
-          resume(
-            Effect.fail(
-              new HttpInputError(
-                `HTTP Input failed to bind ${host}:${config.port}: ${error.message}`,
-                "fatal",
-                error,
-              ),
-            ),
+
+          // Read request body with configured absolute timeout and byte limit
+          const body = await readBody(req, timeout, maxBodyBytes);
+
+          // Convert to message and measure duration
+          const result = await Effect.runPromise(
+            measureDuration(convertHttpRequest(req, body)),
           );
-        };
 
-        candidate.once("listening", onListening);
-        candidate.once("error", onError);
-        candidate.listen(config.port, host);
+          const [message, duration] = result;
 
-        // Cancellation finalizer: run when the fiber is interrupted while the
-        // async callback is still pending (resume not yet called).
-        return Effect.sync(() => {
-          if (settled) {
-            return;
+          // Add to queue
+          const offer = await Effect.runPromise(
+            offerInputQueue(messageQueue, message, overflow, queueSize),
+          );
+          if (offer.dropped > 0) {
+            await Effect.runPromise(
+              recordQueueDrop(metrics, dropLogState, "HTTP"),
+            );
           }
-          settled = true;
-          candidate.removeListener("listening", onListening);
-          candidate.removeListener("error", onError);
-          destroyUnboundServer(candidate);
-        });
-      },
-    ).pipe(
-      // onError covers failures and interruption; success leaves the queue open.
-      Effect.onError(() => Queue.shutdown(messageQueue)),
-    );
 
-    yield* Effect.log(
-      `HTTP Input listening on ${host}:${config.port}${path}`,
-    );
+          if (offer.accepted) {
+            metrics.recordProcessed(duration);
 
-    const stream = Stream.fromQueue(messageQueue);
+            // Emit metrics every 100 accepted messages
+            const metricsSnapshot = metrics.getInputMetrics();
+            if (metricsSnapshot.messagesProcessed % 100 === 0) {
+              await Effect.runPromise(emitInputMetrics(metricsSnapshot));
+            }
+          }
 
-    return {
-      name: "http-input",
-      getMetrics: () => metrics.getInputMetrics(),
-      stream,
+          // Return 200 OK
+          res.writeHead(200, { "Content-Type": "text/plain" });
+          res.end("OK");
+        } catch (error) {
+          metrics.recordError();
 
-      close: (): Effect.Effect<void, never> =>
-        Effect.gen(function* () {
-          yield* Effect.log("HTTP Input closing");
+          const canWrite =
+            !res.headersSent && !res.writableEnded && !res.destroyed;
+          const endAndClose = (status: number, text: string) => {
+            if (canWrite) {
+              res.writeHead(status, {
+                "Content-Type": "text/plain",
+                Connection: "close",
+              });
+              res.end(text, () => {
+                if (!req.destroyed) {
+                  req.destroy();
+                }
+              });
+            } else if (!req.destroyed) {
+              req.destroy();
+            }
+          };
 
-          yield* Effect.async<void>((resume) => {
-            server.close((error) => {
-              if (error) {
-                resume(
-                  Effect.logError(`Failed to close HTTP server: ${error}`),
-                );
-              } else {
-                resume(Effect.succeed(undefined));
-              }
+          if (isRequestBodyTimeoutError(error)) {
+            endAndClose(408, "Request Timeout");
+          } else if (isRequestBodyTooLargeError(error)) {
+            endAndClose(413, "Payload Too Large");
+          } else if (canWrite) {
+            res.writeHead(500, { "Content-Type": "text/plain" });
+            res.end("Internal Server Error");
+          }
+
+          await Effect.runPromise(
+            Effect.logError(`HTTP Input error: ${error}`),
+          ).catch(() => undefined);
+        }
+      };
+
+      // Bind before returning a ready input: resolve on listening, fail on error.
+      // Interruption while listen is pending — or after resume before ownership
+      // transfers — must release the server and queue (same resource contract as
+      // the failure path).
+      const server: Server = yield* Effect.async<Server, HttpInputError>(
+        (resume) => {
+          const candidate = createServer(handleRequest);
+          // Double-resume protection only; not ownership / cleanup.
+          let settled = false;
+
+          const onListening = () => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            candidate.removeListener("error", onError);
+            // Post-bind errors must not become unhandled events.
+            candidate.on("error", (error) => {
+              Effect.runSync(
+                Effect.logError(`HTTP Input server error: ${error}`),
+              );
             });
-          });
+            boundServer = candidate;
+            resume(Effect.succeed(candidate));
+          };
 
-          yield* emitInputMetrics(metrics.getInputMetrics());
-        }),
-    };
+          const onError = (error: Error) => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            candidate.removeListener("listening", onListening);
+            releaseServer(candidate);
+            resume(
+              Effect.fail(
+                new HttpInputError(
+                  `HTTP Input failed to bind ${host}:${config.port}: ${error.message}`,
+                  "fatal",
+                  error,
+                ),
+              ),
+            );
+          };
+
+          candidate.once("listening", onListening);
+          candidate.once("error", onError);
+          candidate.listen(config.port, host);
+
+          // Cancellation finalizer: release unless ownership already transferred.
+          // Do not gate on `settled` — resume may have run while the fiber is
+          // still interruptible before the success is consumed.
+          return Effect.sync(() => {
+            if (ownershipTransferred) {
+              return;
+            }
+            settled = true;
+            candidate.removeListener("listening", onListening);
+            candidate.removeListener("error", onError);
+            releaseServer(boundServer ?? candidate);
+          });
+        },
+      ).pipe(
+        // onError covers failures and interruption of the bind effect; success
+        // leaves the queue open for the returned Input (or outer interrupt cleanup).
+        Effect.onError(() => shutdownQueueOnce()),
+      );
+
+      yield* Effect.log(
+        `HTTP Input listening on ${host}:${config.port}${path}`,
+      );
+
+      const stream = Stream.fromQueue(messageQueue);
+
+      // Ownership transfers only when the Input is about to be returned. Any
+      // interrupt up to this point must still release the bound server.
+      ownershipTransferred = true;
+      return {
+        name: "http-input",
+        getMetrics: () => metrics.getInputMetrics(),
+        stream,
+
+        close: (): Effect.Effect<void, never> =>
+          Effect.gen(function* () {
+            yield* Effect.log("HTTP Input closing");
+
+            yield* Effect.async<void>((resume) => {
+              server.close((error) => {
+                if (error) {
+                  resume(
+                    Effect.logError(`Failed to close HTTP server: ${error}`),
+                  );
+                } else {
+                  resume(Effect.succeed(undefined));
+                }
+              });
+            });
+
+            yield* emitInputMetrics(metrics.getInputMetrics());
+          }),
+      };
+    }).pipe(
+      // Cover interrupt after bind resume / async completion but before the
+      // Input is returned (e.g. during the readiness log). Idempotent with the
+      // async cancellation finalizer and bind-path queue shutdown.
+      Effect.onInterrupt(() =>
+        Effect.sync(releaseUnownedServer).pipe(
+          Effect.zipRight(shutdownQueueOnce()),
+        ),
+      ),
+    );
   });
