@@ -852,6 +852,111 @@ describe("FileInput", () => {
     });
   }, 60_000);
 
+  it("restarts from byte 0 after copytruncate while blocked mid-drain", async () => {
+    // Multi-chunk original so the producer is blocked on a first-chunk offer
+    // with currentPosition still far below snapshotEof. copytruncate preserves
+    // dev:ino; a replacement with currentPosition < size < snapshotEof must not
+    // be read from the old offset (that silently drops the replacement prefix).
+    const oldCount = 40_000;
+    const filePath = await createTempFile(buildJsonlFixture(oldCount));
+    const oldStats = await fs.stat(filePath);
+    expect(oldStats.size).toBeGreaterThan(3 * MAX_READ_CHUNK_BYTES);
+    const oldIdentity = `${oldStats.dev}:${oldStats.ino}`;
+
+    const input = createFileInput({
+      path: filePath,
+      follow: true,
+      startAt: "beginning",
+      pollIntervalMs: 20,
+      queueSize: 1,
+      overflow: "block",
+    });
+
+    const blocked = await waitUntil(
+      async () => input.getMetrics?.()?.messagesProcessed === 1,
+      5_000,
+    );
+    expect(blocked).toBe(true);
+
+    // Rough lower bound on how far the first chunk advanced the cursor.
+    const minPositionAfterFirstChunk = MAX_READ_CHUNK_BYTES;
+
+    const replacementStart = 100_000;
+    const replacementCount = 20_000;
+    const replacement =
+      Array.from({ length: replacementCount }, (_, index) =>
+        JSON.stringify({ id: replacementStart + index }),
+      ).join("\n") + "\n";
+    const replacementSize = Buffer.byteLength(replacement);
+    // currentPosition < replacementSize < snapshotEof
+    expect(replacementSize).toBeGreaterThan(minPositionAfterFirstChunk);
+    expect(replacementSize).toBeLessThan(oldStats.size);
+
+    // In-place truncate+rewrite preserves the inode (copytruncate).
+    await fs.writeFile(filePath, replacement, "utf8");
+    const rewrittenStats = await fs.stat(filePath);
+    expect(`${rewrittenStats.dev}:${rewrittenStats.ino}`).toBe(oldIdentity);
+    expect(rewrittenStats.size).toBe(replacementSize);
+
+    const ids: number[] = [];
+    const consuming = Effect.runPromise(
+      input.stream.pipe(
+        Stream.tap((message) =>
+          Effect.sync(() => {
+            const content = message.content;
+            if (
+              content !== null &&
+              typeof content === "object" &&
+              "id" in content &&
+              typeof content.id === "number"
+            ) {
+              ids.push(content.id);
+            }
+          }),
+        ),
+        Stream.runDrain,
+      ),
+    );
+
+    const expectedReplacement = Array.from(
+      { length: replacementCount },
+      (_, index) => replacementStart + index,
+    );
+    const sawFullReplacement = await waitUntil(async () => {
+      const at = ids.indexOf(replacementStart);
+      if (at < 0 || ids.length - at < replacementCount) {
+        return false;
+      }
+      for (let i = 0; i < replacementCount; i++) {
+        if (ids[at + i] !== expectedReplacement[i]) {
+          return false;
+        }
+      }
+      return true;
+    }, 30_000);
+
+    if (input.close) {
+      await Effect.runPromise(input.close());
+    }
+    await Promise.race([consuming.then(() => undefined), delay(2_000)]);
+
+    expect(sawFullReplacement).toBe(true);
+    const replacementAt = ids.indexOf(replacementStart);
+    expect(replacementAt).toBeGreaterThan(0);
+    // Full ordered replacement — not a mid-file slice starting past byte 0.
+    expect(ids.slice(replacementAt, replacementAt + replacementCount)).toEqual(
+      expectedReplacement,
+    );
+    // Any pre-truncation records are a clean prefix of the old file.
+    expect(ids.slice(0, replacementAt)).toEqual(
+      Array.from({ length: replacementAt }, (_, id) => id),
+    );
+    expect(input.getMetrics?.()).toMatchObject({
+      messagesDropped: 0,
+      errorsEncountered: 0,
+    });
+  }, 60_000);
+
   it("one-shot replay does not include appends made while blocked", async () => {
     const originalCount = 20_000;
     const filePath = await createTempFile(buildJsonlFixture(originalCount));
