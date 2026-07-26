@@ -62,6 +62,14 @@ export interface Output<E = never, R = never> {
    * pipeline.output remains the sole close owner.
    */
   readonly getDLQOutput?: () => Output<E, R> | undefined;
+  /**
+   * When present, returns a copy of this output (and nested wrappers) that
+   * takes from `permits` around each underlying primary send attempt only.
+   * Retry backoff and DLQ routing must not hold a primary permit.
+   */
+  readonly bindPrimaryOutputPermits?: (
+    permits: Effect.Semaphore,
+  ) => Output<E, R>;
 }
 
 /**
