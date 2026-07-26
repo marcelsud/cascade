@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { Effect } from "effect";
-import { createBranchProcessor } from "../../../src/processors/branch-processor.js";
+import { Cause, Effect, Either, Exit, Option } from "effect";
+import {
+  BranchProcessorError,
+  createBranchProcessor,
+} from "../../../src/processors/branch-processor.js";
 import { createMetadataProcessor } from "../../../src/processors/metadata-processor.js";
 import { createMappingProcessor } from "../../../src/processors/mapping-processor.js";
 import { createMessage } from "../../../src/core/types.js";
@@ -141,5 +144,166 @@ describe("BranchProcessor", () => {
     expect(
       result.every((item: any) => item.metadata.existing === "value"),
     ).toBe(true);
+  });
+
+  it("should preserve undefined content without defecting", async () => {
+    const message = createMessage(undefined);
+    const branchProcessor = createBranchProcessor({
+      processors: [createMetadataProcessor({ addTimestamp: true })],
+    });
+
+    const either = await Effect.runPromise(
+      Effect.either(branchProcessor.process(message)),
+    );
+
+    expect(Either.isRight(either)).toBe(true);
+    if (Either.isRight(either)) {
+      const result = either.right as any;
+      expect(result.content).toBeUndefined();
+      expect(result.metadata.branchResult.content).toBeUndefined();
+    }
+  });
+
+  it("should preserve bigint content by type and value", async () => {
+    const message = createMessage(1n);
+    const branchProcessor = createBranchProcessor({
+      processors: [createMetadataProcessor()],
+    });
+
+    const result = (await Effect.runPromise(
+      branchProcessor.process(message),
+    )) as any;
+
+    expect(typeof result.content).toBe("bigint");
+    expect(result.content).toBe(1n);
+    expect(typeof result.metadata.branchResult.content).toBe("bigint");
+    expect(result.metadata.branchResult.content).toBe(1n);
+  });
+
+  it("should preserve Date content as a Date instance, not a string", async () => {
+    const date = new Date(0);
+    const message = createMessage(date);
+    const branchProcessor = createBranchProcessor({
+      processors: [createMetadataProcessor()],
+    });
+
+    const result = (await Effect.runPromise(
+      branchProcessor.process(message),
+    )) as any;
+
+    expect(result.content).toBeInstanceOf(Date);
+    expect(result.content.getTime()).toBe(0);
+    expect(typeof result.content).not.toBe("string");
+    expect(result.metadata.branchResult.content).toBeInstanceOf(Date);
+    expect(result.metadata.branchResult.content.getTime()).toBe(0);
+  });
+
+  it("should clone circular object graphs with isolation", async () => {
+    const original: any = {};
+    original.self = original;
+    const message = createMessage(original);
+    const branchProcessor = createBranchProcessor({
+      processors: [createMetadataProcessor()],
+    });
+
+    const result = (await Effect.runPromise(
+      branchProcessor.process(message),
+    )) as any;
+
+    const branchContent = result.metadata.branchResult.content;
+    expect(branchContent.self).toBe(branchContent);
+    expect(branchContent).not.toBe(original);
+    expect(result.content).toBe(original);
+  });
+
+  it("should fail with BranchProcessorError for uncloneable content (not Die)", async () => {
+    const message = createMessage({ fn: () => 1 });
+    const branchProcessor = createBranchProcessor({
+      processors: [createMetadataProcessor()],
+    });
+
+    const exit = await Effect.runPromise(
+      Effect.exit(branchProcessor.process(message)),
+    );
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const failure = Cause.failureOption(exit.cause);
+      expect(Option.isSome(failure)).toBe(true);
+      if (Option.isSome(failure)) {
+        expect(failure.value).toBeInstanceOf(BranchProcessorError);
+        expect((failure.value as BranchProcessorError)._tag).toBe(
+          "BranchProcessorError",
+        );
+      }
+    }
+
+    const either = await Effect.runPromise(
+      Effect.either(branchProcessor.process(message)),
+    );
+    expect(Either.isLeft(either)).toBe(true);
+    if (Either.isLeft(either)) {
+      expect(either.left).toBeInstanceOf(BranchProcessorError);
+    }
+  });
+
+  it("should isolate nested mutations from the original message content", async () => {
+    const originalContent = { value: 1, nested: { keep: true } };
+    const message = createMessage(originalContent);
+
+    const branchProcessor = createBranchProcessor({
+      processors: [
+        {
+          name: "mutate-content",
+          process: (msg) =>
+            Effect.succeed({
+              ...msg,
+              content: Object.assign(msg.content as object, {
+                value: 999,
+                mutated: true,
+              }),
+            }),
+        },
+      ],
+    });
+
+    const result = (await Effect.runPromise(
+      branchProcessor.process(message),
+    )) as any;
+
+    // Main content is the original object reference (spread of originalMessage)
+    expect(result.content).toBe(originalContent);
+    expect(originalContent).toEqual({ value: 1, nested: { keep: true } });
+    expect(result.metadata.branchResult.content).toEqual({
+      value: 999,
+      nested: { keep: true },
+      mutated: true,
+    });
+  });
+
+  it("should expose uncloneable failures on the typed failure channel for DLQ recoverability", async () => {
+    const message = createMessage({ fn: () => 1 });
+    const branchProcessor = createBranchProcessor({
+      processors: [createMetadataProcessor()],
+    });
+
+    const exit = await Effect.runPromise(
+      Effect.exit(branchProcessor.process(message)),
+    );
+
+    // Typed failure (Some) is what pipeline/DLQ handling recovers; defects are not.
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const failure = Cause.failureOption(exit.cause);
+      expect(Option.isSome(failure)).toBe(true);
+      if (Option.isSome(failure)) {
+        expect(failure.value).toBeInstanceOf(BranchProcessorError);
+        expect((failure.value as BranchProcessorError).category).toBe(
+          "logical",
+        );
+      }
+      // Confirm it is not only a defect/die without a typed failure
+      expect(Cause.isDie(exit.cause)).toBe(false);
+    }
   });
 });

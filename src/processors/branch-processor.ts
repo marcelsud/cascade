@@ -10,31 +10,53 @@
  */
 import { Effect } from "effect";
 import type { Processor, Message } from "../core/types.js";
+import {
+  ComponentError,
+  type ErrorCategory,
+} from "../core/errors.js";
 import { runProcessorChain } from "../core/processor-chain.js";
 
-export interface BranchProcessorConfig {
-  readonly processors: readonly Processor<any, any>[];
+export interface BranchProcessorConfig<E = never, R = never> {
+  readonly processors: readonly Processor<E, R>[];
+}
+
+export class BranchProcessorError extends ComponentError {
+  readonly _tag = "BranchProcessorError";
+  readonly category: ErrorCategory = "logical";
+
+  constructor(message: string, cause?: unknown) {
+    super(message, cause);
+  }
 }
 
 /**
  * Create a branch processor
  * Executes nested processors on a copy of the message, merges result into metadata
  */
-export const createBranchProcessor = (
-  config: BranchProcessorConfig,
-): Processor<any, any> => {
+export const createBranchProcessor = <E = never, R = never>(
+  config: BranchProcessorConfig<E, R>,
+): Processor<E | BranchProcessorError, R> => {
   return {
     name: "branch-processor",
     process: (
       originalMessage: Message,
-    ): Effect.Effect<Message | Message[], any, any> => {
+    ): Effect.Effect<Message | Message[], E | BranchProcessorError, R> => {
       return Effect.gen(function* () {
-        // Create a copy of the message for branch processing
-        // Use JSON parse/stringify for deep clone to ensure compatibility
+        // Structured clone preserves undefined, bigint, Date, Map, Set, and cycles.
+        // Uncloneable values (e.g. functions) fail as BranchProcessorError, not Die.
+        const content = yield* Effect.try({
+          try: () => structuredClone(originalMessage.content),
+          catch: (error) =>
+            new BranchProcessorError(
+              `Branch processor cannot copy message content: ${error instanceof Error ? error.message : String(error)}`,
+              error,
+            ),
+        });
+
         const branchMessage: Message = {
           ...originalMessage,
           metadata: { ...originalMessage.metadata },
-          content: JSON.parse(JSON.stringify(originalMessage.content)),
+          content,
         };
 
         const branchResults = yield* runProcessorChain(
