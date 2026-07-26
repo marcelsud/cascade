@@ -29,11 +29,14 @@ input consumption stop, so `requestForce` is safe to call without a preceding
 message from a destructive-pull input; this is the intentional force-shutdown
 tradeoff.
 
-A `finish-current` input (such as the Redis inputs) finishes the pull already in
-progress before intake stops, so keep its blocking read timeout (for example a
-Redis-list `timeout` or Redis-streams `blockMs`) below `shutdown_timeout_ms`.
-Otherwise the drain can hit the deadline while waiting for that pull to yield and
-fall back to the interrupting force path, losing a just-pulled message.
+A `finish-current` input (Redis list, Redis streams, and SQS) finishes the pull
+already in progress before intake stops, so keep its blocking read timeout (for
+example a Redis-list `timeout`, Redis-streams `blockMs`, or SQS
+`wait_time_seconds`) below `shutdown_timeout_ms`. Otherwise the drain can hit the
+deadline while waiting for that pull to yield and fall back to the interrupting
+force path, losing a just-pulled message. For SQS, a message returned by an
+in-flight `ReceiveMessage` must still reach output delivery and only then
+`DeleteMessage`.
 
 The Docker-backed end-to-end suite interrupts a slow Redis-list pipeline and
 verifies that admitted work drains while untouched list items remain available.

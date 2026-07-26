@@ -1,7 +1,7 @@
 /**
  * SQS Input - Consumes messages from AWS SQS (works with LocalStack)
  */
-import { Effect, Stream, Schedule } from "effect";
+import { Chunk, Effect, Stream, Schedule } from "effect";
 import * as Schema from "effect/Schema";
 import {
   SQSClient,
@@ -269,12 +269,16 @@ export const createSqsInput = (
     ),
   );
 
-  const stream = Stream.repeatEffect(pollBatch).pipe(
-    Stream.flatMap((messages) => Stream.fromIterable(messages)),
+  // repeatEffectChunk emits an empty chunk on empty polls so finish-current
+  // haltWhenDeferred can observe the pull boundary and not start another receive.
+  const stream = Stream.repeatEffectChunk(
+    pollBatch.pipe(Effect.map(Chunk.fromIterable)),
   );
 
   return {
     name: "sqs-input",
+    // ReceiveMessage is destructive: visibility already hides the message.
+    shutdownMode: "finish-current",
     getMetrics: () => metrics.getInputMetrics(),
     stream,
     close: () =>

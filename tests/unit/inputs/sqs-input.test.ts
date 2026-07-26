@@ -9,7 +9,7 @@ import {
   createSqsInput,
   type SqsClientLike,
 } from "../../../src/inputs/sqs-input.js";
-import { run } from "../../../src/core/pipeline.js";
+import { makeShutdownController, run } from "../../../src/core/pipeline.js";
 import { withDLQ } from "../../../src/core/dlq.js";
 import { createMessage, type Message } from "../../../src/core/types.js";
 import { readFileSync } from "node:fs";
@@ -106,6 +106,132 @@ describe("SQS ReceiveMessage wait time", () => {
     );
 
     expect(receiveWaitTimeSeconds(commands[0])).toBe(20);
+  });
+});
+
+describe("SQS graceful shutdown", () => {
+  type PendingReceiveResult = {
+    Messages?: Array<{
+      MessageId: string;
+      ReceiptHandle: string;
+      Body: string;
+    }>;
+  };
+
+  const runPendingReceiveShutdown = async (
+    settle: PendingReceiveResult,
+  ): Promise<{
+    receives: number;
+    deletes: number;
+    delivered: number;
+    processed: number;
+    shutdown: string | undefined;
+  }> => {
+    const commands: Array<ReceiveMessageCommand | DeleteMessageCommand> = [];
+    let signalReceiveStarted: (() => void) | undefined;
+    let releaseReceive: ((value: PendingReceiveResult) => void) | undefined;
+    const receiveStarted = new Promise<void>((resolve) => {
+      signalReceiveStarted = resolve;
+    });
+    const pendingReceive = new Promise<PendingReceiveResult>((resolve) => {
+      releaseReceive = resolve;
+    });
+    const client: SqsClientLike = {
+      send: async (command) => {
+        commands.push(command);
+        if (command instanceof ReceiveMessageCommand) {
+          signalReceiveStarted?.();
+          return pendingReceive;
+        }
+        return {};
+      },
+      destroy: () => undefined,
+    };
+    const input = createSqsInput(
+      {
+        queueUrl: "http://localhost:4566/000000000000/test-queue",
+        endpoint: "http://localhost:4566",
+        waitTimeSeconds: 20,
+      },
+      client,
+    );
+    let delivered = 0;
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const shutdown = yield* makeShutdownController();
+        const fiber = yield* Effect.fork(
+          run(
+            {
+              name: "sqs-graceful-shutdown-test",
+              input,
+              processors: [],
+              output: {
+                name: "capture-output",
+                send: () =>
+                  Effect.sync(() => {
+                    delivered += 1;
+                  }),
+              },
+            },
+            { shutdown, shutdownTimeoutMs: 1_000 },
+          ),
+        );
+
+        yield* Effect.promise(() => receiveStarted);
+        yield* shutdown.request;
+        yield* Effect.sync(() => releaseReceive?.(settle));
+        return yield* Fiber.join(fiber);
+      }),
+    );
+
+    return {
+      receives: commands.filter(
+        (command) => command instanceof ReceiveMessageCommand,
+      ).length,
+      deletes: commands.filter(
+        (command) => command instanceof DeleteMessageCommand,
+      ).length,
+      delivered,
+      processed: result.stats.processed,
+      shutdown: result.shutdown,
+    };
+  };
+
+  it("declares finish-current shutdown mode", () => {
+    const input = createSqsInput({
+      queueUrl: "http://localhost:4566/000000000000/test-queue",
+      endpoint: "http://localhost:4566",
+    });
+    expect(input.shutdownMode).toBe("finish-current");
+  });
+
+  it("finishes a pending receive before stopping intake", async () => {
+    const outcome = await runPendingReceiveShutdown({
+      Messages: [
+        {
+          MessageId: "message-1",
+          ReceiptHandle: "receipt-1",
+          Body: '{"value":1}',
+        },
+      ],
+    });
+
+    expect(outcome.receives).toBe(1);
+    expect(outcome.deletes).toBe(1);
+    expect(outcome.delivered).toBe(1);
+    expect(outcome.processed).toBe(1);
+    expect(outcome.shutdown).toBe("graceful");
+  });
+
+  it("completes graceful shutdown when the pending receive is empty", async () => {
+    const outcome = await runPendingReceiveShutdown({ Messages: [] });
+
+    expect(outcome.receives).toBe(1);
+    expect(outcome.deletes).toBe(0);
+    expect(outcome.delivered).toBe(0);
+    expect(outcome.processed).toBe(0);
+    expect(outcome.shutdown).toBe("graceful");
   });
 });
 
