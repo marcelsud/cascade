@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Effect, Either, Stream } from "effect";
+import { Chunk, Effect, Either, Option, Stream } from "effect";
 import Redis from "ioredis";
 import {
   createRedisStreamsInput,
@@ -26,26 +26,79 @@ vi.mock("ioredis", () => {
   };
 });
 
+type MockFn = ReturnType<typeof vi.fn>;
+
+type MockRedisClient = {
+  status: string;
+  xread: MockFn;
+  xreadgroup: MockFn;
+  xgroup: MockFn;
+  xack: MockFn;
+  quit: MockFn;
+  disconnect: MockFn;
+  on: MockFn;
+};
+
+/** Client instance constructed by the most recent `createRedisStreamsInput` call. */
+const factoryOwnedClient = (): MockRedisClient => {
+  const result = vi.mocked(Redis).mock.results.at(-1);
+  if (!result || result.type !== "return") {
+    throw new Error("expected Redis mock client from createRedisStreamsInput");
+  }
+  return result.value as MockRedisClient;
+};
+
+const entryFields = (
+  content: string = JSON.stringify({ test: "data" }),
+  extras: string[] = [
+    "metadata",
+    JSON.stringify({ origin: "test" }),
+    "timestamp",
+    "1234567890",
+    "correlationId",
+    "test-corr-id",
+  ],
+): string[] => ["content", content, ...extras];
+
+const xreadPayload = (
+  streamName: string,
+  entryId: string,
+  fields: string[] = entryFields(),
+) => [[streamName, [[entryId, fields]]]];
+
 describe("RedisStreamsInput", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   describe("Configuration", () => {
-    it("should create input with simple mode by default", () => {
+    it("should create input with simple mode by default", async () => {
       const input = createRedisStreamsInput({
         host: "localhost",
         port: 6379,
         stream: "test-stream",
+        blockMs: 1,
+        count: 1,
       });
 
       expect(input.name).toBe("redis-streams-input");
       expect(input.shutdownMode).toBe("finish-current");
-      expect(input.stream).toBeDefined();
-      expect(input.close).toBeDefined();
+
+      const mockClient = factoryOwnedClient();
+      mockClient.xread.mockResolvedValueOnce(
+        xreadPayload("test-stream", "1-0"),
+      );
+
+      const message = await Effect.runPromise(Stream.runHead(input.stream));
+      expect(Option.isSome(message)).toBe(true);
+      expect(mockClient.xread).toHaveBeenCalled();
+      expect(mockClient.xreadgroup).not.toHaveBeenCalled();
+      expect(mockClient.xgroup).not.toHaveBeenCalled();
+
+      await Effect.runPromise(input.close!());
     });
 
-    it("should create input with consumer group mode when specified", () => {
+    it("should create input with consumer group mode when specified", async () => {
       const input = createRedisStreamsInput({
         host: "localhost",
         port: 6379,
@@ -53,24 +106,59 @@ describe("RedisStreamsInput", () => {
         mode: "consumer-group",
         consumerGroup: "test-group",
         consumerName: "consumer-1",
+        blockMs: 1,
+        count: 1,
       });
 
       expect(input.shutdownMode).toBe("finish-current");
+
+      const mockClient = factoryOwnedClient();
+      mockClient.xreadgroup.mockResolvedValueOnce(
+        xreadPayload("test-stream", "1-0"),
+      );
+
+      const message = await Effect.runPromise(Stream.runHead(input.stream));
+      expect(Option.isSome(message)).toBe(true);
+      expect(mockClient.xgroup).toHaveBeenCalled();
+      expect(mockClient.xreadgroup).toHaveBeenCalled();
+      expect(mockClient.xread).not.toHaveBeenCalled();
+
+      await Effect.runPromise(input.close!());
     });
 
-    it("should auto-detect consumer group mode from config", () => {
+    it("should auto-detect consumer group mode from config", async () => {
       const input = createRedisStreamsInput({
         host: "localhost",
         port: 6379,
         stream: "test-stream",
         consumerGroup: "test-group", // Presence triggers consumer group mode
+        consumerName: "consumer-1",
+        blockMs: 1,
+        count: 1,
       });
 
-      expect(input).toBeDefined();
+      const mockClient = factoryOwnedClient();
+      mockClient.xreadgroup.mockResolvedValueOnce(
+        xreadPayload("test-stream", "1-0"),
+      );
+
+      const message = await Effect.runPromise(Stream.runHead(input.stream));
+      expect(Option.isSome(message)).toBe(true);
+      expect(mockClient.xgroup).toHaveBeenCalledWith(
+        "CREATE",
+        "test-stream",
+        "test-group",
+        "$",
+        "MKSTREAM",
+      );
+      expect(mockClient.xreadgroup).toHaveBeenCalled();
+      expect(mockClient.xread).not.toHaveBeenCalled();
+
+      await Effect.runPromise(input.close!());
     });
 
     it("should support connection options", () => {
-      const input = createRedisStreamsInput({
+      createRedisStreamsInput({
         host: "localhost",
         port: 6379,
         stream: "test-stream",
@@ -78,12 +166,19 @@ describe("RedisStreamsInput", () => {
         db: 2,
       });
 
-      expect(input).toBeDefined();
+      expect(vi.mocked(Redis)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          host: "localhost",
+          port: 6379,
+          password: "secret",
+          db: 2,
+        }),
+      );
     });
   });
 
   describe("Simple Mode", () => {
-    it("should create stream for polling", () => {
+    it("exposes a stream and close lifecycle for simple mode", () => {
       const input = createRedisStreamsInput({
         host: "localhost",
         port: 6379,
@@ -92,110 +187,228 @@ describe("RedisStreamsInput", () => {
       });
 
       expect(input.stream).toBeDefined();
+      expect(input.close).toBeDefined();
     });
 
     it("should handle empty poll results", async () => {
-      const Redis = (await import("ioredis")).default;
-      const mockClient = new Redis();
-      (mockClient.xread as any).mockResolvedValueOnce(null);
-
       const input = createRedisStreamsInput({
         host: "localhost",
         port: 6379,
         stream: "test-stream",
         mode: "simple",
-        blockMs: 1000,
+        blockMs: 1,
+        count: 1,
+        startId: "0",
       });
 
-      expect(input.stream).toBeDefined();
+      const mockClient = factoryOwnedClient();
+      mockClient.xread
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(xreadPayload("test-stream", "10-0"));
+
+      const message = await Effect.runPromise(Stream.runHead(input.stream));
+
+      expect(Option.isSome(message)).toBe(true);
+      if (Option.isSome(message)) {
+        expect(message.value.content).toEqual({ test: "data" });
+      }
+      expect(mockClient.xread).toHaveBeenCalledTimes(2);
+
+      await Effect.runPromise(input.close!());
     });
 
     it("should convert Redis entries to Messages", async () => {
-      const Redis = (await import("ioredis")).default;
-      const mockClient = new Redis();
-
-      // Mock Redis response format: [[streamName, [[entryId, [key, val, key, val, ...]]]]]
-      (mockClient.xread as any).mockResolvedValueOnce([
-        [
-          "test-stream",
-          [
-            [
-              "1234567890-0",
-              [
-                "id",
-                "test-id",
-                "content",
-                JSON.stringify({ test: "data" }),
-                "metadata",
-                JSON.stringify({ source: "test" }),
-                "timestamp",
-                "1234567890",
-                "correlationId",
-                "test-corr-id",
-              ],
-            ],
-          ],
-        ],
-      ]);
+      const entryId = "1234567890-0";
+      const streamName = "test-stream";
 
       const input = createRedisStreamsInput({
         host: "localhost",
         port: 6379,
-        stream: "test-stream",
+        stream: streamName,
         mode: "simple",
+        blockMs: 1,
+        count: 1,
+        startId: "0",
       });
 
-      expect(input.stream).toBeDefined();
+      const mockClient = factoryOwnedClient();
+      mockClient.xread.mockResolvedValueOnce(
+        xreadPayload(streamName, entryId, entryFields()),
+      );
+
+      const message = await Effect.runPromise(Stream.runHead(input.stream));
+
+      expect(Option.isSome(message)).toBe(true);
+      if (Option.isNone(message)) {
+        throw new Error("expected a simple-mode message");
+      }
+
+      expect(message.value.content).toEqual({ test: "data" });
+      expect(message.value.metadata.externalId).toBe(entryId);
+      expect(message.value.metadata.streamName).toBe(streamName);
+      expect(message.value.metadata.source).toBe("redis-streams-input");
+      expect(message.value.metadata.origin).toBe("test");
+      expect(message.value.correlationId).toBe("test-corr-id");
+      expect(message.value.timestamp).toBe(1234567890);
+      expect(mockClient.xread).toHaveBeenCalledTimes(1);
+
+      await Effect.runPromise(input.close!());
     });
 
-    it("should update last ID after reading", () => {
+    it("should update last ID after reading", async () => {
+      const streamName = "test-stream";
+      const firstId = "111-0";
+      const secondId = "222-0";
+
       const input = createRedisStreamsInput({
         host: "localhost",
         port: 6379,
-        stream: "test-stream",
+        stream: streamName,
         mode: "simple",
-        startId: "$", // Start from latest
+        startId: "0",
+        blockMs: 1,
+        count: 1,
       });
 
-      expect(input).toBeDefined();
+      const mockClient = factoryOwnedClient();
+      mockClient.xread
+        .mockResolvedValueOnce(
+          xreadPayload(
+            streamName,
+            firstId,
+            entryFields(JSON.stringify({ n: 1 })),
+          ),
+        )
+        .mockResolvedValueOnce(
+          xreadPayload(
+            streamName,
+            secondId,
+            entryFields(JSON.stringify({ n: 2 })),
+          ),
+        );
+
+      const chunk = await Effect.runPromise(
+        Stream.runCollect(input.stream.pipe(Stream.take(2))),
+      );
+      const messages = Chunk.toReadonlyArray(chunk);
+
+      expect(messages).toHaveLength(2);
+      expect(messages[0]?.content).toEqual({ n: 1 });
+      expect(messages[1]?.content).toEqual({ n: 2 });
+
+      expect(mockClient.xread).toHaveBeenCalledTimes(2);
+      expect(mockClient.xread.mock.calls[0]).toEqual([
+        "COUNT",
+        1,
+        "BLOCK",
+        1,
+        "STREAMS",
+        streamName,
+        "0",
+      ]);
+      expect(mockClient.xread.mock.calls[1]).toEqual([
+        "COUNT",
+        1,
+        "BLOCK",
+        1,
+        "STREAMS",
+        streamName,
+        firstId,
+      ]);
+
+      await Effect.runPromise(input.close!());
     });
   });
 
   describe("Consumer Group Mode", () => {
     it("should create consumer group if not exists", async () => {
-      const Redis = (await import("ioredis")).default;
-      const mockClient = new Redis();
+      const streamName = "test-stream";
+      const groupName = "test-group";
+      const consumerName = "consumer-1";
 
       const input = createRedisStreamsInput({
         host: "localhost",
         port: 6379,
-        stream: "test-stream",
+        stream: streamName,
         mode: "consumer-group",
-        consumerGroup: "test-group",
-        consumerName: "consumer-1",
+        consumerGroup: groupName,
+        consumerName,
+        startId: "0",
+        blockMs: 1,
+        count: 1,
       });
 
-      expect(input).toBeDefined();
+      const mockClient = factoryOwnedClient();
+      mockClient.xreadgroup.mockResolvedValueOnce(
+        xreadPayload(streamName, "1-0"),
+      );
+
+      const message = await Effect.runPromise(Stream.runHead(input.stream));
+      expect(Option.isSome(message)).toBe(true);
+
+      expect(mockClient.xgroup).toHaveBeenCalledWith(
+        "CREATE",
+        streamName,
+        groupName,
+        "0",
+        "MKSTREAM",
+      );
+      expect(mockClient.xreadgroup).toHaveBeenCalledWith(
+        "GROUP",
+        groupName,
+        consumerName,
+        "COUNT",
+        1,
+        "BLOCK",
+        1,
+        "STREAMS",
+        streamName,
+        ">",
+      );
+
+      await Effect.runPromise(input.close!());
     });
 
     it("should handle existing consumer group", async () => {
-      const Redis = (await import("ioredis")).default;
-      const mockClient = new Redis();
-
-      // Simulate BUSYGROUP error (group already exists)
-      (mockClient.xgroup as any).mockRejectedValueOnce({
-        message: "BUSYGROUP Consumer Group name already exists",
-      });
+      const streamName = "test-stream";
+      const groupName = "existing-group";
+      const entryId = "55-0";
 
       const input = createRedisStreamsInput({
         host: "localhost",
         port: 6379,
-        stream: "test-stream",
+        stream: streamName,
         mode: "consumer-group",
-        consumerGroup: "existing-group",
+        consumerGroup: groupName,
+        consumerName: "consumer-1",
+        blockMs: 1,
+        count: 1,
       });
 
-      expect(input).toBeDefined();
+      const mockClient = factoryOwnedClient();
+      // Simulate BUSYGROUP error (group already exists)
+      mockClient.xgroup.mockRejectedValueOnce({
+        message: "BUSYGROUP Consumer Group name already exists",
+      });
+      mockClient.xreadgroup.mockResolvedValueOnce(
+        xreadPayload(
+          streamName,
+          entryId,
+          entryFields(JSON.stringify({ kept: true })),
+        ),
+      );
+
+      const message = await Effect.runPromise(Stream.runHead(input.stream));
+
+      expect(Option.isSome(message)).toBe(true);
+      if (Option.isSome(message)) {
+        expect(message.value.content).toEqual({ kept: true });
+        expect(message.value.metadata.externalId).toBe(entryId);
+      }
+      expect(mockClient.xgroup).toHaveBeenCalledTimes(1);
+      expect(mockClient.xreadgroup).toHaveBeenCalledTimes(1);
+
+      await Effect.runPromise(input.close!());
     });
 
     it("defers XACK until Message.ack is invoked", async () => {
@@ -262,61 +475,132 @@ describe("RedisStreamsInput", () => {
       await Effect.runPromise(input.close!());
     });
 
-    it("should generate consumer name if not provided", () => {
+    it("should generate consumer name if not provided", async () => {
+      const streamName = "test-stream";
+      const groupName = "test-group";
+
       const input = createRedisStreamsInput({
         host: "localhost",
         port: 6379,
-        stream: "test-stream",
+        stream: streamName,
         mode: "consumer-group",
-        consumerGroup: "test-group",
+        consumerGroup: groupName,
         // consumerName not provided - should be auto-generated
+        blockMs: 1,
+        count: 1,
       });
 
-      expect(input).toBeDefined();
+      const mockClient = factoryOwnedClient();
+      mockClient.xreadgroup.mockResolvedValueOnce(
+        xreadPayload(streamName, "1-0"),
+      );
+
+      const message = await Effect.runPromise(Stream.runHead(input.stream));
+      expect(Option.isSome(message)).toBe(true);
+
+      const consumerName = mockClient.xreadgroup.mock.calls[0]?.[2];
+      expect(consumerName).toMatch(/^consumer-[a-z0-9]+$/);
+      expect(mockClient.xreadgroup).toHaveBeenCalledWith(
+        "GROUP",
+        groupName,
+        consumerName,
+        "COUNT",
+        1,
+        "BLOCK",
+        1,
+        "STREAMS",
+        streamName,
+        ">",
+      );
+
+      await Effect.runPromise(input.close!());
     });
   });
 
   describe("Error Handling", () => {
-    it("should handle connection errors gracefully", () => {
+    it("constructs input for an unreachable host without throwing", () => {
       const input = createRedisStreamsInput({
         host: "invalid-host",
         port: 6379,
         stream: "test-stream",
       });
 
-      expect(input.stream).toBeDefined();
+      expect(input.name).toBe("redis-streams-input");
+      expect(input.stream).toEqual(expect.any(Object));
+      expect(input.close).toEqual(expect.any(Function));
     });
 
     it("should handle parsing errors for malformed entries", async () => {
-      const Redis = (await import("ioredis")).default;
-      const mockClient = new Redis();
-
-      // Mock malformed entry (invalid JSON)
-      (mockClient.xread as any).mockResolvedValueOnce([
-        [
-          "test-stream",
-          [["1234567890-0", ["content", "invalid-json", "metadata", "{}"]]],
-        ],
-      ]);
+      const entryId = "1234567890-0";
+      const streamName = "test-stream";
 
       const input = createRedisStreamsInput({
         host: "localhost",
         port: 6379,
-        stream: "test-stream",
+        stream: streamName,
         mode: "simple",
+        blockMs: 1,
+        count: 1,
+        startId: "0",
       });
 
-      expect(input.stream).toBeDefined();
+      const mockClient = factoryOwnedClient();
+      mockClient.xread.mockResolvedValueOnce(
+        xreadPayload(streamName, entryId, [
+          "content",
+          "invalid-json",
+          "metadata",
+          "{}",
+        ]),
+      );
+
+      const message = await Effect.runPromise(Stream.runHead(input.stream));
+
+      expect(Option.isSome(message)).toBe(true);
+      if (Option.isSome(message)) {
+        expect(message.value.content).toEqual({ raw: "invalid-json" });
+        expect(message.value.metadata.externalId).toBe(entryId);
+        expect(message.value.metadata.source).toBe("redis-streams-input");
+      }
+
+      await Effect.runPromise(input.close!());
     });
 
-    it("should retry after errors", () => {
+    it("should retry after errors", async () => {
+      const streamName = "test-stream";
+      const entryId = "99-0";
+
       const input = createRedisStreamsInput({
         host: "localhost",
         port: 6379,
-        stream: "test-stream",
+        stream: streamName,
+        mode: "simple",
+        blockMs: 1,
+        count: 1,
+        startId: "0",
+        reconnectBackoffMs: 1,
       });
 
-      expect(input.stream).toBeDefined();
+      const mockClient = factoryOwnedClient();
+      mockClient.xread
+        .mockRejectedValueOnce(new Error("ECONNREFUSED connection refused"))
+        .mockResolvedValueOnce(
+          xreadPayload(
+            streamName,
+            entryId,
+            entryFields(JSON.stringify({ recovered: true })),
+          ),
+        );
+
+      const message = await Effect.runPromise(Stream.runHead(input.stream));
+
+      expect(Option.isSome(message)).toBe(true);
+      if (Option.isSome(message)) {
+        expect(message.value.content).toEqual({ recovered: true });
+      }
+      expect(mockClient.xread).toHaveBeenCalledTimes(2);
+
+      await Effect.runPromise(input.close!());
     });
 
     it("propagates a fatal simple-read error without a second Redis operation", async () => {
@@ -455,37 +739,97 @@ describe("RedisStreamsInput", () => {
   });
 
   describe("Read Configuration", () => {
-    it("should use custom block timeout", () => {
+    it("should use custom block timeout", async () => {
       const input = createRedisStreamsInput({
         host: "localhost",
         port: 6379,
         stream: "test-stream",
-        blockMs: 10000, // Custom timeout
+        mode: "simple",
+        blockMs: 10000,
+        count: 1,
+        startId: "0",
       });
 
-      expect(input).toBeDefined();
+      const mockClient = factoryOwnedClient();
+      mockClient.xread.mockResolvedValueOnce(
+        xreadPayload("test-stream", "1-0"),
+      );
+
+      await Effect.runPromise(Stream.runHead(input.stream));
+
+      expect(mockClient.xread).toHaveBeenCalledWith(
+        "COUNT",
+        1,
+        "BLOCK",
+        10000,
+        "STREAMS",
+        "test-stream",
+        "0",
+      );
+
+      await Effect.runPromise(input.close!());
     });
 
-    it("should use custom message count", () => {
+    it("should use custom message count", async () => {
       const input = createRedisStreamsInput({
         host: "localhost",
         port: 6379,
         stream: "test-stream",
-        count: 50, // Custom batch size
+        mode: "simple",
+        blockMs: 1,
+        count: 50,
+        startId: "0",
       });
 
-      expect(input).toBeDefined();
+      const mockClient = factoryOwnedClient();
+      mockClient.xread.mockResolvedValueOnce(
+        xreadPayload("test-stream", "1-0"),
+      );
+
+      await Effect.runPromise(Stream.runHead(input.stream));
+
+      expect(mockClient.xread).toHaveBeenCalledWith(
+        "COUNT",
+        50,
+        "BLOCK",
+        1,
+        "STREAMS",
+        "test-stream",
+        "0",
+      );
+
+      await Effect.runPromise(input.close!());
     });
 
-    it("should support custom start ID", () => {
+    it("should support custom start ID", async () => {
       const input = createRedisStreamsInput({
         host: "localhost",
         port: 6379,
         stream: "test-stream",
+        mode: "simple",
+        blockMs: 1,
+        count: 1,
         startId: "0", // Start from beginning
       });
 
-      expect(input).toBeDefined();
+      const mockClient = factoryOwnedClient();
+      mockClient.xread.mockResolvedValueOnce(
+        xreadPayload("test-stream", "1-0"),
+      );
+
+      await Effect.runPromise(Stream.runHead(input.stream));
+
+      expect(mockClient.xread).toHaveBeenCalledWith(
+        "COUNT",
+        1,
+        "BLOCK",
+        1,
+        "STREAMS",
+        "test-stream",
+        "0",
+      );
+
+      await Effect.runPromise(input.close!());
     });
   });
 
@@ -511,13 +855,13 @@ describe("RedisStreamsInput", () => {
         stream: "test-stream",
       });
 
-      expect(input.close).toBeDefined();
+      const mockClient = factoryOwnedClient();
+      expect(mockClient.status).toBe("ready");
 
-      if (input.close) {
-        await Effect.runPromise(input.close());
-      }
+      await Effect.runPromise(input.close!());
 
-      // Close method exists and can be called (actual quit would be called internally)
+      expect(mockClient.quit).toHaveBeenCalledTimes(1);
+      expect(mockClient.disconnect).not.toHaveBeenCalled();
     });
 
     it("disconnects an unready client without waiting for quit", async () => {
