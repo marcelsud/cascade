@@ -56,3 +56,8 @@ input:
 - In one-shot mode (`follow: false`), a non-empty final record without a trailing newline is emitted at EOF
 - If the file is truncated or rotated while following, Cascade restarts from the current file contents
 - Stat and read use the same open descriptor, so rotation between them cannot mix file identities
+- Disk reads are capped at 64 KiB per `read` call. A large unread gap is drained
+  in successive chunks, and complete records are offered between chunks so
+  `overflow: block` backpressure can stop further reads. One individual
+  newline-delimited record may still exceed 64 KiB; that record is buffered
+  until its terminating newline arrives.

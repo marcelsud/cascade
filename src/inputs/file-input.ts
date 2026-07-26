@@ -56,13 +56,20 @@ export const FileInputConfigSchema = Schema.Struct({
   overflow: Schema.optional(Schema.Literal("block", "drop_new", "drop_old")),
 });
 
+/** Upper bound for a single disk read / Buffer allocation. */
+const MAX_READ_CHUNK_BYTES = 64 * 1024;
+
 const readRange = async (
   handle: fsp.FileHandle,
   position: number,
   length: number,
 ): Promise<Buffer> => {
-  const buffer = Buffer.alloc(length);
-  const { bytesRead } = await handle.read(buffer, 0, length, position);
+  const toRead = Math.min(length, MAX_READ_CHUNK_BYTES);
+  if (toRead <= 0) {
+    return Buffer.alloc(0);
+  }
+  const buffer = Buffer.alloc(toRead);
+  const { bytesRead } = await handle.read(buffer, 0, toRead, position);
   return buffer.subarray(0, bytesRead);
 };
 
@@ -177,8 +184,11 @@ export const createFileInput = (
 
   const pollFile = async (): Promise<boolean> => {
     try {
-      let pending: readonly string[] | null = null;
+      // Open and stat once per poll. Snapshot that descriptor's EOF and drain
+      // only up to it in bounded chunks so rotation/growth is observed on the
+      // *next* poll — never mid-drain via a reopened pathname.
       const handle = await fsp.open(config.path, "r");
+      let pending: readonly string[] | null = null;
       try {
         const stats = await handle.stat();
         const nextIdentity = getIdentity(stats);
@@ -190,25 +200,45 @@ export const createFileInput = (
           decoder = new StringDecoder(encoding);
         }
 
-        if (stats.size > currentPosition) {
-          await dependencies.beforeRead?.();
-          const chunk = await readRange(
-            handle,
-            currentPosition,
-            stats.size - currentPosition,
-          );
-          currentPosition += chunk.length;
+        const snapshotEof = stats.size;
 
-          const [lines, remainder] = splitCompleteLines(
-            bufferedText + decoder.write(chunk),
-          );
-          bufferedText = remainder;
-          pending = lines;
+        if (snapshotEof > currentPosition) {
+          await dependencies.beforeRead?.();
+
+          while (!closed && currentPosition < snapshotEof) {
+            const chunk = await readRange(
+              handle,
+              currentPosition,
+              Math.min(snapshotEof - currentPosition, MAX_READ_CHUNK_BYTES),
+            );
+            if (chunk.length === 0) {
+              break;
+            }
+
+            currentPosition += chunk.length;
+            const [lines, remainder] = splitCompleteLines(
+              bufferedText + decoder.write(chunk),
+            );
+            bufferedText = remainder;
+
+            const atSnapshotEof = currentPosition >= snapshotEof;
+            if (atSnapshotEof) {
+              // Close before offering the final chunk so a blocked
+              // overflow:block offer does not pin the descriptor.
+              pending = lines;
+              break;
+            }
+
+            if (lines.length > 0) {
+              await emitLineMessages(lines);
+            }
+          }
         }
       } finally {
         await handle.close();
       }
-      if (pending) {
+
+      if (pending && pending.length > 0) {
         await emitLineMessages(pending);
       }
 
