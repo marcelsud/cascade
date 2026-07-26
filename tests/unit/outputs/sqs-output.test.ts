@@ -381,13 +381,205 @@ describe("SQSOutput", () => {
       await Effect.runPromise(output.send(message));
 
       const sendCall = mockClient.send.mock.calls[0][0];
-      const metadata = JSON.parse(
-        sendCall.MessageAttributes.metadata.StringValue,
+      const attrs = sendCall.MessageAttributes;
+      // source is a top-level attribute; metadata still holds the full map
+      expect(attrs.source).toEqual({
+        StringValue: "test",
+        DataType: "String",
+      });
+      expect(JSON.parse(attrs.metadata.StringValue)).toEqual({
+        source: "test",
+        custom: "value",
+      });
+      expect(attrs.correlationId).toEqual({
+        StringValue: "test-correlation-id",
+        DataType: "String",
+      });
+    });
+
+    it("emits documented top-level attributes for single sends", async () => {
+      const mockClient = await getMockClient();
+      const output = createSqsOutput({
+        queueUrl: "http://localhost:4566/000000000000/test-queue",
+      });
+      const message: Message = {
+        ...createMessage(
+          { payload: true },
+          {
+            source: "sqs-input",
+            receivedAt: "2026-07-25T00:00:00.000Z",
+            processedAt: "2026-07-25T00:00:01.000Z",
+            custom: "kept-in-metadata",
+          },
+        ),
+        correlationId: "corr-single",
+        trace: { spanId: "span-1", traceId: "trace-1" },
+      };
+
+      await Effect.runPromise(output.send(message));
+
+      const attrs = mockClient.send.mock.calls[0][0].MessageAttributes;
+      expect(attrs.messageId).toEqual({
+        StringValue: message.id,
+        DataType: "String",
+      });
+      expect(attrs.timestamp).toEqual({
+        StringValue: message.timestamp.toString(),
+        DataType: "Number",
+      });
+      expect(attrs.correlationId).toEqual({
+        StringValue: "corr-single",
+        DataType: "String",
+      });
+      expect(attrs.source).toEqual({
+        StringValue: "sqs-input",
+        DataType: "String",
+      });
+      expect(attrs.receivedAt).toEqual({
+        StringValue: "2026-07-25T00:00:00.000Z",
+        DataType: "String",
+      });
+      expect(attrs.processedAt).toEqual({
+        StringValue: "2026-07-25T00:00:01.000Z",
+        DataType: "String",
+      });
+      expect(attrs.metadata).toEqual({
+        StringValue: JSON.stringify({
+          source: "sqs-input",
+          receivedAt: "2026-07-25T00:00:00.000Z",
+          processedAt: "2026-07-25T00:00:01.000Z",
+          custom: "kept-in-metadata",
+        }),
+        DataType: "String",
+      });
+      expect(attrs.trace).toEqual({
+        StringValue: JSON.stringify({ spanId: "span-1", traceId: "trace-1" }),
+        DataType: "String",
+      });
+      // Optional fields stay omitted when absent (not set to undefined keys)
+      expect(Object.keys(attrs).sort()).toEqual(
+        [
+          "correlationId",
+          "messageId",
+          "metadata",
+          "processedAt",
+          "receivedAt",
+          "source",
+          "timestamp",
+          "trace",
+        ].sort(),
       );
-      expect(metadata).toEqual({ source: "test", custom: "value" });
-      expect(sendCall.MessageAttributes.correlationId.StringValue).toBe(
-        "test-correlation-id",
-      );
+    });
+
+    it("emits the same documented attributes for every batch entry", async () => {
+      const mockClient = await getMockClient();
+      mockClient.send.mockResolvedValue({
+        Successful: [{ Id: "0" }, { Id: "1" }],
+        Failed: [],
+      });
+      const output = createSqsOutput({
+        queueUrl: "http://localhost:4566/000000000000/test-queue",
+        maxBatchSize: 2,
+        batchTimeout: 5_000,
+      });
+
+      const first: Message = {
+        ...createMessage(
+          { id: 1 },
+          {
+            source: "sqs-input",
+            receivedAt: "2026-07-25T00:00:00.000Z",
+            processedAt: "2026-07-25T00:00:01.000Z",
+          },
+        ),
+        correlationId: "corr-batch-1",
+        trace: { spanId: "span-a", traceId: "trace-a" },
+      };
+      const second: Message = {
+        ...createMessage(
+          { id: 2 },
+          {
+            source: "sqs-input",
+            receivedAt: "2026-07-25T00:00:02.000Z",
+            processedAt: "2026-07-25T00:00:03.000Z",
+          },
+        ),
+        correlationId: "corr-batch-2",
+        trace: { spanId: "span-b", traceId: "trace-b" },
+      };
+
+      await Promise.all([
+        Effect.runPromise(output.send(first)),
+        Effect.runPromise(output.send(second)),
+      ]);
+
+      const calls = batchCalls(mockClient);
+      expect(calls).toHaveLength(1);
+      const entries = calls[0][0].Entries;
+      expect(entries).toHaveLength(2);
+
+      const expectDocumentedAttrs = (
+        attrs: Record<string, { StringValue?: string; DataType?: string }>,
+        msg: Message,
+      ) => {
+        expect(attrs.messageId).toEqual({
+          StringValue: msg.id,
+          DataType: "String",
+        });
+        expect(attrs.timestamp).toEqual({
+          StringValue: msg.timestamp.toString(),
+          DataType: "Number",
+        });
+        expect(attrs.correlationId).toEqual({
+          StringValue: msg.correlationId,
+          DataType: "String",
+        });
+        expect(attrs.source).toEqual({
+          StringValue: msg.metadata.source,
+          DataType: "String",
+        });
+        expect(attrs.receivedAt).toEqual({
+          StringValue: msg.metadata.receivedAt,
+          DataType: "String",
+        });
+        expect(attrs.processedAt).toEqual({
+          StringValue: msg.metadata.processedAt,
+          DataType: "String",
+        });
+        expect(attrs.metadata).toEqual({
+          StringValue: JSON.stringify(msg.metadata),
+          DataType: "String",
+        });
+        expect(attrs.trace).toEqual({
+          StringValue: JSON.stringify(msg.trace),
+          DataType: "String",
+        });
+      };
+
+      expectDocumentedAttrs(entries[0].MessageAttributes, first);
+      expectDocumentedAttrs(entries[1].MessageAttributes, second);
+    });
+
+    it("omits optional attributes when metadata fields are absent", async () => {
+      const mockClient = await getMockClient();
+      const output = createSqsOutput({
+        queueUrl: "http://localhost:4566/000000000000/test-queue",
+      });
+
+      await Effect.runPromise(output.send(createMessage({ bare: true })));
+
+      const attrs = mockClient.send.mock.calls[0][0].MessageAttributes;
+      expect(attrs.correlationId).toBeUndefined();
+      expect(attrs.source).toBeUndefined();
+      expect(attrs.receivedAt).toBeUndefined();
+      expect(attrs.processedAt).toBeUndefined();
+      expect(attrs.trace).toBeUndefined();
+      expect(attrs.messageId.DataType).toBe("String");
+      expect(attrs.timestamp.DataType).toBe("Number");
+      expect(attrs.metadata).toEqual({
+        StringValue: "{}",
+        DataType: "String",
+      });
     });
   });
 });
