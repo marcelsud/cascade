@@ -35,7 +35,9 @@ ratchets:
     # re-installing the merge base, so it fails closed. To land one, add the
     # exact transition fingerprint printed by the failure here in a policy-only
     # PR, then rebase the dependency change onto it.
-    approved_dependency_transitions: []
+    approved_dependency_transitions:
+      # jsonata 2.1.0 -> 2.2.2, removing GHSA-86vw-mfpg-wwv9 (issue #112).
+      - "4d44cb0c32b0c5e6b4a284ef6f3bd276c6477054406b55b9ad5945073e77ab25:cc8c817e5cc0ae14af65ae09d7fa728e70ee4743a9ffc55d892ff1bdfc2ef08f"
 
   RT-4:
     check: "npm run test:coverage; node .github/grading/checks.mjs coverage --report <output> --config .github/grading/config.yml"
