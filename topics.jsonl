@@ -8,3 +8,4 @@
 {"topic_id":"redis-connection-lifecycle","run_id":"974e38e-76017","commit_audited":"974e38e1285ec3e8d58eb3fd01b6acdb6baac933","seed":2351004648,"outcome":"completed","candidates":1,"filed":1,"dispositions":{"filed":1}}
 {"topic_id":"processor-contracts","run_id":"974e38e-81381","commit_audited":"974e38e1285ec3e8d58eb3fd01b6acdb6baac933","seed":1186305041,"outcome":"completed","candidates":1,"filed":1,"dispositions":{"filed":1}}
 {"topic_id":"input-backpressure-and-overflow","run_id":"974e38e-86612","commit_audited":"974e38e1285ec3e8d58eb3fd01b6acdb6baac933","seed":3847411837,"outcome":"completed","candidates":0,"filed":0,"dispositions":{}}
+{"topic_id":"shutdown-and-drain","run_id":"974e38e-29905","commit_audited":"974e38e1285ec3e8d58eb3fd01b6acdb6baac933","seed":3946867915,"outcome":"completed","candidates":1,"filed":1,"dispositions":{"filed":1}}
