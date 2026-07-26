@@ -296,7 +296,7 @@ const listVitestFiles = (cwd, args) =>
     .map((line) => line.split(path.sep).join("/"))
     .sort()
 
-const gradingConfig = ({ approved = [] } = {}) =>
+const gradingConfig = ({ approved = [], dependencyTransitions = [] } = {}) =>
   [
     "rubric_version: 1.0.1",
     "mode: report-only",
@@ -307,6 +307,10 @@ const gradingConfig = ({ approved = [] } = {}) =>
     ...(approved.length === 0
       ? ["      []"]
       : approved.map((entry) => `      - ${JSON.stringify(entry)}`)),
+    "    approved_dependency_transitions:",
+    ...(dependencyTransitions.length === 0
+      ? ["      []"]
+      : dependencyTransitions.map((entry) => `      - ${JSON.stringify(entry)}`)),
     "",
   ].join("\n")
 
@@ -806,8 +810,120 @@ test("RT-2 fails closed when lockfile/dependencies differ between base and head"
         assert.ok(error instanceof CheckFailure)
         assert.match(
           error.message,
-          /dependency changes|package manager|Vitest upgrades|lockfile/,
+          /unapproved dependency change/,
         )
+        assert.match(error.message, /approved_dependency_transitions/)
+        return true
+      },
+    )
+  })
+})
+
+// Writes the dependency change the three approval tests share and returns the
+// exact transition fingerprint RT-2 asks the maintainer to authorize.
+const applyDependencyDrift = (cwd) => {
+  writeRelative(
+    cwd,
+    "package.json",
+    `${JSON.stringify(
+      {
+        name: "cascade-grading-fixture",
+        private: true,
+        scripts: { "test:unit": "vitest run tests/unit" },
+        devDependencies: { vitest: "2.1.9" },
+      },
+      null,
+      2,
+    )}\n`,
+  )
+}
+
+const transitionFromFailure = (cwd, base) => {
+  try {
+    checkTestIntegrity({ base, cwd })
+  } catch (error) {
+    const match = /"([0-9a-f]{64}:[0-9a-f]{64})"/.exec(error.message)
+    assert.ok(match, `expected a transition fingerprint in: ${error.message}`)
+    return match[1]
+  }
+  assert.fail("expected the unapproved dependency transition to fail closed")
+}
+
+test("RT-2 accepts a dependency transition approved at the merge base", () => {
+  withRepository(({ cwd, base }) => {
+    // Discover the exact entry the diagnostic tells a maintainer to land.
+    applyDependencyDrift(cwd)
+    commit(cwd, "probe dependency drift")
+    const transition = transitionFromFailure(cwd, base)
+
+    // Land it as a policy-only PR on top of the original base, exactly as the
+    // diagnostic instructs: revert the dependency change, approve, commit.
+    execFileSync("git", ["revert", "--no-edit", "HEAD"], { cwd, stdio: "ignore" })
+    writeRelative(
+      cwd,
+      ".github/grading/config.yml",
+      gradingConfig({ dependencyTransitions: [transition] }),
+    )
+    const policyBase = commit(cwd, "approve dependency transition")
+
+    // Now rebase the dependency change onto the approved policy.
+    applyDependencyDrift(cwd)
+    commit(cwd, "land approved dependency change")
+
+    assert.doesNotThrow(() => checkTestIntegrity({ base: policyBase, cwd }))
+  })
+})
+
+test("RT-2 rejects a head-only approved dependency transition", () => {
+  withRepository(({ cwd, base }) => {
+    applyDependencyDrift(cwd)
+    commit(cwd, "probe dependency drift")
+    const transition = transitionFromFailure(cwd, base)
+    execFileSync("git", ["revert", "--no-edit", "HEAD"], { cwd, stdio: "ignore" })
+    // Base carries the approvals list but not this entry.
+    writeRelative(cwd, ".github/grading/config.yml", gradingConfig({}))
+    const policyBase = commit(cwd, "no approval at base")
+
+    // Self-approval: the same PR both changes dependencies and authorizes it.
+    applyDependencyDrift(cwd)
+    writeRelative(
+      cwd,
+      ".github/grading/config.yml",
+      gradingConfig({ dependencyTransitions: [transition] }),
+    )
+    commit(cwd, "dependency change self-approved in head")
+
+    assert.throws(
+      () => checkTestIntegrity({ base: policyBase, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        assert.match(error.message, /unapproved dependency change/)
+        return true
+      },
+    )
+  })
+})
+
+test("RT-2 rejects a dependency transition approved for different fingerprints", () => {
+  withRepository(({ cwd, base }) => {
+    // An approval must authorize one exact base->head pair, not any change.
+    const unrelated = `${"a".repeat(64)}:${"b".repeat(64)}`
+    writeRelative(
+      cwd,
+      ".github/grading/config.yml",
+      gradingConfig({ dependencyTransitions: [unrelated] }),
+    )
+    const policyBase = commit(cwd, "approve an unrelated transition")
+    assert.notEqual(policyBase, base)
+
+    applyDependencyDrift(cwd)
+    commit(cwd, "unrelated dependency change")
+
+    assert.throws(
+      () => checkTestIntegrity({ base: policyBase, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        assert.match(error.message, /unapproved dependency change/)
         return true
       },
     )

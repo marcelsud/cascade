@@ -1000,6 +1000,12 @@ const collectDependencyFingerprint = (cwd) => {
 const dependencyFingerprintsMatch = (headCwd, baseCwd) =>
   collectDependencyFingerprint(headCwd) === collectDependencyFingerprint(baseCwd)
 
+// Exact, order-sensitive identity of one base->head dependency transition.
+// Digested so the policy entry stays a fixed length rather than embedding
+// every lockfile hash inline.
+const dependencyTransitionKey = (headCwd, baseCwd) =>
+  `${digestText(collectDependencyFingerprint(baseCwd))}:${digestText(collectDependencyFingerprint(headCwd))}`
+
 const describeDependencyDrift = (headCwd, baseCwd) => {
   const head = collectDependencyFingerprint(headCwd)
   const base = collectDependencyFingerprint(baseCwd)
@@ -1048,12 +1054,20 @@ const withRevisionWorktree = (repoCwd, revision, fn) => {
     }
 
     // Never reuse head dependencies when the committed lockfile/manifest
-    // dependency set differs. A full base install is too costly/networked for
-    // CI, so fail closed and ask maintainers to land dependency changes alone.
+    // dependency set differs: the base collection would then be computed with
+    // head's resolved packages, which is exactly how a dependency change can
+    // retroactively narrow the base set. A full base install is too
+    // costly/networked for every CI run, so fail closed — but a blanket refusal
+    // would leave no way to land any dependency upgrade at all, so one exact
+    // transition may be pre-authorized from the merge base.
     if (!dependencyFingerprintsMatch(absoluteRepo, worktree)) {
-      throw new CheckFailure(
-        `RT-2 refuses to compare Vitest collections across dependency changes; land package manager / Vitest upgrades in a dedicated PR without test-set reductions (${describeDependencyDrift(absoluteRepo, worktree)})`,
-      )
+      const transition = dependencyTransitionKey(absoluteRepo, worktree)
+      const approved = readApprovedDependencyTransitions(absoluteRepo, revision)
+      if (!approved.has(transition)) {
+        throw new CheckFailure(
+          `RT-2 refuses to compare Vitest collections across an unapproved dependency change (${describeDependencyDrift(absoluteRepo, worktree)}). Land the dependency change in a policy-only PR that adds this exact entry under ratchets.RT-2.approved_dependency_transitions in .github/grading/config.yml, then rebase: "${transition}"`,
+        )
+      }
     }
 
     // Same committed dependency set: detached worktrees lack gitignored
@@ -1153,6 +1167,21 @@ const readApprovedRemovals = (cwd, base) => {
     const listed = config?.ratchets?.["RT-2"]?.approved_test_removals
     if (!Array.isArray(listed)) return new Set()
     return new Set(listed.map((entry) => normalizeRepoPath(String(entry))))
+  } catch {
+    return new Set()
+  }
+}
+
+const readApprovedDependencyTransitions = (cwd, base) => {
+  // Same §10.1 rule as approved_test_removals: the authorization must already
+  // exist at the merge base, so a PR cannot approve its own dependency change.
+  const content = readTextAt(cwd, ".github/grading/config.yml", base)
+  if (!content) return new Set()
+  try {
+    const config = parseYaml(content)
+    const listed = config?.ratchets?.["RT-2"]?.approved_dependency_transitions
+    if (!Array.isArray(listed)) return new Set()
+    return new Set(listed.map((entry) => String(entry).trim()))
   } catch {
     return new Set()
   }
