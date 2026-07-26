@@ -3,7 +3,7 @@
  * Keeps branching out of the Effect entrypoint so complexity stays low.
  */
 
-export type CliUsageFailure = {
+type CliUsageFailure = {
   readonly kind: "usage-error";
   readonly lines: readonly string[];
   readonly errorMessage: string;

@@ -132,9 +132,6 @@ const deepEqualObjects = (a: object, b: object): boolean => {
     );
   }
 
-  // Mixed array/object pairs are never equal.
-  if (Array.isArray(a) || Array.isArray(b)) return false;
-
   const recordA = a as Record<string, unknown>;
   const recordB = b as Record<string, unknown>;
   const keysA = Object.keys(recordA);

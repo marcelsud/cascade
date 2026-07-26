@@ -53,7 +53,7 @@ describe("assertion engine boundaries", () => {
     expect(zeroResults[0]?.passed).toBe(true);
   });
 
-  it("only recurses when both values are arrays", async () => {
+  it("falls through mixed array/object pairs to Object.keys comparison", async () => {
     const results = await run(
       [
         {
@@ -68,7 +68,9 @@ describe("assertion engine boundaries", () => {
         pipelineSuccess: true,
       },
     );
-    expect(results[0]?.passed).toBe(false);
+    // Base deepEqual only special-cased both-arrays; mixed pairs used keys.
+    // Object.keys([1]) === ["0"] and Object.keys({0:1}) === ["0"], so equal.
+    expect(results[0]?.passed).toBe(true);
   });
 
   it("counts only literal true JSONata results as matches", async () => {

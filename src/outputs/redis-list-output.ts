@@ -85,7 +85,6 @@ export const createRedisListOutput = (
   const connectionInfo = formatRedisConnectionInfo(config);
   const metrics = new MetricsAccumulator("redis-list-output");
   let messageCount = 0;
-  const maxRetries = config.maxRetries ?? 3;
 
   return {
     name: "redis-list-output",
@@ -134,8 +133,8 @@ export const createRedisListOutput = (
               ),
           }),
           metrics,
-          maxRetries,
-          `Redis push failed after ${maxRetries} retries: `,
+          config.maxRetries ?? 3,
+          `Redis push failed after ${config.maxRetries ?? 3} retries: `,
         );
 
         messageCount = yield* recordRedisSendSuccess(
@@ -150,6 +149,7 @@ export const createRedisListOutput = (
         );
       });
     },
-    close: () => closeRedisOutput(client, metrics, messageCount),
+    close: () =>
+      Effect.suspend(() => closeRedisOutput(client, metrics, messageCount)),
   };
 };

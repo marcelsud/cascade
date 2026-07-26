@@ -78,7 +78,6 @@ export const createRedisPubSubOutput = (
   const connectionInfo = formatRedisConnectionInfo(config);
   const metrics = new MetricsAccumulator("redis-pubsub-output");
   let messageCount = 0;
-  const maxRetries = config.maxRetries ?? 3;
 
   return {
     name: "redis-pubsub-output",
@@ -107,8 +106,8 @@ export const createRedisPubSubOutput = (
               ),
           }),
           metrics,
-          maxRetries,
-          `Redis publish failed after ${maxRetries} retries: `,
+          config.maxRetries ?? 3,
+          `Redis publish failed after ${config.maxRetries ?? 3} retries: `,
         );
 
         // Log warning if no subscribers received the message
@@ -130,6 +129,7 @@ export const createRedisPubSubOutput = (
         );
       });
     },
-    close: () => closeRedisOutput(client, metrics, messageCount),
+    close: () =>
+      Effect.suspend(() => closeRedisOutput(client, metrics, messageCount)),
   };
 };
