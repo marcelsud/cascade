@@ -28,6 +28,10 @@ ratchets:
   RT-2:
     check: "node .github/grading/checks.mjs test-integrity --base $BASE_SHA && npm run test:unit"
     enforcement: ci-blocking
+    # Paths removed from the blocking unit collection must be listed here in a
+    # dedicated policy PR. Unlisted reductions fail RT-2 closed.
+    approved_test_removals: []
+
   RT-4:
     check: "npm run test:coverage; node .github/grading/checks.mjs coverage --report <output> --config .github/grading/config.yml"
     enforcement: report-only
