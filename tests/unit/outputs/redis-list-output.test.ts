@@ -417,8 +417,7 @@ describe("RedisListOutput", () => {
         },
         output: {
           redis_list: {
-            host: "localhost",
-            port: 6379,
+            url: "redis://localhost:6379",
             key,
             max_length: 2,
           },
@@ -461,8 +460,7 @@ describe("RedisListOutput", () => {
         },
         output: {
           redis_list: {
-            host: "localhost",
-            port: 6379,
+            url: "redis://localhost:6379",
             key,
             max_len: 2,
           },

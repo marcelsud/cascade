@@ -42,6 +42,7 @@ import { createFileOutput } from "../outputs/file-output.js";
 import { createGenerateInput } from "../testing/generate-input.js";
 import { createCaptureOutput } from "../testing/capture-output.js";
 import { createAssertProcessor } from "../testing/assert-processor.js";
+import { tryParseRedisUrl, type RedisConnection } from "./redis-url.js";
 
 export class BuildError {
   readonly _tag = "BuildError";
@@ -58,41 +59,15 @@ const mapCustomBuildError = (name: string, error: unknown): BuildError =>
     `Failed to build registered component '${name}': ${error instanceof Error ? error.message : String(error)}`,
   );
 
-type RedisStreamsConnection = {
-  host: string;
-  port: number;
-  password: string | undefined;
-  db: number | undefined;
-};
-
-const parseRedisStreamsUrl = (
+const parseRedisUrl = (
   url: string,
-  context: "input" | "output",
-): Effect.Effect<RedisStreamsConnection, BuildError> => {
-  // Require authority-form redis:// so opaque paths like redis:host:port
-  // cannot silently resolve to localhost.
-  if (!/^redis:\/\//i.test(url)) {
-    return Effect.fail(new BuildError(`Invalid Redis Streams ${context} URL`));
+  label: string,
+): Effect.Effect<RedisConnection, BuildError> => {
+  const parsed = tryParseRedisUrl(url);
+  if (!parsed) {
+    return Effect.fail(new BuildError(`Invalid ${label} URL`));
   }
-
-  let urlObj: URL;
-  try {
-    urlObj = new URL(url);
-  } catch {
-    return Effect.fail(new BuildError(`Invalid Redis Streams ${context} URL`));
-  }
-
-  if (urlObj.protocol !== "redis:") {
-    return Effect.fail(new BuildError(`Invalid Redis Streams ${context} URL`));
-  }
-
-  const pathMatch = urlObj.pathname.match(/^\/(\d+)/);
-  return Effect.succeed({
-    host: urlObj.hostname || "localhost",
-    port: urlObj.port ? parseInt(urlObj.port, 10) : 6379,
-    password: urlObj.password || undefined,
-    db: pathMatch ? parseInt(pathMatch[1], 10) : undefined,
-  });
+  return Effect.succeed(parsed);
 };
 
 /**
@@ -139,7 +114,7 @@ const buildInputInternal = (
 
   if (config.redis_streams) {
     const streams = config.redis_streams;
-    return parseRedisStreamsUrl(streams.url, "input").pipe(
+    return parseRedisUrl(streams.url, "Redis Streams input").pipe(
       Effect.flatMap(({ host, port, password, db }) =>
         Effect.try({
           try: () =>
@@ -175,31 +150,37 @@ const buildInputInternal = (
 
   if (config.redis_pubsub) {
     const redisPubSub = config.redis_pubsub;
-    return Effect.try({
-      try: () =>
-        createRedisPubSubInput({
-          host: redisPubSub.host || "localhost",
-          port: redisPubSub.port || 6379,
-          channels: redisPubSub.channels
-            ? [...redisPubSub.channels]
-            : undefined,
-          patterns: redisPubSub.patterns
-            ? [...redisPubSub.patterns]
-            : undefined,
-          password: redisPubSub.password,
-          db: redisPubSub.db,
-          queueSize: redisPubSub.queue_size,
-          overflow: redisPubSub.overflow,
-          connectTimeout: redisPubSub.connect_timeout,
-          commandTimeout: redisPubSub.command_timeout,
-          keepAlive: redisPubSub.keep_alive,
-          lazyConnect: redisPubSub.lazy_connect,
-          maxRetriesPerRequest: redisPubSub.max_retries_per_request,
-          enableOfflineQueue: redisPubSub.enable_offline_queue,
+    return parseRedisUrl(redisPubSub.url, "Redis Pub/Sub input").pipe(
+      Effect.flatMap(({ host, port, password, db }) =>
+        Effect.try({
+          try: () =>
+            createRedisPubSubInput({
+              host,
+              port,
+              channels: redisPubSub.channels
+                ? [...redisPubSub.channels]
+                : undefined,
+              patterns: redisPubSub.patterns
+                ? [...redisPubSub.patterns]
+                : undefined,
+              password: redisPubSub.password ?? password,
+              db: redisPubSub.db ?? db,
+              queueSize: redisPubSub.queue_size,
+              overflow: redisPubSub.overflow,
+              connectTimeout: redisPubSub.connect_timeout,
+              commandTimeout: redisPubSub.command_timeout,
+              keepAlive: redisPubSub.keep_alive,
+              lazyConnect: redisPubSub.lazy_connect,
+              maxRetriesPerRequest: redisPubSub.max_retries_per_request,
+              enableOfflineQueue: redisPubSub.enable_offline_queue,
+            }),
+          catch: (error) =>
+            new BuildError(
+              error instanceof Error ? error.message : String(error),
+            ),
         }),
-      catch: (error) =>
-        new BuildError(error instanceof Error ? error.message : String(error)),
-    });
+      ),
+    );
   }
 
   if (config.redis_list) {
@@ -207,28 +188,34 @@ const buildInputInternal = (
     const key =
       typeof redisList.key === "string" ? redisList.key : [...redisList.key];
 
-    return Effect.try({
-      try: () =>
-        createRedisListInput({
-          host: redisList.host || "localhost",
-          port: redisList.port || 6379,
-          key,
-          direction: redisList.direction,
-          timeout: redisList.timeout,
-          password: redisList.password,
-          db: redisList.db,
-          connectTimeout: redisList.connect_timeout,
-          commandTimeout: redisList.command_timeout,
-          keepAlive: redisList.keep_alive,
-          lazyConnect: redisList.lazy_connect,
-          maxRetriesPerRequest: redisList.max_retries_per_request,
-          enableOfflineQueue: redisList.enable_offline_queue,
-          maxReconnectAttempts: redisList.max_reconnect_attempts,
-          reconnectBackoffMs: redisList.reconnect_backoff_ms,
+    return parseRedisUrl(redisList.url, "Redis List input").pipe(
+      Effect.flatMap(({ host, port, password, db }) =>
+        Effect.try({
+          try: () =>
+            createRedisListInput({
+              host,
+              port,
+              key,
+              direction: redisList.direction,
+              timeout: redisList.timeout,
+              password: redisList.password ?? password,
+              db: redisList.db ?? db,
+              connectTimeout: redisList.connect_timeout,
+              commandTimeout: redisList.command_timeout,
+              keepAlive: redisList.keep_alive,
+              lazyConnect: redisList.lazy_connect,
+              maxRetriesPerRequest: redisList.max_retries_per_request,
+              enableOfflineQueue: redisList.enable_offline_queue,
+              maxReconnectAttempts: redisList.max_reconnect_attempts,
+              reconnectBackoffMs: redisList.reconnect_backoff_ms,
+            }),
+          catch: (error) =>
+            new BuildError(
+              error instanceof Error ? error.message : String(error),
+            ),
         }),
-      catch: (error) =>
-        new BuildError(error instanceof Error ? error.message : String(error)),
-    });
+      ),
+    );
   }
 
   if (config.http) {
@@ -491,7 +478,7 @@ const buildOutput = (
 ): Effect.Effect<Output<any>, BuildError> => {
   if (config.redis_streams) {
     const streams = config.redis_streams;
-    return parseRedisStreamsUrl(streams.url, "output").pipe(
+    return parseRedisUrl(streams.url, "Redis Streams output").pipe(
       Effect.map(({ host, port, password, db }) =>
         createRedisStreamsOutput({
           host,
@@ -530,42 +517,48 @@ const buildOutput = (
   }
 
   if (config.redis_pubsub) {
-    return Effect.succeed(
-      createRedisPubSubOutput({
-        host: config.redis_pubsub.host || "localhost",
-        port: config.redis_pubsub.port || 6379,
-        channel: config.redis_pubsub.channel,
-        password: config.redis_pubsub.password,
-        db: config.redis_pubsub.db,
-        maxRetries: config.redis_pubsub.max_retries,
-        connectTimeout: config.redis_pubsub.connect_timeout,
-        commandTimeout: config.redis_pubsub.command_timeout,
-        keepAlive: config.redis_pubsub.keep_alive,
-        lazyConnect: config.redis_pubsub.lazy_connect,
-        maxRetriesPerRequest: config.redis_pubsub.max_retries_per_request,
-        enableOfflineQueue: config.redis_pubsub.enable_offline_queue,
-      }),
+    const redisPubSub = config.redis_pubsub;
+    return parseRedisUrl(redisPubSub.url, "Redis Pub/Sub output").pipe(
+      Effect.map(({ host, port, password, db }) =>
+        createRedisPubSubOutput({
+          host,
+          port,
+          channel: redisPubSub.channel,
+          password: redisPubSub.password ?? password,
+          db: redisPubSub.db ?? db,
+          maxRetries: redisPubSub.max_retries,
+          connectTimeout: redisPubSub.connect_timeout,
+          commandTimeout: redisPubSub.command_timeout,
+          keepAlive: redisPubSub.keep_alive,
+          lazyConnect: redisPubSub.lazy_connect,
+          maxRetriesPerRequest: redisPubSub.max_retries_per_request,
+          enableOfflineQueue: redisPubSub.enable_offline_queue,
+        }),
+      ),
     );
   }
 
   if (config.redis_list) {
-    return Effect.succeed(
-      createRedisListOutput({
-        host: config.redis_list.host || "localhost",
-        port: config.redis_list.port || 6379,
-        key: config.redis_list.key,
-        direction: config.redis_list.direction,
-        maxLen: config.redis_list.max_length ?? config.redis_list.max_len,
-        password: config.redis_list.password,
-        db: config.redis_list.db,
-        maxRetries: config.redis_list.max_retries,
-        connectTimeout: config.redis_list.connect_timeout,
-        commandTimeout: config.redis_list.command_timeout,
-        keepAlive: config.redis_list.keep_alive,
-        lazyConnect: config.redis_list.lazy_connect,
-        maxRetriesPerRequest: config.redis_list.max_retries_per_request,
-        enableOfflineQueue: config.redis_list.enable_offline_queue,
-      }),
+    const redisList = config.redis_list;
+    return parseRedisUrl(redisList.url, "Redis List output").pipe(
+      Effect.map(({ host, port, password, db }) =>
+        createRedisListOutput({
+          host,
+          port,
+          key: redisList.key,
+          direction: redisList.direction,
+          maxLen: redisList.max_length ?? redisList.max_len,
+          password: redisList.password ?? password,
+          db: redisList.db ?? db,
+          maxRetries: redisList.max_retries,
+          connectTimeout: redisList.connect_timeout,
+          commandTimeout: redisList.command_timeout,
+          keepAlive: redisList.keep_alive,
+          lazyConnect: redisList.lazy_connect,
+          maxRetriesPerRequest: redisList.max_retries_per_request,
+          enableOfflineQueue: redisList.enable_offline_queue,
+        }),
+      ),
     );
   }
 
