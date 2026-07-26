@@ -506,9 +506,14 @@ export const run = <E, R>(
     );
     const interruptedResult = (
       reason: "timed-out" | "forced",
-    ): Effect.Effect<PipelineResult> =>
+    ): Effect.Effect<PipelineResult, never, R> =>
       Effect.gen(function* () {
-        yield* Effect.forkDaemon(Fiber.interrupt(executionFiber));
+        // Await interruption so FiberSet/scope finalizers settle before close.
+        yield* Fiber.interrupt(executionFiber);
+        const closeResult = yield* Effect.either(ensureClose);
+        if (closeResult._tag === "Left") {
+          yield* recordTerminalError(closeResult.left);
+        }
         return yield* failedResult(new PipelineShutdownError(reason), reason);
       });
 
