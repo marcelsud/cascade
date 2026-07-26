@@ -414,7 +414,8 @@ Real Input → Real Processors → Real Output
 **Example:**
 ```typescript
 it("should process orders end-to-end", async () => {
-  const input = createHttpInput({ port: 8080 })
+  // createHttpInput binds the port before resolving, so it returns an Effect.
+  const input = await Effect.runPromise(createHttpInput({ port: 8080 }))
 
   const processors = [
     createFilterProcessor({ condition: 'content.type = "order"' }),

@@ -184,6 +184,48 @@ describe("pipeline-builder input construction errors", () => {
     );
   });
 
+  it("converts http input occupied-port bind failure into BuildError Fail", async () => {
+    const port = await reserveFreePort();
+    const blocker = createServer();
+
+    await new Promise<void>((resolve, reject) => {
+      blocker.once("error", reject);
+      blocker.listen(port, "127.0.0.1", () => resolve());
+    });
+
+    try {
+      const exit = await Effect.runPromiseExit(
+        buildPipeline({
+          input: {
+            http: {
+              port,
+              host: "127.0.0.1",
+            },
+          },
+          output: {
+            capture: {},
+          },
+        } as PipelineConfig),
+      );
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) {
+        expect(Option.isSome(Cause.failureOption(exit.cause))).toBe(true);
+        expect(Option.isNone(Cause.dieOption(exit.cause))).toBe(true);
+
+        const failure = Option.getOrThrow(Cause.failureOption(exit.cause));
+        expect(failure).toBeInstanceOf(BuildError);
+        expect(failure.message).toContain("127.0.0.1");
+        expect(failure.message).toContain(String(port));
+        expect(failure.message.toLowerCase()).toMatch(/eaddrinuse|in use|failed to bind/);
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        blocker.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("does not open HTTP input when assert processor construction fails", async () => {
     const port = await reserveFreePort();
 

@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { createServer } from "node:http";
+import { createServer, Server } from "node:http";
 import { createConnection, type Socket } from "node:net";
-import { Effect, Either } from "effect";
+import {
+  Cause,
+  Effect,
+  Either,
+  Exit,
+  Fiber,
+  FiberId,
+  Option,
+} from "effect";
+import type { Input } from "../../../src/core/types.js";
 import {
   createHttpInput,
   HttpInputError,
@@ -83,6 +92,178 @@ describe("HTTP input validation", () => {
   });
 });
 
+describe("HTTP input bind lifecycle", () => {
+  it("fails with a typed HttpInputError when the port is occupied", async () => {
+    const port = await reserveFreePort();
+    const blocker = createServer();
+
+    await new Promise<void>((resolve, reject) => {
+      blocker.once("error", reject);
+      blocker.listen(port, "127.0.0.1", () => resolve());
+    });
+
+    try {
+      const either = await Effect.runPromise(
+        Effect.either(
+          createHttpInput({
+            port,
+            host: "127.0.0.1",
+          }),
+        ),
+      );
+
+      expect(Either.isLeft(either)).toBe(true);
+      if (Either.isLeft(either)) {
+        expect(either.left).toBeInstanceOf(HttpInputError);
+        expect(either.left.category).toBe("fatal");
+        expect(either.left.message).toContain("127.0.0.1");
+        expect(either.left.message).toContain(String(port));
+        expect(either.left.message.toLowerCase()).toMatch(/eaddrinuse|in use/);
+      }
+
+      // Typed failure channel, not a defect.
+      const exit = await Effect.runPromiseExit(
+        createHttpInput({
+          port,
+          host: "127.0.0.1",
+        }),
+      );
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) {
+        expect(Option.isSome(Cause.failureOption(exit.cause))).toBe(true);
+        expect(Option.isNone(Cause.dieOption(exit.cause))).toBe(true);
+        const failure = Option.getOrThrow(Cause.failureOption(exit.cause));
+        expect(failure).toBeInstanceOf(HttpInputError);
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        blocker.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("resolves to a ready input only after a successful ephemeral bind", async () => {
+    const port = await reserveFreePort();
+    const input = await Effect.runPromise(
+      createHttpInput({
+        port,
+        host: "127.0.0.1",
+      }),
+    );
+
+    try {
+      expect(input.name).toBe("http-input");
+      expect(input.getMetrics?.()).toMatchObject({
+        messagesProcessed: 0,
+        errorsEncountered: 0,
+      });
+    } finally {
+      await Effect.runPromise(input.close());
+    }
+  });
+
+  it("releases the port when interrupted during bind so a rebind succeeds", async () => {
+    const port = await reserveFreePort();
+
+    // Fork the bind, yield so the child reaches Effect.async (listen pending on
+    // the next event-loop tick), then interrupt — no wall-clock sleeps.
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const fiber = yield* Effect.fork(
+          createHttpInput({
+            port,
+            host: "127.0.0.1",
+          }),
+        );
+        yield* Effect.yieldNow();
+        yield* Fiber.interrupt(fiber);
+      }),
+    );
+
+    // If the interrupted attempt leaked a bound server, this rebind would fail
+    // with EADDRINUSE. Success proves the cancellation finalizer released the port.
+    const input = await Effect.runPromise(
+      createHttpInput({
+        port,
+        host: "127.0.0.1",
+      }),
+    );
+
+    try {
+      expect(input.name).toBe("http-input");
+    } finally {
+      await Effect.runPromise(input.close());
+    }
+  });
+
+  it("releases the port when interrupted after bind resume before ownership transfers", async () => {
+    // Targets the resume/interrupt race: onListening has called resume (settled
+    // + boundServer set) but ownershipTransferred is still false. Interrupt is
+    // injected on the same listening turn, after createHttpInput's handler, so
+    // the fiber message queue is [RESUME, INTERRUPT] before the runtime drains
+    // it — no wall-clock sleeps.
+    //
+    // Covers: async canceler with settled=true + outer onInterrupt while the
+    // construction Effect has not yet returned the Input.
+    // Does not separately assert which of those two cleanups ran first.
+    const port = await reserveFreePort();
+    const originalListen = Server.prototype.listen;
+    let targetFiber:
+      | Fiber.RuntimeFiber<Input<HttpInputError>, HttpInputError>
+      | undefined;
+
+    Server.prototype.listen = function (
+      this: Server,
+      ...args: Parameters<Server["listen"]>
+    ) {
+      // Callers register `once("listening")` before listen(); this runs after.
+      const result = originalListen.apply(this, args as never);
+      this.on("listening", () => {
+        targetFiber?.unsafeInterruptAsFork(FiberId.none);
+      });
+      return result;
+    };
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.fork(
+            createHttpInput({
+              port,
+              host: "127.0.0.1",
+            }),
+          );
+          // Child has registered listen and is suspended on the async bind;
+          // listening has not fired yet (next I/O turn).
+          targetFiber = fiber;
+          const exit = yield* Fiber.await(fiber);
+          expect(Exit.isFailure(exit)).toBe(true);
+          if (Exit.isFailure(exit)) {
+            expect(Cause.isInterruptedOnly(exit.cause)).toBe(true);
+          }
+        }),
+      );
+    } finally {
+      Server.prototype.listen = originalListen;
+      targetFiber = undefined;
+    }
+
+    // Unowned bound server would leave EADDRINUSE; success proves release.
+    const input = await Effect.runPromise(
+      createHttpInput({
+        port,
+        host: "127.0.0.1",
+      }),
+    );
+
+    try {
+      expect(input.name).toBe("http-input");
+    } finally {
+      await Effect.runPromise(input.close());
+    }
+  });
+});
+
 describe("HTTP input request body timeout", () => {
   // Real wall-clock timing is required: AC measures absolute body-read timeout
   // against incomplete sockets (fake timers cannot exercise Node HTTP I/O).
@@ -90,12 +271,14 @@ describe("HTTP input request body timeout", () => {
     const port = await reserveFreePort();
     expect(port).toBeGreaterThan(0);
 
-    const input = createHttpInput({
-      port,
-      host: "127.0.0.1",
-      path: "/webhook",
-      timeout: 100,
-    });
+    const input = await Effect.runPromise(
+      createHttpInput({
+        port,
+        host: "127.0.0.1",
+        path: "/webhook",
+        timeout: 100,
+      }),
+    );
 
     let client: Socket | undefined;
     try {
@@ -210,12 +393,14 @@ describe("HTTP input request body limit", () => {
   it("rejects declared Content-Length above the limit with 413 before buffering", async () => {
     const port = await reserveFreePort();
     const maxBodyBytes = 64;
-    const input = createHttpInput({
-      port,
-      host: "127.0.0.1",
-      path: "/webhook",
-      maxBodyBytes,
-    });
+    const input = await Effect.runPromise(
+      createHttpInput({
+        port,
+        host: "127.0.0.1",
+        path: "/webhook",
+        maxBodyBytes,
+      }),
+    );
 
     let client: Socket | undefined;
     try {
@@ -254,12 +439,14 @@ describe("HTTP input request body limit", () => {
   it("stops accumulating a chunked body once the limit is crossed", async () => {
     const port = await reserveFreePort();
     const maxBodyBytes = 64;
-    const input = createHttpInput({
-      port,
-      host: "127.0.0.1",
-      path: "/webhook",
-      maxBodyBytes,
-    });
+    const input = await Effect.runPromise(
+      createHttpInput({
+        port,
+        host: "127.0.0.1",
+        path: "/webhook",
+        maxBodyBytes,
+      }),
+    );
 
     let client: Socket | undefined;
     try {
@@ -305,12 +492,14 @@ describe("HTTP input request body limit", () => {
   it("accepts a body of exactly the configured limit", async () => {
     const port = await reserveFreePort();
     const maxBodyBytes = 64;
-    const input = createHttpInput({
-      port,
-      host: "127.0.0.1",
-      path: "/webhook",
-      maxBodyBytes,
-    });
+    const input = await Effect.runPromise(
+      createHttpInput({
+        port,
+        host: "127.0.0.1",
+        path: "/webhook",
+        maxBodyBytes,
+      }),
+    );
 
     let client: Socket | undefined;
     try {
@@ -354,12 +543,14 @@ describe("HTTP input request body limit", () => {
   it("frames an under-declared Content-Length at the declared length and rejects surplus octets", async () => {
     const port = await reserveFreePort();
     const maxBodyBytes = 64;
-    const input = createHttpInput({
-      port,
-      host: "127.0.0.1",
-      path: "/webhook",
-      maxBodyBytes,
-    });
+    const input = await Effect.runPromise(
+      createHttpInput({
+        port,
+        host: "127.0.0.1",
+        path: "/webhook",
+        maxBodyBytes,
+      }),
+    );
 
     let client: Socket | undefined;
     try {
