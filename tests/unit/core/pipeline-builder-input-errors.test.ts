@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { Cause, Effect, Exit, Option } from "effect";
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -24,6 +25,35 @@ const createTempDir = async (): Promise<string> => {
   );
   tempDirs.push(dir);
   return dir;
+};
+
+const reserveFreePort = async (): Promise<number> => {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    server.close();
+    throw new Error("Failed to reserve a free TCP port");
+  }
+  const { port } = address;
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+  return port;
+};
+
+const assertPortIsFree = async (port: number): Promise<void> => {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", () => resolve());
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
 };
 
 afterEach(async () => {
@@ -153,6 +183,42 @@ describe("pipeline-builder input construction errors", () => {
       } as PipelineConfig,
       "Port must be between 1 and 65535",
     );
+  });
+
+  it("does not open HTTP input when assert processor construction fails", async () => {
+    const port = await reserveFreePort();
+
+    const exit = await Effect.runPromiseExit(
+      buildPipeline({
+        input: {
+          http: {
+            port,
+            host: "127.0.0.1",
+          },
+        },
+        pipeline: {
+          processors: [{ assert: {} }],
+        },
+        output: {
+          capture: {},
+        },
+      } as PipelineConfig),
+    );
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      expect(Option.isSome(Cause.failureOption(exit.cause))).toBe(true);
+      expect(Option.isNone(Cause.dieOption(exit.cause))).toBe(true);
+
+      const failure = Option.getOrThrow(Cause.failureOption(exit.cause));
+      expect(failure).toBeInstanceOf(BuildError);
+      expect(failure.message).toContain("Invalid assert processor configuration");
+      expect(failure.message).toContain("Assert Processor");
+    }
+
+    // Processors are built before inputs, so a failed assert must leave the
+    // reserved HTTP port free (no abandoned listening server).
+    await expect(assertPortIsFree(port)).resolves.toBeUndefined();
   });
 
   it("still builds a valid file input configuration", async () => {
