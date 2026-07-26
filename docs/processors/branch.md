@@ -27,7 +27,8 @@ pipeline:
 
 ## Behavior
 
-1. Creates a deep copy of the incoming message
+1. Creates a structured clone of the incoming message content (plus a shallow
+   copy of metadata) for the nested chain
 2. Executes all nested processors sequentially on the copy
 3. Merges each processed result into `metadata.branchResult`
 4. Returns one copy of the **original message** for each branch result
@@ -35,6 +36,28 @@ pipeline:
 If the nested chain produces no results, the original is suppressed. If it
 produces multiple results, the branch emits multiple copies of the original in
 the same order, each with its corresponding branch result.
+
+### Content copy boundary
+
+Branch content is copied with the runtime **structured clone** algorithm
+(`structuredClone`), not JSON serialization. That preserves type and value for
+structured-cloneable content, including:
+
+- `undefined`
+- `bigint`
+- `Date`
+- `Map` / `Set`
+- circular object graphs
+
+Nested processors therefore see an isolated copy; mutations on the branch do
+not change the original content object. The emitted main message keeps the
+original content and pre-existing metadata (aside from the added
+`branchResult`).
+
+Content that cannot be structurally cloned (for example objects containing
+functions) fails with a typed **`BranchProcessorError`** on the Effect failure
+channel. That routes through normal pipeline failure / DLQ handling instead of
+crashing the pipeline as a defect (`Die` / unhandled `DataCloneError`).
 
 ### Example
 
@@ -75,11 +98,12 @@ the same order, each with its corresponding branch result.
 1. **API Enrichment**: Use branch when calling external APIs to preserve original message
 2. **Metadata Only**: If you only need metadata changes, don't use branch (use regular processors)
 3. **Nested Depth**: Keep branch nesting shallow (max 2 levels) for readability
-4. **Performance**: Branch creates deep clones - avoid in high-throughput scenarios
+4. **Performance**: Branch creates structured clones - avoid in high-throughput scenarios
 
 ## Implementation Details
 
-- Uses `JSON.parse(JSON.stringify())` for deep cloning
+- Uses `structuredClone` for content copying (preserves cloneable non-JSON types)
+- Uncloneable content fails as typed `BranchProcessorError` (logical), not a defect
 - Nested processors can themselves be branch/switch processors (recursive)
 - Preserves zero-or-many results from nested processor chains
 - Thread-safe and stateless
