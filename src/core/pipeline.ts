@@ -177,7 +177,7 @@ export const run = <E, R>(
         const collector = yield* Ref.get(errorsRef);
         // Primary close/timeout/force error first, then retained sample and
         // terminal diagnostics — same identity pass as fatal assembly.
-        const errors = assembleErrorSample({
+        const { errors, errorsOmitted } = assembleErrorSample({
           hasPrimary: true,
           primary: error,
           collector,
@@ -186,9 +186,7 @@ export const run = <E, R>(
           success: false,
           stats,
           errors: errors.length > 0 ? errors : undefined,
-          ...(collector.omitted > 0
-            ? { errorsOmitted: collector.omitted }
-            : {}),
+          ...(errorsOmitted > 0 ? { errorsOmitted } : {}),
           shutdown: shutdownReason,
           metrics: snapshotMetrics(),
         } satisfies PipelineResult;
@@ -206,7 +204,7 @@ export const run = <E, R>(
         const collector = yield* Ref.get(errorsRef);
         const fatalCause = yield* Ref.get(fatalCauseRef);
         const hasCurrentFatal = fatalCause !== NO_FATAL_CAUSE;
-        const errors = assembleErrorSample({
+        const { errors, errorsOmitted } = assembleErrorSample({
           hasCurrentFatal,
           currentFatal: hasCurrentFatal ? fatalCause : undefined,
           collector,
@@ -217,9 +215,7 @@ export const run = <E, R>(
           success: false,
           stats,
           errors: errors.length > 0 ? errors : undefined,
-          ...(collector.omitted > 0
-            ? { errorsOmitted: collector.omitted }
-            : {}),
+          ...(errorsOmitted > 0 ? { errorsOmitted } : {}),
           metrics: snapshotMetrics(),
         } satisfies PipelineResult;
       });
@@ -472,13 +468,13 @@ export const run = <E, R>(
           collector.retained.length > 0 || collector.terminal.length > 0
             ? [...collector.retained, ...collector.terminal]
             : undefined;
+        const errorsOmitted =
+          collector.omitted + collector.fatalOverflowOmitted;
         return {
           success: finalStats.failed === 0,
           stats: finalStats,
           errors: sample,
-          ...(collector.omitted > 0
-            ? { errorsOmitted: collector.omitted }
-            : {}),
+          ...(errorsOmitted > 0 ? { errorsOmitted } : {}),
           metrics: snapshotMetrics(),
         } satisfies PipelineResult;
       }),

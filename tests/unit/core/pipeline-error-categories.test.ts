@@ -13,6 +13,7 @@ import {
 import {
   MAX_ADDITIONAL_FATAL_SAMPLES,
   MAX_RETAINED_HISTORICAL_ERRORS,
+  assembleErrorSample,
   collectHistoricalError,
   collectTerminalError,
   createErrorCollector,
@@ -1055,6 +1056,65 @@ describe("pipeline error categories", () => {
     ).toBe(true);
     // Total = primary + retained (close not already in retained).
     expect(errors.length).toBe(1 + MAX_RETAINED_HISTORICAL_ERRORS);
+  });
+
+  it("does not count a current overflow fatal as omitted", () => {
+    // After first + extra fatal slots and the historical sample are full, a
+    // replacement current-fatal still appears in the assembled sample and must
+    // not inflate errorsOmitted (CLI would claim a shown diagnostic is missing).
+    const collector = createErrorCollector();
+    for (let i = 0; i < MAX_RETAINED_HISTORICAL_ERRORS; i++) {
+      collectHistoricalError(
+        collector,
+        new CategorizedTestError(`seed-fatal-${i}`, "fatal"),
+      );
+    }
+    expect(collector.extraFatals).toHaveLength(MAX_ADDITIONAL_FATAL_SAMPLES);
+    expect(collector.retained).toHaveLength(MAX_RETAINED_HISTORICAL_ERRORS);
+
+    const replacement = new CategorizedTestError(
+      "replacement-current-overflow",
+      "fatal",
+    );
+    collectHistoricalError(collector, replacement);
+
+    const { errors, errorsOmitted } = assembleErrorSample({
+      hasCurrentFatal: true,
+      currentFatal: replacement,
+      collector,
+    });
+
+    expect(errors).toContain(replacement);
+    expect(errorsOmitted).toBe(0);
+  });
+
+  it("counts repeated primitive fatal overflows per observation minus current slot", () => {
+    // Primitive fatal overflows are not identity-deduped after the cap (same
+    // axis as nonfatal primitives). Each observation counts, but the live
+    // current-fatal slot holding that value is in the sample once, so one
+    // observation is excluded from the reported omission total.
+    const collector = createErrorCollector();
+    for (let i = 0; i < MAX_RETAINED_HISTORICAL_ERRORS; i++) {
+      collectHistoricalError(
+        collector,
+        new CategorizedTestError(`seed-fatal-${i}`, "fatal"),
+      );
+    }
+    // detectCategory classifies messages containing "unauthorized" as fatal.
+    const primitiveFatal = "unauthorized-primitive-overflow";
+    collectHistoricalError(collector, primitiveFatal);
+    collectHistoricalError(collector, primitiveFatal);
+    collectHistoricalError(collector, primitiveFatal);
+
+    const { errors, errorsOmitted } = assembleErrorSample({
+      hasCurrentFatal: true,
+      currentFatal: primitiveFatal,
+      collector,
+    });
+
+    expect(errors).toContain(primitiveFatal);
+    expect(errors.filter((error) => error === primitiveFatal)).toHaveLength(1);
+    expect(errorsOmitted).toBe(2);
   });
 
   it("does not export error collector test utils from the package root", async () => {

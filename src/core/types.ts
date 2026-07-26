@@ -124,12 +124,17 @@ export interface PipelineStats {
  * capped; distinct fatal causes use fixed first/current slots plus a small
  * extra sample), not a full failure log. Use `stats.failed` for the exact
  * failure count and `errorsOmitted` for how many diagnostics were dropped
- * after a retention cap and not held in any sample:
- * - over-cap historical nonfatal objects (unique via weak identity)
- * - over-cap historical nonfatal primitives (per observation; values are not
- *   retained after the cap, so strong state stays O(1))
- * - distinct fatals past the fixed fatal-sample capacity that also miss the
- *   historical retained sample
+ * after a retention cap and are not held in any returned sample.
+ *
+ * Omission axes (orthogonal):
+ * - Identity kind: object/function identities are unique (WeakSet dedupe for
+ *   dropped historical objects); primitive values are counted per observation
+ *   without retaining the value after the cap (strong state stays O(1)).
+ * - Failure class: over-cap historical nonfatals, and fatal overflows past the
+ *   fixed first/extra fatal sample that also miss the historical retained
+ *   sample. A live current-fatal slot that only holds such an overflow is part
+ *   of the returned sample and is not counted as omitted.
+ *
  * Terminal close/drain diagnostics are always included when present and are
  * not subject to the historical cap.
  */

@@ -51,13 +51,17 @@ export interface ErrorCollector {
   /** Unique-or-observed historical diagnostics counted into the sampler. */
   total: number;
   /**
-   * Diagnostics dropped after a retention cap and not held in any sample:
-   * - over-cap historical nonfatals: objects counted once (WeakSet dedupe);
-   *   primitives counted per observation without retaining the value
-   * - distinct fatals beyond first + extraFatals that also miss the
-   *   historical retained sample
+   * Over-cap historical nonfatal diagnostics not held in any sample:
+   * objects once (WeakSet dedupe); primitives per observation.
    */
   omitted: number;
+  /**
+   * Fatal overflow observations past first/extra that also miss the historical
+   * retained sample. Objects once (WeakSet dedupe); primitives per observation.
+   * Final reported omissions subtract one at assembly when the live current
+   * fatal is held only in that slot (not first/extra/retained).
+   */
+  fatalOverflowOmitted: number;
   /** Close/drain diagnostics — not subject to the historical retention cap. */
   terminal: unknown[];
 }
@@ -71,6 +75,7 @@ export const createErrorCollector = (): ErrorCollector => ({
   fatalSeen: new Set<unknown>(),
   total: 0,
   omitted: 0,
+  fatalOverflowOmitted: 0,
   terminal: [],
 });
 
@@ -141,10 +146,11 @@ export const collectHistoricalError = (
       // Overflow fatals that still fit in the historical sample are retained
       // there and are not counted as omitted.
     } else {
-      // Historical sample full: fatal-slot overflows are omitted; fatals that
-      // landed in first/extra slots are surfaced there and not omitted.
+      // Historical sample full: track fatal-slot overflows separately. Final
+      // reported omissions are derived at assembly so a live current-fatal
+      // slot that only holds an overflow is not double-counted as missing.
       if (fatalStatus === "overflow") {
-        collector.omitted += 1;
+        collector.fatalOverflowOmitted += 1;
       }
       if (
         (typeof error === "object" && error !== null) ||
@@ -241,7 +247,7 @@ export const assembleErrorSample = (parts: {
   readonly hasCurrentFatal?: boolean;
   readonly collector: ErrorCollector;
   readonly additional?: readonly unknown[];
-}): unknown[] => {
+}): { readonly errors: unknown[]; readonly errorsOmitted: number } => {
   const errors: unknown[] = [];
   const seen = new Set<unknown>();
   const { collector } = parts;
@@ -273,5 +279,24 @@ export const assembleErrorSample = (parts: {
     }
   }
 
-  return errors;
+  // Fatal overflows are counted as they arrive; when the live current-fatal
+  // slot is the only place holding one of those overflows, that observation is
+  // in the returned sample and must not count as omitted.
+  let fatalOmitted = collector.fatalOverflowOmitted;
+  if (parts.hasCurrentFatal === true && fatalOmitted > 0) {
+    const current = parts.currentFatal;
+    const heldInFixedOrRetained =
+      collector.retainedSeen.has(current) ||
+      (collector.firstFatal !== NO_FATAL_CAUSE &&
+        Object.is(collector.firstFatal, current)) ||
+      collector.extraFatals.some((error) => Object.is(error, current));
+    if (!heldInFixedOrRetained) {
+      fatalOmitted -= 1;
+    }
+  }
+
+  return {
+    errors,
+    errorsOmitted: collector.omitted + fatalOmitted,
+  };
 };
