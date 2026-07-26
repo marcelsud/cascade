@@ -10,6 +10,7 @@
 - `grading/config.yml` is the project configuration artifact required by grading-methodology §4.7. It owns the objective registry, the continuous-audit topic registry, baselines, thresholds, exclusions, and enforcement modes.
 - `grading/checks.mjs` and its tests own executable grading checks.
 - `grading/audit.mjs` and its tests own continuous-audit topic selection and ledger access. Selection is pure and reproducible from (ledger, commit, seed); no model runs inside it.
+- `grading/audit-run.mjs` and its tests own the agent-driven run lifecycle: `start`, `check`, `file`, `drop`, `finish`. The agent decides what to claim; this tool decides what leaves the machine.
 - Issue and PR templates own required contribution metadata.
 
 ## Local Contracts
@@ -18,6 +19,8 @@
 - Objective identifiers are stable and are never reused for a different guarantee; stored grade records cite them.
 - Every audit topic cites an objective present in the registry, and every declared topic path exists. Both are asserted by `audit.test.mjs`.
 - The `grading-ledger` branch is append-only data: no source, no CI, never merged into `main`. A failed run records `outcome: failed` and leaves its topic's staleness intact.
+- A candidate's reproduction must fail at the audited commit, and the tool runs it rather than trusting a reported result. `file` is gated on state the tool wrote, never on an agent assertion.
+- Run state lives in `.git/continuous-audit-run.json`: untracked, and an abandoned run is recorded as failed by the next `start`.
 - Blocking ratchets fail closed; report-only complexity, duplication, and coverage checks remain visible without blocking.
 - CI installs from the frozen Bun lockfile and runs unused-code, grading-tool, type, build, integrity, and unit checks.
 - Test-integrity changes preserve detection of focused, skipped, ignored, or collection-reducing tests.
@@ -30,7 +33,7 @@
 ## Verification
 
 - `node --test .github/grading/checks.test.mjs`
-- `node --test .github/grading/audit.test.mjs`
+- `node --test .github/grading/audit.test.mjs .github/grading/audit-run.test.mjs`
 - Run the affected `node .github/grading/checks.mjs <command>` invocation.
 - `node .github/grading/audit.mjs coverage` to inspect topic staleness and churn; `select [--seed <n>]` to pick or replay a run's topic.
 - Review the CI workflow for least privilege and deterministic inputs.

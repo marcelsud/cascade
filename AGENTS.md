@@ -200,19 +200,51 @@ many runs, not from sweeping the repository in one.
 
 Spec: <https://github.com/marcelsud/specs/blob/main/continuous-audit.md>
 
+The loop is **agent-driven**: you are the top-level process and call the tool
+for every deterministic step. Nothing spawns or supervises you.
+
 ```bash
-# Which topics are stale, and how much have they churned since last audit?
-node .github/grading/audit.mjs coverage
-
-# Pick the topic for this run. Record the seed it prints.
-node .github/grading/audit.mjs select
-
-# Reproduce an earlier selection exactly (same ledger + commit + seed).
-node .github/grading/audit.mjs select --seed 12345
+node .github/grading/audit-run.mjs start          # selects the topic, opens the run
+#   ... examine the topic, write a candidate issue body ...
+node .github/grading/audit-run.mjs check c.md     # dedup, verify reproduction, grade
+node .github/grading/audit-run.mjs file  c.md     # create the issue   (--dry-run to rehearse)
+node .github/grading/audit-run.mjs drop  c.md --disposition duplicate --reason "..."
+node .github/grading/audit-run.mjs finish         # append the ledger, close the run
+node .github/grading/audit-run.mjs status         # is a run open?
 ```
 
-`select` prints the chosen topic, the seed, the commit, and the candidate pool
-as JSON. Selection is pure: no model runs, and `--seed` replays it.
+Every command prints JSON on stdout. `start` reports the topic, run id, seed,
+commit, and the fingerprints already recorded for that topic, so you do not
+re-propose what the ledger already holds.
+
+A candidate is the proposed **issue body**, carrying the grading record the
+methodology requires plus one extra block:
+
+```yaml
+audit_candidate:
+  path: src/inputs/http-input.ts
+  consequence_category: reliability
+  normalized_claim: request bodies buffered without a byte limit
+  reproduction:
+    command: ["npx", "vitest", "run", "tests/unit/inputs/http-input.test.ts"]
+```
+
+**The reproduction command must FAIL at the audited commit.** The tool runs it
+itself and does not read your account of having run it. A command that succeeds
+demonstrates working software, so the candidate is recorded `unproven` and
+cannot be filed. The eventual fix is what turns it green.
+
+`file` refuses any candidate that did not pass `check` in the current run, and
+decides that from the tool's own state rather than anything you assert. Resolve
+every verified candidate — `file` it or `drop` it with a reason — or `finish`
+refuses to close the run.
+
+For selection alone, without opening a run:
+
+```bash
+node .github/grading/audit.mjs coverage           # staleness and churn per topic
+node .github/grading/audit.mjs select --seed 123  # replay a selection exactly
+```
 
 **Topic registry**: `topics:` in `.github/grading/config.yml`. Every topic must
 cite an objective from the `objectives:` registry above it, or it is skipped —
