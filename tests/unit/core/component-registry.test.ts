@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { Effect, Either, Stream } from "effect";
+import { Cause, Effect, Either, Exit, Option, Stream } from "effect";
 import * as Schema from "effect/Schema";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -13,9 +13,13 @@ import {
   createPipelineConfigSchema,
   loadConfig,
 } from "../../../src/core/config-loader.js";
-import { buildPipeline } from "../../../src/core/pipeline-builder.js";
+import {
+  BuildError,
+  buildPipeline,
+} from "../../../src/core/pipeline-builder.js";
 import { run } from "../../../src/core/pipeline.js";
 import { createMessage, type Message } from "../../../src/core/types.js";
+import { createAssertProcessor } from "../../../src/testing/assert-processor.js";
 
 const createdPaths: string[] = [];
 
@@ -226,6 +230,81 @@ dlq:
       expect(result.left.message).toBe(
         "Unknown input component 'values' — is the registry passed to buildPipeline?",
       );
+    }
+  });
+
+  it("maps synchronous throws from registered assert wrappers to BuildError Fail", async () => {
+    const registry = createComponentRegistry().registerProcessor({
+      name: "assert_wrap",
+      schema: Schema.Struct({
+        child: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+      }),
+      build: (config) =>
+        Effect.succeed(createAssertProcessor(config.child as never)),
+    });
+    const schema = createPipelineConfigSchema(registry);
+    const config = Schema.decodeUnknownSync(schema)({
+      input: { generate: { count: 1, template: { value: "test" } } },
+      pipeline: { processors: [{ assert_wrap: { child: {} } }] },
+      output: { capture: {} },
+    });
+
+    const exit = await Effect.runPromiseExit(
+      buildPipeline(config, false, registry),
+    );
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      expect(Option.isSome(Cause.failureOption(exit.cause))).toBe(true);
+      expect(Option.isNone(Cause.dieOption(exit.cause))).toBe(true);
+
+      const failure = Option.getOrThrow(Cause.failureOption(exit.cause));
+      expect(failure).toBeInstanceOf(BuildError);
+      expect(failure.message).toContain(
+        "Failed to build registered component 'assert_wrap'",
+      );
+      expect(failure.message).toContain("Assert Processor");
+      expect(failure.message).toContain(
+        "at least one non-blank 'hasFields' path",
+      );
+    }
+  });
+
+  it("preserves nested BuildError diagnostics from context.buildProcessor", async () => {
+    const registry = createComponentRegistry().registerProcessor({
+      name: "assert_via_context",
+      schema: Schema.Struct({
+        child: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+      }),
+      build: (config, context) =>
+        context.buildProcessor({ assert: config.child }),
+    });
+    const schema = createPipelineConfigSchema(registry);
+    const config = Schema.decodeUnknownSync(schema)({
+      input: { generate: { count: 1, template: { value: "test" } } },
+      pipeline: { processors: [{ assert_via_context: { child: {} } }] },
+      output: { capture: {} },
+    });
+
+    const exit = await Effect.runPromiseExit(
+      buildPipeline(config, false, registry),
+    );
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      expect(Option.isSome(Cause.failureOption(exit.cause))).toBe(true);
+      expect(Option.isNone(Cause.dieOption(exit.cause))).toBe(true);
+
+      const failure = Option.getOrThrow(Cause.failureOption(exit.cause));
+      expect(failure).toBeInstanceOf(BuildError);
+      expect(failure.message).toContain(
+        "Failed to build registered component 'assert_via_context'",
+      );
+      expect(failure.message).toContain("Assert Processor");
+      expect(failure.message).toContain(
+        "at least one non-blank 'hasFields' path",
+      );
+      expect(failure.message).not.toContain("[object Object]");
     }
   });
 

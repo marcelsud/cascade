@@ -54,9 +54,34 @@ const configuredComponent = (
 ): readonly [string, unknown] | undefined =>
   Object.entries(config).find(([, value]) => value !== undefined);
 
+const formatBuildErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "object" && error !== null && "message" in error) {
+    const message = error.message;
+    if (typeof message === "string") {
+      return message;
+    }
+  }
+  return String(error);
+};
+
 const mapCustomBuildError = (name: string, error: unknown): BuildError =>
   new BuildError(
-    `Failed to build registered component '${name}': ${error instanceof Error ? error.message : String(error)}`,
+    `Failed to build registered component '${name}': ${formatBuildErrorMessage(error)}`,
+  );
+
+const buildRegisteredComponent = <A>(
+  name: string,
+  build: () => Effect.Effect<A, unknown>,
+): Effect.Effect<A, BuildError> =>
+  Effect.try({
+    try: build,
+    catch: (error) => error,
+  }).pipe(
+    Effect.flatten,
+    Effect.mapError((error) => mapCustomBuildError(name, error)),
   );
 
 const parseRedisUrl = (
@@ -274,11 +299,9 @@ const buildInputInternal = (
   const selected = configuredComponent(config);
   const registered = selected ? registry?.getInput(selected[0]) : undefined;
   if (selected && registered) {
-    return registered
-      .build(selected[1], createBuildContext(registry))
-      .pipe(
-        Effect.mapError((error) => mapCustomBuildError(selected[0], error)),
-      );
+    return buildRegisteredComponent(selected[0], () =>
+      registered.build(selected[1], createBuildContext(registry)),
+    );
   }
 
   if (selected) {
@@ -445,11 +468,9 @@ const buildProcessor = (
   const selected = configuredComponent(config);
   const registered = selected ? registry?.getProcessor(selected[0]) : undefined;
   if (selected && registered) {
-    return registered
-      .build(selected[1], createBuildContext(registry))
-      .pipe(
-        Effect.mapError((error) => mapCustomBuildError(selected[0], error)),
-      );
+    return buildRegisteredComponent(selected[0], () =>
+      registered.build(selected[1], createBuildContext(registry)),
+    );
   }
 
   if (selected) {
@@ -608,11 +629,9 @@ const buildOutput = (
   const selected = configuredComponent(config);
   const registered = selected ? registry?.getOutput(selected[0]) : undefined;
   if (selected && registered) {
-    return registered
-      .build(selected[1], createBuildContext(registry))
-      .pipe(
-        Effect.mapError((error) => mapCustomBuildError(selected[0], error)),
-      );
+    return buildRegisteredComponent(selected[0], () =>
+      registered.build(selected[1], createBuildContext(registry)),
+    );
   }
 
   if (selected) {
@@ -641,14 +660,14 @@ export const buildPipeline = (
       );
     }
 
-    const input = yield* buildInput(config.input, debug, registry);
-
     const processorConfigs = config.pipeline?.processors || [];
     const processors = yield* Effect.forEach(
       processorConfigs,
       (processorConfig) => buildProcessor(processorConfig, registry),
       { concurrency: 1 },
     );
+
+    const input = yield* buildInput(config.input, debug, registry);
 
     const primaryOutput = yield* buildOutput(config.output, registry);
     let output = primaryOutput;
