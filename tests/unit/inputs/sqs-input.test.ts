@@ -462,6 +462,10 @@ const extractMessageMetadataSection = (markdown: string): string => {
   return match[1];
 };
 
+/** Bullet keys of the form `- \`name\`: ...` in the Message Metadata section. */
+const extractDocumentedMetadataKeys = (section: string): string[] =>
+  [...section.matchAll(/^-\s*`([^`]+)`:/gm)].map((match) => match[1]).sort();
+
 describe("SQS emitted message metadata contract", () => {
   it("emits source sqs-input and does not generate correlation IDs", async () => {
     const { client } = createMockClient();
@@ -519,5 +523,74 @@ describe("SQS emitted message metadata contract", () => {
     expect(captured!.correlationId).toBeUndefined();
     expect(captured!.metadata.correlationId).toBeUndefined();
     expect(section.toLowerCase()).toContain("metadata processor");
+  });
+
+  it("documents every metadata key convertMessage emits and no extras", async () => {
+    const commands: Array<ReceiveMessageCommand | DeleteMessageCommand> = [];
+    const client: SqsClientLike = {
+      send: async (command) => {
+        commands.push(command);
+        if (command instanceof ReceiveMessageCommand) {
+          return {
+            Messages: [
+              {
+                MessageId: "message-1",
+                ReceiptHandle: "receipt-1",
+                Body: '{"value":1}',
+                Attributes: { ApproximateReceiveCount: "1" },
+                MessageAttributes: {
+                  traceId: { DataType: "String", StringValue: "t-1" },
+                },
+              },
+            ],
+          };
+        }
+        return {};
+      },
+      destroy: () => undefined,
+    };
+
+    let captured: Message | undefined;
+    await Effect.runPromise(
+      runOneSqsMessage(client, {
+        name: "capture-output",
+        send: (message) =>
+          Effect.sync(() => {
+            captured = message;
+          }),
+      }),
+    );
+
+    expect(captured).toBeDefined();
+
+    const docsPath = join(
+      dirname(fileURLToPath(import.meta.url)),
+      "../../../docs/inputs/sqs.md",
+    );
+    const section = extractMessageMetadataSection(
+      readFileSync(docsPath, "utf8"),
+    );
+    const documentedKeys = extractDocumentedMetadataKeys(section);
+    const emittedKeys = Object.keys(captured!.metadata).sort();
+
+    // Bidirectional contract: guide lists exactly the keys convertMessage writes.
+    expect(documentedKeys).toEqual(emittedKeys);
+    expect(emittedKeys).toEqual([
+      "attributes",
+      "externalId",
+      "messageAttributes",
+      "receiptHandle",
+      "receivedAt",
+      "source",
+      "sqsMessageId",
+    ]);
+    expect(captured!.metadata.sqsMessageId).toBe("message-1");
+    expect(captured!.metadata.receiptHandle).toBe("receipt-1");
+    expect(captured!.metadata.attributes).toEqual({
+      ApproximateReceiveCount: "1",
+    });
+    expect(captured!.metadata.messageAttributes).toEqual({
+      traceId: { DataType: "String", StringValue: "t-1" },
+    });
   });
 });

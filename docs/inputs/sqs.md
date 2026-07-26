@@ -90,8 +90,20 @@ input:
 Each message includes the following metadata automatically:
 
 - `source`: "sqs-input"
-- `externalId`: SQS Message ID
+- `externalId`: SQS Message ID (`MessageId`)
 - `receivedAt`: ISO 8601 timestamp
+- `sqsMessageId`: SQS Message ID (same value as `externalId`)
+- `receiptHandle`: SQS receipt handle used for acknowledgement; may be
+  `undefined` when the response omits `ReceiptHandle`
+- `attributes`: SQS system attributes object from the response; may be
+  `undefined` when the response omits `Attributes`
+- `messageAttributes`: SQS user message attributes object from the response;
+  may be `undefined` when the response omits `MessageAttributes`
+
+`convertMessage` always assigns every key above. `source` and `receivedAt` are
+always concrete values. `externalId` / `sqsMessageId`, `receiptHandle`,
+`attributes`, and `messageAttributes` mirror the corresponding SQS response
+fields and are therefore `undefined` when those fields are absent.
 
 The SQS input does **not** generate a `correlationId` on the message envelope
 (`message.correlationId`) or in `metadata.correlationId`. If you need generated

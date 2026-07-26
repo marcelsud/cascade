@@ -561,6 +561,10 @@ const extractMessageMetadataSection = (markdown: string): string => {
   return match[1];
 };
 
+/** Bullet keys of the form `- \`name\`: ...` in the Message Metadata section. */
+const extractDocumentedMetadataKeys = (section: string): string[] =>
+  [...section.matchAll(/^-\s*`([^`]+)`:/gm)].map((match) => match[1]).sort();
+
 const consumeOneRedisMessage = async (fields: string[]): Promise<Message> => {
   const input = createRedisStreamsInput({
     host: "localhost",
@@ -657,5 +661,37 @@ describe("Redis Streams emitted message metadata contract", () => {
     expect(message.metadata.correlationId).toBeUndefined();
     expect(section.toLowerCase()).toContain("metadata processor");
     expect(section.toLowerCase()).toMatch(/preserv/);
+  });
+
+  it("documents every metadata key convertRedisEntry emits and no extras", async () => {
+    const message = await consumeOneRedisMessage([
+      "content",
+      JSON.stringify({ test: "data" }),
+      "metadata",
+      "{}",
+      "timestamp",
+      "1234567890",
+    ]);
+
+    const docsPath = join(
+      dirname(fileURLToPath(import.meta.url)),
+      "../../../docs/inputs/redis-streams.md",
+    );
+    const section = extractMessageMetadataSection(
+      readFileSync(docsPath, "utf8"),
+    );
+    const documentedKeys = extractDocumentedMetadataKeys(section);
+    const emittedKeys = Object.keys(message.metadata).sort();
+
+    // Bidirectional contract: guide lists exactly the keys convertRedisEntry writes.
+    expect(documentedKeys).toEqual(emittedKeys);
+    expect(emittedKeys).toEqual([
+      "externalId",
+      "receivedAt",
+      "source",
+      "streamName",
+    ]);
+    expect(message.metadata.streamName).toBe("test-stream");
+    expect(message.metadata.externalId).toBe("1234567890-0");
   });
 });
