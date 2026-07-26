@@ -189,6 +189,52 @@ npm run docker:down   # Stop services
 npm run docker:logs   # View logs
 ```
 
+> `npm run docker:up` and `npm run e2e:all` conflict. The shell E2E scripts
+> start their own LocalStack on `4566` and an HTTP observer on `8081`, which the
+> shared stack already binds. Run `npm run docker:down` before `e2e:all`.
+
+### Continuous Audit
+
+Supplies graded issues by auditing **one topic per run**. Breadth comes from
+many runs, not from sweeping the repository in one.
+
+Spec: <https://github.com/marcelsud/specs/blob/main/continuous-audit.md>
+
+```bash
+# Which topics are stale, and how much have they churned since last audit?
+node .github/grading/audit.mjs coverage
+
+# Pick the topic for this run. Record the seed it prints.
+node .github/grading/audit.mjs select
+
+# Reproduce an earlier selection exactly (same ledger + commit + seed).
+node .github/grading/audit.mjs select --seed 12345
+```
+
+`select` prints the chosen topic, the seed, the commit, and the candidate pool
+as JSON. Selection is pure: no model runs, and `--seed` replays it.
+
+**Topic registry**: `topics:` in `.github/grading/config.yml`. Every topic must
+cite an objective from the `objectives:` registry above it, or it is skipped —
+its findings would fail IE-7 only after the reproduction had already been paid
+for. Adding or changing a topic is a policy change (spec §10.1): its own PR.
+
+**Ledger**: the `grading-ledger` branch, append-only, never merged to `main`.
+
+```bash
+git show grading-ledger:topics.jsonl     # one entry per run
+git show grading-ledger:findings.jsonl   # one entry per candidate, rejections included
+```
+
+Three rules the loop depends on:
+
+- A run that finds nothing is a **successful** run. Treating an empty result as
+  failure is what creates pressure to fabricate findings.
+- A candidate is **not filed without a reproduction** that distinguishes the
+  defect from correct behavior. A reasoned argument is not a reproduction.
+- An agent that produces no conforming artifact is a **failed run**, never a dry
+  run. Recording it as dry marks the topic audited and opens a coverage hole.
+
 ### GitHub Issue Delivery (seven-stage multi-model workflow)
 
 For graded Cascade GitHub issues, the default done state is **end-to-end
