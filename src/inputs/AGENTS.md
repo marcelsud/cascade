@@ -17,6 +17,7 @@
 - HTTP request bodies are bounded by a configured byte limit enforced before buffering; oversized requests are rejected without becoming messages.
 - Acquisition and release remain cancellation-safe; close never leaks source handles.
 - Failures retain the project's fatal, intermittent, and logical categories.
+- File one-shot (`follow: false`): clean EOF completes the stream successfully after drain; a terminal open/stat/read failure drains accepted records first, then fails the stream with `FileInputError` (counted once in input metrics). Follow mode retains retry/rotation and does not use that terminal path.
 
 ## Work Guidance
 

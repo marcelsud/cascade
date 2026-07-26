@@ -1,7 +1,7 @@
 /**
  * File Input - Reads newline-delimited messages from a local file
  */
-import { Effect, Queue } from "effect";
+import { Effect, Queue, Stream } from "effect";
 import * as Schema from "effect/Schema";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
@@ -118,6 +118,8 @@ export const createFileInput = (
   let closed = false;
   let queueClosed = false;
   let producerDone = false;
+  /** One-shot terminal I/O failure; surfaced after the queue drains. */
+  let terminalError: FileInputError | null = null;
   let timer: NodeJS.Timeout | null = null;
   let currentPosition = startAt === "end" ? initialStats.size : 0;
   let currentIdentity = getIdentity(initialStats);
@@ -282,6 +284,11 @@ export const createFileInput = (
       ).catch(() => undefined);
 
       if (!follow) {
+        terminalError = new FileInputError(
+          `File input failed to read ${config.path}: ${error instanceof Error ? error.message : String(error)}`,
+          "fatal",
+          error,
+        );
         await finishOneShot();
         return false;
       }
@@ -316,7 +323,13 @@ export const createFileInput = (
   return {
     name: "file-input",
     getMetrics: () => metrics.getInputMetrics(),
-    stream: streamInputQueue(queue, () => producerDone),
+    stream: streamInputQueue(queue, () => producerDone).pipe(
+      Stream.concat(
+        Stream.suspend(() =>
+          terminalError ? Stream.fail(terminalError) : Stream.empty,
+        ),
+      ),
+    ),
     close: () =>
       Effect.gen(function* () {
         closed = true;

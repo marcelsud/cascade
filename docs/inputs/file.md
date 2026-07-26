@@ -54,6 +54,9 @@ input:
 
 - Partial trailing lines are held until a newline arrives while following (`follow: true`)
 - In one-shot mode (`follow: false`), a non-empty final record without a trailing newline is emitted at EOF
+- **Clean one-shot EOF**: when the file is read successfully end-to-end, the stream completes successfully after every accepted record has drained. Operators can treat that as a finished, empty-or-fully-replayed source.
+- **Terminal one-shot read failure**: if open/stat/read fails after construction (for example the path disappears before the first asynchronous open), every record already accepted still drains in source order, then the stream fails with `FileInputError`. The pipeline reports `success: false` and retains the actionable error — this is not the same as a clean empty-file completion.
+- Follow mode (`follow: true`) keeps its retry/rotation behavior: transient read errors are logged and polled again rather than terminating the stream
 - If the file is truncated or rotated while following, Cascade restarts from the current file contents
 - Stat and read use the same open descriptor, so rotation between them cannot mix file identities
 - Disk reads are capped at 64 KiB per `read` call. A large unread gap is drained
