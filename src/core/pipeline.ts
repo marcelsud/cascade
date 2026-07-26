@@ -21,153 +21,20 @@ import type {
 import { runProcessorChain } from "./processor-chain.js";
 import { isFatalError } from "./errors.js";
 import { createDLQMessage } from "./dlq.js";
-
-const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
-/** Max historical nonfatal failure objects retained for diagnostics. */
-const MAX_RETAINED_HISTORICAL_ERRORS = 100;
-
-const isObjectIdentity = (error: unknown): error is object =>
-  (typeof error === "object" && error !== null) || typeof error === "function";
-
-/**
- * Bounded failure sampler owned by a single pipeline run.
- * Historical diagnostics are capped; terminal close/drain diagnostics and
- * distinct fatal causes are not. Strong identity state for the historical
- * sample stays capped — dropped object identities are tracked in a WeakSet
- * so they remain dedupable without pinning heap graphs. Non-object dropped
- * identities (strings/numbers/symbols/booleans) live in a small primitive set:
- * they have no object graph to retain.
- */
-interface ErrorCollector {
-  retained: unknown[];
-  /** Strong identities for the retained sample only (≤ MAX). */
-  retainedSeen: Set<unknown>;
-  /** Non-owning identity tracking for dropped historical object errors. */
-  droppedObjects: WeakSet<object>;
-  /** Dropped non-object identities (no object graph; safe to hold by value). */
-  droppedPrimitives: Set<unknown>;
-  /**
-   * Distinct fatal causes observed this run (uncapped). Includes over-cap and
-   * displaced causes so a later fatal DLQ replace cannot erase earlier fatals.
-   */
-  fatals: unknown[];
-  fatalSeen: Set<unknown>;
-  /** Unique historical diagnostics observed (retained + omitted). */
-  total: number;
-  /** Unique historical diagnostics dropped after the retention cap. */
-  omitted: number;
-  /** Close/drain diagnostics — not subject to the historical retention cap. */
-  terminal: unknown[];
-}
-
-const createErrorCollector = (): ErrorCollector => ({
-  retained: [],
-  retainedSeen: new Set<unknown>(),
-  droppedObjects: new WeakSet<object>(),
-  droppedPrimitives: new Set<unknown>(),
-  fatals: [],
-  fatalSeen: new Set<unknown>(),
-  total: 0,
-  omitted: 0,
-  terminal: [],
-});
-
-const hasHistoricalIdentity = (
-  collector: ErrorCollector,
-  error: unknown,
-): boolean => {
-  if (collector.retainedSeen.has(error)) {
-    return true;
-  }
-  if (isObjectIdentity(error)) {
-    return collector.droppedObjects.has(error);
-  }
-  return collector.droppedPrimitives.has(error);
-};
-
-const trackDroppedIdentity = (
-  collector: ErrorCollector,
-  error: unknown,
-): void => {
-  if (isObjectIdentity(error)) {
-    collector.droppedObjects.add(error);
-  } else {
-    collector.droppedPrimitives.add(error);
-  }
-};
-
-const noteFatalCause = (collector: ErrorCollector, error: unknown): void => {
-  if (error === undefined || collector.fatalSeen.has(error)) {
-    return;
-  }
-  collector.fatalSeen.add(error);
-  collector.fatals.push(error);
-};
-
-/** Mutate collector in place: O(1) identity dedup + capped strong retention. */
-const collectHistoricalError = (
-  collector: ErrorCollector,
-  error: unknown,
-): ErrorCollector => {
-  if (error === undefined || hasHistoricalIdentity(collector, error)) {
-    return collector;
-  }
-  collector.total += 1;
-  if (isFatalError(error)) {
-    // Fatals are always recorded in uncapped fatal state (AC-4), even when the
-    // historical sample is full and the object is not strongly retained there.
-    noteFatalCause(collector, error);
-  }
-  if (collector.retained.length < MAX_RETAINED_HISTORICAL_ERRORS) {
-    collector.retained.push(error);
-    collector.retainedSeen.add(error);
-  } else if (!isFatalError(error)) {
-    // Over-cap historical nonfatal samples are dropped and counted. Identity
-    // stays dedupable via non-owning tracking so memory stays bounded.
-    collector.omitted += 1;
-    trackDroppedIdentity(collector, error);
-  } else {
-    // Over-cap fatal: not omitted (surfaced via fatals/fatalCauseRef), and not
-    // strongly retained in the historical sample.
-    trackDroppedIdentity(collector, error);
-  }
-  return collector;
-};
-
-/**
- * Always retain terminal close/drain diagnostics (uncapped).
- * Dedup only against terminal + actually retained samples — never against
- * dropped historical identities, so a close error reused after being omitted
- * from the sample remains observable.
- */
-const collectTerminalError = (
-  collector: ErrorCollector,
-  error: unknown,
-): ErrorCollector => {
-  if (error === undefined) {
-    return collector;
-  }
-  // Terminal list stays tiny (close/drain); linear scan is fine and bounded.
-  if (collector.terminal.includes(error) || collector.retainedSeen.has(error)) {
-    return collector;
-  }
-  collector.terminal.push(error);
-  return collector;
-};
-
-/**
- * Test seam for retention/dedup regressions. Not part of the public API.
- * @internal
- */
-export const __errorCollectorTestUtils = {
-  MAX_RETAINED_HISTORICAL_ERRORS,
-  createErrorCollector,
+import {
+  assembleErrorSample,
   collectHistoricalError,
   collectTerminalError,
-  hasHistoricalIdentity,
-  strongHistoricalIdentityCount: (collector: ErrorCollector): number =>
-    collector.retainedSeen.size + collector.droppedPrimitives.size,
-};
+  createErrorCollector,
+  NO_FATAL_CAUSE,
+  noteFatalCause,
+} from "./error-collector.js";
+import type {
+  ErrorCollector,
+  FatalCauseSlot,
+} from "./error-collector.js";
+
+const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
 
 /** Pipeline execution errors. */
 export class PipelineError {
@@ -279,7 +146,7 @@ export const run = <E, R>(
     // Signal (void) stops intake immediately; cause may be updated later
     // (e.g. fatal DLQ send replaces the reported original fatal).
     const fatalHalt = yield* Deferred.make<void>();
-    const fatalCauseRef = yield* Ref.make<unknown | undefined>(undefined);
+    const fatalCauseRef = yield* Ref.make<FatalCauseSlot>(NO_FATAL_CAUSE);
     // Ensure input/output close runs at most once across fatal/normal paths.
     const closedRef = yield* Ref.make(false);
 
@@ -308,16 +175,23 @@ export const run = <E, R>(
       Effect.gen(function* () {
         const stats = yield* snapshotStats();
         const collector = yield* Ref.get(errorsRef);
+        // Primary close/timeout/force error first, then retained sample and
+        // terminal diagnostics — same identity pass as fatal assembly.
+        const errors = assembleErrorSample({
+          hasPrimary: true,
+          primary: error,
+          collector,
+        });
         return {
           success: false,
           stats,
-          errors: [error],
+          errors: errors.length > 0 ? errors : undefined,
           ...(collector.omitted > 0
             ? { errorsOmitted: collector.omitted }
             : {}),
           shutdown: shutdownReason,
           metrics: snapshotMetrics(),
-        };
+        } satisfies PipelineResult;
       });
     /**
      * Build a non-graceful fatal failure from the bounded collector, with the
@@ -330,35 +204,14 @@ export const run = <E, R>(
       Effect.gen(function* () {
         const stats = yield* snapshotStats();
         const collector = yield* Ref.get(errorsRef);
-        const errors: unknown[] = [];
-        const seen = new Set<unknown>();
-        const pushUnique = (error: unknown) => {
-          if (error === undefined || seen.has(error)) {
-            return;
-          }
-          seen.add(error);
-          errors.push(error);
-        };
-
-        // Prefer the recorded (possibly replaced) fatal cause first when
-        // present, then every earlier distinct fatal exactly once — including
-        // over-cap / displaced causes that never entered the retained sample.
         const fatalCause = yield* Ref.get(fatalCauseRef);
-        if (fatalCause !== undefined) {
-          pushUnique(fatalCause);
-        }
-        for (const error of collector.fatals) {
-          pushUnique(error);
-        }
-        for (const error of collector.retained) {
-          pushUnique(error);
-        }
-        for (const error of collector.terminal) {
-          pushUnique(error);
-        }
-        for (const error of additionalErrors) {
-          pushUnique(error);
-        }
+        const hasCurrentFatal = fatalCause !== NO_FATAL_CAUSE;
+        const errors = assembleErrorSample({
+          hasCurrentFatal,
+          currentFatal: hasCurrentFatal ? fatalCause : undefined,
+          collector,
+          additional: additionalErrors,
+        });
 
         return {
           success: false,
@@ -384,8 +237,15 @@ export const run = <E, R>(
       mode: "first" | "replace" = "first",
     ) =>
       Effect.gen(function* () {
+        // Keep the live current-cause slot and the collector's bounded fatal
+        // sample in lockstep. noteFatalCause is a no-op for duplicates and
+        // overflows past the fixed extra-fatal capacity.
+        yield* Ref.update(errorsRef, (collector) => {
+          noteFatalCause(collector, cause);
+          return collector;
+        });
         yield* Ref.update(fatalCauseRef, (current) => {
-          if (current === undefined || mode === "replace") {
+          if (current === NO_FATAL_CAUSE || mode === "replace") {
             return cause;
           }
           return current;
@@ -576,9 +436,8 @@ export const run = <E, R>(
         const stats = yield* Ref.get(statsRef);
         const collector = yield* Ref.get(errorsRef);
         const fatalDone = yield* Deferred.isDone(fatalHalt);
-        const resolvedFatal = fatalDone
-          ? yield* Ref.get(fatalCauseRef)
-          : undefined;
+        const fatalCause = yield* Ref.get(fatalCauseRef);
+        const hasFatalCause = fatalDone && fatalCause !== NO_FATAL_CAUSE;
 
         const finalStats: PipelineStats = {
           processed: stats.processed,
@@ -588,11 +447,11 @@ export const run = <E, R>(
           endTime: Date.now(),
         };
 
-        if (resolvedFatal !== undefined) {
+        if (hasFatalCause) {
           yield* Effect.log(
             `Pipeline halted on fatal error: ${finalStats.processed} processed, ${finalStats.failed} failed in ${finalStats.duration}ms`,
           );
-          return yield* Effect.fail(new PipelineFatalHaltError(resolvedFatal));
+          return yield* Effect.fail(new PipelineFatalHaltError(fatalCause));
         }
 
         yield* Effect.log(
