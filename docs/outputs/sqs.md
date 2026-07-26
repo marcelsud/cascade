@@ -160,9 +160,10 @@ use the same attribute contract.
 | `trace`         | String   | JSON object `{ "spanId": string, "traceId": string }` |
 
 `source`, `receivedAt`, and `processedAt` are promoted from message metadata to
-top-level attributes when present as strings so downstream consumers can read
-them without parsing the `metadata` blob. The full metadata map (including those
-keys) is still available in the `metadata` attribute.
+top-level attributes only when they are non-empty strings so downstream consumers
+can read them without parsing the `metadata` blob. Empty strings and non-string
+values are not promoted. The full metadata map (including those keys, even when
+empty) is still available in the `metadata` attribute.
 
 ## Use Cases
 

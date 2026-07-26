@@ -581,5 +581,75 @@ describe("SQSOutput", () => {
         DataType: "String",
       });
     });
+
+    it("does not promote empty-string metadata.source on single send", async () => {
+      const mockClient = await getMockClient();
+      const output = createSqsOutput({
+        queueUrl: "http://localhost:4566/000000000000/test-queue",
+      });
+
+      await Effect.runPromise(
+        output.send(
+          createMessage(
+            { payload: true },
+            {
+              source: "",
+              receivedAt: "2026-07-25T00:00:00.000Z",
+              custom: "kept",
+            },
+          ),
+        ),
+      );
+
+      const attrs = mockClient.send.mock.calls[0][0].MessageAttributes;
+      expect(attrs.source).toBeUndefined();
+      expect(attrs.receivedAt).toEqual({
+        StringValue: "2026-07-25T00:00:00.000Z",
+        DataType: "String",
+      });
+      expect(JSON.parse(attrs.metadata.StringValue)).toEqual({
+        source: "",
+        receivedAt: "2026-07-25T00:00:00.000Z",
+        custom: "kept",
+      });
+    });
+
+    it("does not promote empty-string metadata.source on batch send", async () => {
+      const mockClient = await getMockClient();
+      mockClient.send.mockResolvedValue({
+        Successful: [{ Id: "0" }],
+        Failed: [],
+      });
+      const output = createSqsOutput({
+        queueUrl: "http://localhost:4566/000000000000/test-queue",
+        maxBatchSize: 2,
+        batchTimeout: 20,
+      });
+
+      await Effect.runPromise(
+        output.send(
+          createMessage(
+            { id: 1 },
+            {
+              source: "",
+              processedAt: "2026-07-25T00:00:01.000Z",
+            },
+          ),
+        ),
+      );
+
+      const calls = batchCalls(mockClient);
+      expect(calls).toHaveLength(1);
+      const attrs = calls[0][0].Entries[0].MessageAttributes;
+      expect(attrs.source).toBeUndefined();
+      expect(attrs.processedAt).toEqual({
+        StringValue: "2026-07-25T00:00:01.000Z",
+        DataType: "String",
+      });
+      expect(JSON.parse(attrs.metadata.StringValue)).toEqual({
+        source: "",
+        processedAt: "2026-07-25T00:00:01.000Z",
+      });
+    });
   });
 });

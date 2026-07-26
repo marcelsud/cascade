@@ -100,7 +100,7 @@ const serializeMessage = (
   delaySeconds?: number,
 ): { body: string; attributes: Record<string, any>; delay?: number } => {
   const stringAttr = (value: unknown) =>
-    typeof value === "string"
+    typeof value === "string" && value.length > 0
       ? { StringValue: value, DataType: "String" as const }
       : undefined;
 
