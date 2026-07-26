@@ -198,6 +198,7 @@ npm run docker:logs   # View logs
 Supplies graded issues by auditing **one topic per run**. Breadth comes from
 many runs, not from sweeping the repository in one.
 
+Protocol for conducting a run: [`.github/grading/audit-protocol.md`](.github/grading/audit-protocol.md)
 Spec: <https://github.com/marcelsud/specs/blob/main/continuous-audit.md>
 
 The loop is **agent-driven**: you are the top-level process and call the tool
