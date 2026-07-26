@@ -16,8 +16,8 @@ import {
 } from "../core/errors.js";
 import { runProcessorChain } from "../core/processor-chain.js";
 
-export interface BranchProcessorConfig {
-  readonly processors: readonly Processor<any, any>[];
+export interface BranchProcessorConfig<E = never, R = never> {
+  readonly processors: readonly Processor<E, R>[];
 }
 
 export class BranchProcessorError extends ComponentError {
@@ -33,14 +33,14 @@ export class BranchProcessorError extends ComponentError {
  * Create a branch processor
  * Executes nested processors on a copy of the message, merges result into metadata
  */
-export const createBranchProcessor = (
-  config: BranchProcessorConfig,
-): Processor<any, any> => {
+export const createBranchProcessor = <E = never, R = never>(
+  config: BranchProcessorConfig<E, R>,
+): Processor<E | BranchProcessorError, R> => {
   return {
     name: "branch-processor",
     process: (
       originalMessage: Message,
-    ): Effect.Effect<Message | Message[], any, any> => {
+    ): Effect.Effect<Message | Message[], E | BranchProcessorError, R> => {
       return Effect.gen(function* () {
         // Structured clone preserves undefined, bigint, Date, Map, Set, and cycles.
         // Uncloneable values (e.g. functions) fail as BranchProcessorError, not Die.
