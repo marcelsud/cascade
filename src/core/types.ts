@@ -118,12 +118,22 @@ export interface PipelineStats {
 }
 
 /**
- * Pipeline execution result
+ * Pipeline execution result.
+ *
+ * `errors` is a bounded diagnostic sample (historical nonfatal failures are
+ * capped), not a full failure log. Use `stats.failed` for the exact failure
+ * count and `errorsOmitted` for how many unique historical diagnostics were
+ * dropped from the sample after the retention cap. Fatal causes and terminal
+ * close/drain diagnostics are always included when present and are not subject
+ * to the historical cap.
  */
 export interface PipelineResult {
   readonly success: boolean;
   readonly stats: PipelineStats;
+  /** Bounded diagnostic sample; see interface docs for retention semantics. */
   readonly errors?: ReadonlyArray<unknown>;
+  /** Unique historical diagnostics omitted after the retention cap. */
+  readonly errorsOmitted?: number;
   readonly shutdown?: "graceful" | "timed-out" | "forced";
   readonly metrics?: {
     readonly input?: InputMetrics;
