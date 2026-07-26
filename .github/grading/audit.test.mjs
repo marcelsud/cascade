@@ -47,7 +47,13 @@ const withRepository = (callback) =>
     writeRelative(cwd, "src/beta.ts", "export const beta = 1\n")
     git(cwd, "add", ".")
     git(cwd, "commit", "-q", "-m", "baseline")
-    return callback({ cwd, base: git(cwd, "rev-parse", "HEAD") })
+    // init.defaultBranch varies by environment (main locally, master on CI), so
+    // capture the real name instead of assuming one.
+    return callback({
+      cwd,
+      base: git(cwd, "rev-parse", "HEAD"),
+      branch: git(cwd, "rev-parse", "--abbrev-ref", "HEAD"),
+    })
   })
 
 const configFor = (topics, objectives = { "REL-1": "delivery", "REL-2": "contracts" }) =>
@@ -219,7 +225,7 @@ test("readLedger is empty when the ledger branch does not exist", () =>
   }))
 
 test("readLedger parses entries from the ledger branch", () =>
-  withRepository(({ cwd }) => {
+  withRepository(({ cwd, branch }) => {
     git(cwd, "checkout", "-q", "--orphan", "grading-ledger")
     git(cwd, "rm", "-rq", "--cached", ".")
     rmSync(path.join(cwd, "src"), { recursive: true, force: true })
@@ -231,7 +237,7 @@ test("readLedger parses entries from the ledger branch", () =>
     )
     git(cwd, "add", ".")
     git(cwd, "commit", "-q", "-m", "ledger")
-    git(cwd, "checkout", "-q", "main")
+    git(cwd, "checkout", "-q", branch)
 
     const ledger = readLedger({ cwd })
     assert.equal(ledger.runs.length, 1)
