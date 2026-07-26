@@ -1,7 +1,7 @@
 /**
  * Pipeline Builder - Constructs pipeline from configuration
  */
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
 import type {
   PipelineConfig,
   InputConfig,
@@ -54,9 +54,22 @@ const configuredComponent = (
 ): readonly [string, unknown] | undefined =>
   Object.entries(config).find(([, value]) => value !== undefined);
 
+const formatBuildErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "object" && error !== null && "message" in error) {
+    const message = error.message;
+    if (typeof message === "string") {
+      return message;
+    }
+  }
+  return String(error);
+};
+
 const mapCustomBuildError = (name: string, error: unknown): BuildError =>
   new BuildError(
-    `Failed to build registered component '${name}': ${error instanceof Error ? error.message : String(error)}`,
+    `Failed to build registered component '${name}': ${formatBuildErrorMessage(error)}`,
   );
 
 const buildRegisteredComponent = <T>(
@@ -76,11 +89,16 @@ const buildRegisteredComponent = <T>(
   if (!selected) return undefined;
   const registered = lookup(selected[0]);
   if (registered) {
-    return registered
-      .build(selected[1], context)
-      .pipe(
-        Effect.mapError((error) => mapCustomBuildError(selected[0], error)),
-      );
+    // `build` may throw synchronously — a registered factory is free to call a
+    // constructor that validates eagerly. Contain that in `Effect.try` so it
+    // surfaces as a typed BuildError instead of a defect.
+    return Effect.try({
+      try: () => registered.build(selected[1], context),
+      catch: (error) => error,
+    }).pipe(
+      Effect.flatten,
+      Effect.mapError((error) => mapCustomBuildError(selected[0], error)),
+    );
   }
   return Effect.fail(
     new BuildError(
@@ -644,10 +662,21 @@ export const buildPipeline = (
     const input = yield* buildInput(config.input, debug, registry);
 
     const processorConfigs = config.pipeline?.processors || [];
+    // Build processors after the input so dual-invalid configs keep reporting
+    // the input diagnostic first. If processor construction fails (Fail or
+    // defect), close the already-built input before re-emitting that cause;
+    // a close failure must not mask the original build error.
     const processors = yield* Effect.forEach(
       processorConfigs,
       (processorConfig) => buildProcessor(processorConfig, registry),
       { concurrency: 1 },
+    ).pipe(
+      Effect.onExit((exit) => {
+        if (Exit.isSuccess(exit) || !input.close) {
+          return Effect.void;
+        }
+        return input.close().pipe(Effect.catchAllCause(() => Effect.void));
+      }),
     );
 
     const primaryOutput = yield* buildOutput(config.output, registry);
