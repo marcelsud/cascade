@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Duration, Effect, Stream } from "effect";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -51,6 +51,42 @@ const contentId = (content: unknown): number => {
   }
   throw new Error(`expected content with numeric id, got ${String(content)}`);
 };
+
+const MAX_READ_CHUNK_BYTES = 64 * 1024;
+
+const installBufferAllocSpy = (): {
+  recorded: number[];
+  restore: () => void;
+} => {
+  const recorded: number[] = [];
+  const originalAlloc = Buffer.alloc.bind(Buffer);
+  const spy = vi.spyOn(Buffer, "alloc").mockImplementation(function (
+    this: unknown,
+    size: number,
+    fill?: string | number | Uint8Array,
+    encoding?: BufferEncoding,
+  ) {
+    recorded.push(size);
+    if (fill === undefined) {
+      return originalAlloc(size);
+    }
+    if (encoding === undefined) {
+      return originalAlloc(size, fill);
+    }
+    return originalAlloc(size, fill, encoding);
+  } as typeof Buffer.alloc);
+  return {
+    recorded,
+    restore: () => {
+      spy.mockRestore();
+    },
+  };
+};
+
+const buildJsonlFixture = (recordCount: number): string =>
+  Array.from({ length: recordCount }, (_, id) => JSON.stringify({ id })).join(
+    "\n",
+  ) + "\n";
 
 afterEach(async () => {
   await Promise.all(
@@ -489,6 +525,373 @@ describe("FileInput", () => {
 
     expect(closeResult).toBe("closed");
   }, 20_000);
+
+  it("caps allocations while draining a multi-chunk backlog", async () => {
+    // Short newline-terminated records totaling well over four 64 KiB chunks.
+    const recordCount = 30_000;
+    const filePath = await createTempFile(buildJsonlFixture(recordCount));
+    const stats = await fs.stat(filePath);
+    expect(stats.size).toBeGreaterThan(4 * MAX_READ_CHUNK_BYTES);
+
+    const { recorded, restore } = installBufferAllocSpy();
+    try {
+      const input = createFileInput({
+        path: filePath,
+        follow: true,
+        startAt: "beginning",
+        pollIntervalMs: 25,
+        queueSize: 1,
+        overflow: "block",
+      });
+
+      const messages = await collectChunk(
+        input.stream.pipe(Stream.take(recordCount), Stream.runCollect),
+      );
+
+      if (input.close) {
+        await Effect.runPromise(input.close());
+      }
+
+      expect(messages).toHaveLength(recordCount);
+      expect(messages.map((message) => contentId(message.content))).toEqual(
+        Array.from({ length: recordCount }, (_, id) => id),
+      );
+      expect(Math.max(...recorded)).toBeLessThanOrEqual(MAX_READ_CHUNK_BYTES);
+      expect(input.getMetrics?.()).toMatchObject({
+        messagesProcessed: recordCount,
+        messagesDropped: 0,
+        errorsEncountered: 0,
+      });
+    } finally {
+      restore();
+    }
+  }, 60_000);
+
+  it("does not read a second disk chunk while blocked on a full queue", async () => {
+    // Three-plus chunks of short records; first chunk alone has many complete lines.
+    const recordCount = 20_000;
+    const filePath = await createTempFile(buildJsonlFixture(recordCount));
+    const stats = await fs.stat(filePath);
+    expect(stats.size).toBeGreaterThan(3 * MAX_READ_CHUNK_BYTES);
+
+    const { recorded, restore } = installBufferAllocSpy();
+    try {
+      const input = createFileInput({
+        path: filePath,
+        follow: true,
+        startAt: "beginning",
+        pollIntervalMs: 25,
+        queueSize: 1,
+        overflow: "block",
+      });
+
+      // No consumer: first offer fills the single slot; the next offer blocks
+      // inside emitLineMessages before any further chunk is materialized.
+      const blocked = await waitUntil(
+        async () => input.getMetrics?.()?.messagesProcessed === 1,
+        5_000,
+      );
+      expect(blocked).toBe(true);
+
+      const largeAllocsAtBlock = recorded.filter(
+        (size) => size > 1_024 && size <= MAX_READ_CHUNK_BYTES,
+      );
+      expect(largeAllocsAtBlock.length).toBe(1);
+      expect(Math.max(...recorded)).toBeLessThanOrEqual(MAX_READ_CHUNK_BYTES);
+
+      await delay(150);
+      const largeAllocsAfterWait = recorded.filter(
+        (size) => size > 1_024 && size <= MAX_READ_CHUNK_BYTES,
+      );
+      expect(largeAllocsAfterWait.length).toBe(1);
+
+      const messages = await collectChunk(
+        input.stream.pipe(Stream.take(recordCount), Stream.runCollect),
+      );
+
+      if (input.close) {
+        await Effect.runPromise(input.close());
+      }
+
+      expect(messages.map((message) => contentId(message.content))).toEqual(
+        Array.from({ length: recordCount }, (_, id) => id),
+      );
+      expect(Math.max(...recorded)).toBeLessThanOrEqual(MAX_READ_CHUNK_BYTES);
+    } finally {
+      restore();
+    }
+  }, 60_000);
+
+  it("preserves decode and line splits across chunk boundaries", async () => {
+    const chunk = MAX_READ_CHUNK_BYTES;
+    const euro = Buffer.from("€", "utf8"); // 3-byte UTF-8 code point
+
+    // Chunk 1 ends mid-code-point: first byte of € is the last byte of chunk 1.
+    const line1 = Buffer.concat([
+      Buffer.alloc(chunk - 1, 0x61), // 'a' * (chunk - 1)
+      euro,
+      Buffer.from("tail1"),
+    ]);
+
+    // After line1 + "\n", pad so chunk 2 ends on '\r' and chunk 3 starts with '\n'.
+    const afterLine1 = line1.length + 1; // + '\n'
+    const padToCr = chunk * 2 - 1 - afterLine1;
+    expect(padToCr).toBeGreaterThan(0);
+    const line2 = Buffer.concat([
+      Buffer.alloc(padToCr, 0x62), // 'b' *
+      Buffer.from("\r"), // last byte of chunk 2
+    ]);
+    // '\n' is first byte of chunk 3 — completes the CRLF delimiter.
+
+    // Chunk-3 body then LF-terminated line whose content itself spans into chunk 4.
+    const line3PrefixLen = chunk - 1; // rest of chunk 3 after the leading '\n'
+    const line3 = Buffer.concat([
+      Buffer.alloc(line3PrefixLen, 0x63), // 'c' *
+      Buffer.from("span"), // starts chunk 4
+    ]);
+
+    const fixture = Buffer.concat([
+      line1,
+      Buffer.from("\n"),
+      line2,
+      Buffer.from("\n"), // completes CRLF; starts chunk 3
+      line3,
+      Buffer.from("\n"),
+      Buffer.from("final-line\n"),
+    ]);
+
+    expect(fixture.length).toBeGreaterThan(3 * chunk);
+
+    // Sanity: the intended straddles land on chunk boundaries.
+    expect(fixture[chunk - 1]).toBe(euro[0]);
+    expect(fixture[chunk]).toBe(euro[1]);
+    expect(fixture[chunk * 2 - 1]).toBe(0x0d); // \r
+    expect(fixture[chunk * 2]).toBe(0x0a); // \n
+
+    const expectedLines = [
+      line1.toString("utf8"),
+      line2.toString("utf8").replace(/\r$/, ""),
+      line3.toString("utf8"),
+      "final-line",
+    ];
+
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cascade-file-input-"));
+    createdPaths.push(dir);
+    const filePath = path.join(dir, "boundary.log");
+    await fs.writeFile(filePath, fixture);
+
+    const input = createFileInput({
+      path: filePath,
+      follow: false,
+      startAt: "beginning",
+      pollIntervalMs: 25,
+    });
+
+    const messages = await collectChunk(Stream.runCollect(input.stream));
+
+    expect(messages).toHaveLength(expectedLines.length);
+    expect(
+      messages.map((message) => {
+        const content = message.content;
+        if (
+          content !== null &&
+          typeof content === "object" &&
+          "raw" in content &&
+          typeof content.raw === "string"
+        ) {
+          return content.raw;
+        }
+        throw new Error(`expected raw content, got ${String(content)}`);
+      }),
+    ).toEqual(expectedLines);
+    expect(messages.map((message) => message.metadata.lineNumber)).toEqual([
+      1, 2, 3, 4,
+    ]);
+  }, 20_000);
+
+  it("catches up in follow mode after a multi-chunk append while blocked", async () => {
+    const filePath = await createTempFile("");
+    const { recorded, restore } = installBufferAllocSpy();
+    try {
+      const input = createFileInput({
+        path: filePath,
+        follow: true,
+        startAt: "end",
+        pollIntervalMs: 20,
+        queueSize: 1,
+        overflow: "block",
+      });
+
+      // Seed one record so the producer blocks with a full single-slot queue.
+      await delay(40);
+      await fs.appendFile(filePath, '{"id":0}\n', "utf8");
+      const blocked = await waitUntil(
+        async () => input.getMetrics?.()?.messagesProcessed === 1,
+        5_000,
+      );
+      expect(blocked).toBe(true);
+
+      // Append well over four chunks while the producer cannot offer more.
+      const appendedCount = 25_000;
+      const appended =
+        Array.from({ length: appendedCount }, (_, index) =>
+          JSON.stringify({ id: index + 1 }),
+        ).join("\n") + "\n";
+      expect(Buffer.byteLength(appended)).toBeGreaterThan(
+        4 * MAX_READ_CHUNK_BYTES,
+      );
+      await fs.appendFile(filePath, appended, "utf8");
+
+      // Give the poller a chance to notice the growth; it must stay blocked on
+      // the in-flight offer and must not allocate a whole-gap buffer.
+      await delay(100);
+      expect(Math.max(0, ...recorded)).toBeLessThanOrEqual(
+        MAX_READ_CHUNK_BYTES,
+      );
+
+      const total = appendedCount + 1;
+      const messages = await collectChunk(
+        input.stream.pipe(Stream.take(total), Stream.runCollect),
+      );
+
+      if (input.close) {
+        await Effect.runPromise(input.close());
+      }
+
+      expect(messages.map((message) => contentId(message.content))).toEqual(
+        Array.from({ length: total }, (_, id) => id),
+      );
+      expect(Math.max(...recorded)).toBeLessThanOrEqual(MAX_READ_CHUNK_BYTES);
+      expect(input.getMetrics?.()).toMatchObject({
+        messagesProcessed: total,
+        messagesDropped: 0,
+        errorsEncountered: 0,
+      });
+    } finally {
+      restore();
+    }
+  }, 60_000);
+
+  it("caps allocations for one-shot beginning replay of a multi-chunk file", async () => {
+    const recordCount = 30_000;
+    const filePath = await createTempFile(buildJsonlFixture(recordCount));
+    const stats = await fs.stat(filePath);
+    expect(stats.size).toBeGreaterThan(4 * MAX_READ_CHUNK_BYTES);
+
+    const { recorded, restore } = installBufferAllocSpy();
+    try {
+      const input = createFileInput({
+        path: filePath,
+        follow: false,
+        startAt: "beginning",
+        pollIntervalMs: 25,
+        queueSize: 8,
+        overflow: "block",
+      });
+
+      const messages = await collectChunk(Stream.runCollect(input.stream));
+
+      expect(messages).toHaveLength(recordCount);
+      expect(messages.map((message) => contentId(message.content))).toEqual(
+        Array.from({ length: recordCount }, (_, id) => id),
+      );
+      expect(Math.max(...recorded)).toBeLessThanOrEqual(MAX_READ_CHUNK_BYTES);
+      // Must not have allocated the whole unread gap in one Buffer.
+      expect(recorded.some((size) => size >= stats.size)).toBe(false);
+    } finally {
+      restore();
+    }
+  }, 60_000);
+
+  it("drains the old inode fully when rotation happens while blocked", async () => {
+    // Multi-chunk old file so a blocked first-chunk offer still leaves unread
+    // bytes on the rotated inode. Reopening the path mid-drain would abandon them.
+    const oldCount = 20_000;
+    const filePath = await createTempFile(buildJsonlFixture(oldCount));
+    const stats = await fs.stat(filePath);
+    expect(stats.size).toBeGreaterThan(3 * MAX_READ_CHUNK_BYTES);
+    const rotatedPath = `${filePath}.1`;
+
+    const input = createFileInput({
+      path: filePath,
+      follow: true,
+      startAt: "beginning",
+      pollIntervalMs: 20,
+      queueSize: 1,
+      overflow: "block",
+    });
+
+    const blocked = await waitUntil(
+      async () => input.getMetrics?.()?.messagesProcessed === 1,
+      5_000,
+    );
+    expect(blocked).toBe(true);
+
+    // Rotate under the blocked producer: old inode still has unread chunks.
+    await fs.rename(filePath, rotatedPath);
+    await fs.writeFile(filePath, '{"id":999999}\n', "utf8");
+
+    const total = oldCount + 1;
+    const messages = await collectChunk(
+      input.stream.pipe(Stream.take(total), Stream.runCollect),
+    );
+
+    if (input.close) {
+      await Effect.runPromise(input.close());
+    }
+
+    expect(messages).toHaveLength(total);
+    expect(messages.map((message) => contentId(message.content))).toEqual([
+      ...Array.from({ length: oldCount }, (_, id) => id),
+      999999,
+    ]);
+    expect(input.getMetrics?.()).toMatchObject({
+      messagesProcessed: total,
+      messagesDropped: 0,
+      errorsEncountered: 0,
+    });
+  }, 60_000);
+
+  it("one-shot replay does not include appends made while blocked", async () => {
+    const originalCount = 20_000;
+    const filePath = await createTempFile(buildJsonlFixture(originalCount));
+    const stats = await fs.stat(filePath);
+    expect(stats.size).toBeGreaterThan(3 * MAX_READ_CHUNK_BYTES);
+
+    const input = createFileInput({
+      path: filePath,
+      follow: false,
+      startAt: "beginning",
+      pollIntervalMs: 20,
+      queueSize: 1,
+      overflow: "block",
+    });
+
+    const blocked = await waitUntil(
+      async () => input.getMetrics?.()?.messagesProcessed === 1,
+      5_000,
+    );
+    expect(blocked).toBe(true);
+
+    // Append after the one-shot poll snapshotted EOF. Must not appear in replay.
+    const appended =
+      Array.from({ length: 100 }, (_, index) =>
+        JSON.stringify({ id: originalCount + index }),
+      ).join("\n") + "\n";
+    await fs.appendFile(filePath, appended, "utf8");
+
+    const messages = await collectChunk(Stream.runCollect(input.stream));
+
+    expect(messages).toHaveLength(originalCount);
+    expect(messages.map((message) => contentId(message.content))).toEqual(
+      Array.from({ length: originalCount }, (_, id) => id),
+    );
+    expect(input.getMetrics?.()).toMatchObject({
+      messagesProcessed: originalCount,
+      messagesDropped: 0,
+      errorsEncountered: 0,
+    });
+  }, 60_000);
 
   it("does not keep the process alive when a one-shot replay is abandoned", async () => {
     const lines = Array.from({ length: 32 }, (_, id) =>
