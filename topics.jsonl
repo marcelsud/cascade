@@ -4,3 +4,4 @@
 {"topic_id":"test-utilities","run_id":"974e38e-60565","commit_audited":"974e38e1285ec3e8d58eb3fd01b6acdb6baac933","seed":255063976,"outcome":"completed","candidates":1,"filed":0,"dispositions":{"duplicate":1}}
 {"topic_id":"input-acquisition-lifecycle","run_id":"974e38e-62046","commit_audited":"974e38e1285ec3e8d58eb3fd01b6acdb6baac933","seed":2962598856,"outcome":"completed","candidates":1,"filed":1,"dispositions":{"filed":1}}
 {"topic_id":"output-delivery-and-retry","run_id":"974e38e-66684","commit_audited":"974e38e1285ec3e8d58eb3fd01b6acdb6baac933","seed":2911465860,"outcome":"completed","candidates":1,"filed":1,"dispositions":{"filed":1}}
+{"topic_id":"metrics-and-observability","run_id":"974e38e-73128","commit_audited":"974e38e1285ec3e8d58eb3fd01b6acdb6baac933","seed":1195724261,"outcome":"completed","candidates":0,"filed":0,"dispositions":{}}
