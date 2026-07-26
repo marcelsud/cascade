@@ -16,6 +16,7 @@
 - Queue size and `block`, `drop_new`, or `drop_old` behavior stay bounded and reflected in metrics.
 - HTTP request bodies are bounded by a configured byte limit enforced before buffering; oversized requests are rejected without becoming messages.
 - Acquisition and release remain cancellation-safe; close never leaks source handles.
+- HTTP input factory is Effect-returning: it fails with a typed fatal `HttpInputError` if bind is rejected, releases any queue/server resources on that path, and emits the listening log only after a confirmed bind.
 - Failures retain the project's fatal, intermittent, and logical categories.
 
 ## Work Guidance

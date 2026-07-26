@@ -268,20 +268,22 @@ const buildInputInternal = (
 
   if (config.http) {
     const http = config.http;
-    return Effect.try({
-      try: () =>
-        createHttpInput({
-          port: http.port,
-          host: http.host,
-          path: http.path,
-          timeout: http.timeout,
-          maxBodyBytes: http.max_body_bytes,
-          queueSize: http.queue_size,
-          overflow: http.overflow,
-        }),
-      catch: (error) =>
-        new BuildError(error instanceof Error ? error.message : String(error)),
-    });
+    return createHttpInput({
+      port: http.port,
+      host: http.host,
+      path: http.path,
+      timeout: http.timeout,
+      maxBodyBytes: http.max_body_bytes,
+      queueSize: http.queue_size,
+      overflow: http.overflow,
+    }).pipe(
+      Effect.mapError(
+        (error) =>
+          new BuildError(
+            error instanceof Error ? error.message : String(error),
+          ),
+      ),
+    );
   }
 
   if ((config as any).file) {

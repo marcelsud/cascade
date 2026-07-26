@@ -109,6 +109,7 @@ output:
 - **Performance Metrics**: Tracks request processing duration
 - **Concurrent Handling**: Handles multiple concurrent requests
 - **Graceful Shutdown**: Properly closes server on pipeline termination
+- **Confirmed bind before ready**: The input is not ready and the "HTTP Input listening" log is not emitted until the server bind succeeds. If the port is occupied or the address is rejected, startup fails with an actionable typed error (host, port, and bind reason) through the build/validation channel rather than an unhandled process crash.
 
 ## Request Processing
 

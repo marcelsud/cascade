@@ -1,7 +1,7 @@
 /**
  * HTTP Input - Webhook server that receives HTTP POST requests
  */
-import { Effect, Stream } from "effect";
+import { Effect, Queue, Stream } from "effect";
 import * as Schema from "effect/Schema";
 import {
   createServer,
@@ -200,14 +200,30 @@ const convertHttpRequest = (
   });
 
 /**
- * Create HTTP Input component (webhook server)
+ * Release a server that never completed a successful bind so no listener or
+ * socket handle survives a failed acquisition.
+ */
+const destroyUnboundServer = (server: Server): void => {
+  server.removeAllListeners();
+  server.close();
+  if (typeof server.closeAllConnections === "function") {
+    server.closeAllConnections();
+  }
+};
+
+/**
+ * Create HTTP Input component (webhook server).
+ *
+ * The Effect resolves only after the server has successfully bound. Bind
+ * failures surface as a typed {@link HttpInputError} (fatal) and release any
+ * resources acquired during construction.
  *
  * @param config - HTTP input configuration
- * @returns Input component that receives HTTP POST requests
+ * @returns Effect that yields an Input component receiving HTTP POST requests
  *
  * @example
  * ```typescript
- * const input = createHttpInput({
+ * const input = yield* createHttpInput({
  *   port: 8080,
  *   host: "0.0.0.0",
  *   path: "/webhook",
@@ -217,133 +233,180 @@ const convertHttpRequest = (
  */
 export const createHttpInput = (
   config: HttpInputConfig,
-): Input<HttpInputError> => {
-  // Validate configuration synchronously
-  Effect.runSync(validateHttpInputConfig(config));
+): Effect.Effect<Input<HttpInputError>, HttpInputError> =>
+  Effect.gen(function* () {
+    yield* validateHttpInputConfig(config);
 
-  const host = config.host ?? "0.0.0.0";
-  const path = config.path ?? "/webhook";
-  const timeout = config.timeout ?? 30_000;
-  const maxBodyBytes = config.maxBodyBytes ?? 1_048_576;
-  const queueSize = config.queueSize ?? 1_000;
-  const overflow = config.overflow ?? "block";
+    const host = config.host ?? "0.0.0.0";
+    const path = config.path ?? "/webhook";
+    const timeout = config.timeout ?? 30_000;
+    const maxBodyBytes = config.maxBodyBytes ?? 1_048_576;
+    const queueSize = config.queueSize ?? 1_000;
+    const overflow = config.overflow ?? "block";
 
-  // Setup metrics
-  const metrics = new MetricsAccumulator("http-input");
+    const metrics = new MetricsAccumulator("http-input");
+    const messageQueue = yield* createInputQueue<Message>(queueSize, overflow);
+    const dropLogState = { lastLogAt: 0, suppressed: 0 };
 
-  // Create message queue for incoming requests
-  const messageQueue = Effect.runSync(
-    createInputQueue<Message>(queueSize, overflow),
-  );
-  const dropLogState = { lastLogAt: 0, suppressed: 0 };
-
-  // Create HTTP server
-  let server: Server | null = null;
-
-  const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
-    try {
-      // Only accept POST requests on the specified path
-      if (req.method !== "POST" || req.url !== path) {
-        res.writeHead(404, { "Content-Type": "text/plain" });
-        res.end("Not Found");
-        return;
-      }
-
-      const declaredLength = Number(req.headers["content-length"]);
-      if (Number.isFinite(declaredLength) && declaredLength > maxBodyBytes) {
-        throw new RequestBodyTooLargeError(maxBodyBytes);
-      }
-
-      // Read request body with configured absolute timeout and byte limit
-      const body = await readBody(req, timeout, maxBodyBytes);
-
-      // Convert to message and measure duration
-      const result = await Effect.runPromise(
-        measureDuration(convertHttpRequest(req, body)),
-      );
-
-      const [message, duration] = result;
-
-      // Add to queue
-      const offer = await Effect.runPromise(
-        offerInputQueue(messageQueue, message, overflow, queueSize),
-      );
-      if (offer.dropped > 0) {
-        await Effect.runPromise(recordQueueDrop(metrics, dropLogState, "HTTP"));
-      }
-
-      if (offer.accepted) {
-        metrics.recordProcessed(duration);
-
-        // Emit metrics every 100 accepted messages
-        const metricsSnapshot = metrics.getInputMetrics();
-        if (metricsSnapshot.messagesProcessed % 100 === 0) {
-          await Effect.runPromise(emitInputMetrics(metricsSnapshot));
+    const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
+      try {
+        // Only accept POST requests on the specified path
+        if (req.method !== "POST" || req.url !== path) {
+          res.writeHead(404, { "Content-Type": "text/plain" });
+          res.end("Not Found");
+          return;
         }
-      }
 
-      // Return 200 OK
-      res.writeHead(200, { "Content-Type": "text/plain" });
-      res.end("OK");
-    } catch (error) {
-      metrics.recordError();
-
-      const canWrite = !res.headersSent && !res.writableEnded && !res.destroyed;
-      const endAndClose = (status: number, text: string) => {
-        if (canWrite) {
-          res.writeHead(status, {
-            "Content-Type": "text/plain",
-            Connection: "close",
-          });
-          res.end(text, () => {
-            if (!req.destroyed) {
-              req.destroy();
-            }
-          });
-        } else if (!req.destroyed) {
-          req.destroy();
+        const declaredLength = Number(req.headers["content-length"]);
+        if (Number.isFinite(declaredLength) && declaredLength > maxBodyBytes) {
+          throw new RequestBodyTooLargeError(maxBodyBytes);
         }
-      };
 
-      if (isRequestBodyTimeoutError(error)) {
-        endAndClose(408, "Request Timeout");
-      } else if (isRequestBodyTooLargeError(error)) {
-        endAndClose(413, "Payload Too Large");
-      } else if (canWrite) {
-        res.writeHead(500, { "Content-Type": "text/plain" });
-        res.end("Internal Server Error");
+        // Read request body with configured absolute timeout and byte limit
+        const body = await readBody(req, timeout, maxBodyBytes);
+
+        // Convert to message and measure duration
+        const result = await Effect.runPromise(
+          measureDuration(convertHttpRequest(req, body)),
+        );
+
+        const [message, duration] = result;
+
+        // Add to queue
+        const offer = await Effect.runPromise(
+          offerInputQueue(messageQueue, message, overflow, queueSize),
+        );
+        if (offer.dropped > 0) {
+          await Effect.runPromise(recordQueueDrop(metrics, dropLogState, "HTTP"));
+        }
+
+        if (offer.accepted) {
+          metrics.recordProcessed(duration);
+
+          // Emit metrics every 100 accepted messages
+          const metricsSnapshot = metrics.getInputMetrics();
+          if (metricsSnapshot.messagesProcessed % 100 === 0) {
+            await Effect.runPromise(emitInputMetrics(metricsSnapshot));
+          }
+        }
+
+        // Return 200 OK
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        res.end("OK");
+      } catch (error) {
+        metrics.recordError();
+
+        const canWrite = !res.headersSent && !res.writableEnded && !res.destroyed;
+        const endAndClose = (status: number, text: string) => {
+          if (canWrite) {
+            res.writeHead(status, {
+              "Content-Type": "text/plain",
+              Connection: "close",
+            });
+            res.end(text, () => {
+              if (!req.destroyed) {
+                req.destroy();
+              }
+            });
+          } else if (!req.destroyed) {
+            req.destroy();
+          }
+        };
+
+        if (isRequestBodyTimeoutError(error)) {
+          endAndClose(408, "Request Timeout");
+        } else if (isRequestBodyTooLargeError(error)) {
+          endAndClose(413, "Payload Too Large");
+        } else if (canWrite) {
+          res.writeHead(500, { "Content-Type": "text/plain" });
+          res.end("Internal Server Error");
+        }
+
+        await Effect.runPromise(
+          Effect.logError(`HTTP Input error: ${error}`),
+        ).catch(() => undefined);
       }
+    };
 
-      await Effect.runPromise(
-        Effect.logError(`HTTP Input error: ${error}`),
-      ).catch(() => undefined);
-    }
-  };
+    // Bind before returning a ready input: resolve on listening, fail on error.
+    // Interruption while listen is pending must release the server and queue
+    // (same resource contract as the failure path).
+    const server: Server = yield* Effect.async<Server, HttpInputError>(
+      (resume) => {
+        const candidate = createServer(handleRequest);
+        let settled = false;
 
-  // Start server
-  server = createServer(handleRequest);
-  server.listen(config.port, host);
+        const onListening = () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          candidate.removeListener("error", onError);
+          // Post-bind errors must not become unhandled events.
+          candidate.on("error", (error) => {
+            Effect.runSync(
+              Effect.logError(`HTTP Input server error: ${error}`),
+            );
+          });
+          resume(Effect.succeed(candidate));
+        };
 
-  Effect.runSync(
-    Effect.log(`HTTP Input listening on ${host}:${config.port}${path}`),
-  );
+        const onError = (error: Error) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          candidate.removeListener("listening", onListening);
+          destroyUnboundServer(candidate);
+          resume(
+            Effect.fail(
+              new HttpInputError(
+                `HTTP Input failed to bind ${host}:${config.port}: ${error.message}`,
+                "fatal",
+                error,
+              ),
+            ),
+          );
+        };
 
-  // Create stream from queue
-  const stream = Stream.fromQueue(messageQueue);
+        candidate.once("listening", onListening);
+        candidate.once("error", onError);
+        candidate.listen(config.port, host);
 
-  return {
-    name: "http-input",
-    getMetrics: () => metrics.getInputMetrics(),
-    stream,
+        // Cancellation finalizer: run when the fiber is interrupted while the
+        // async callback is still pending (resume not yet called).
+        return Effect.sync(() => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          candidate.removeListener("listening", onListening);
+          candidate.removeListener("error", onError);
+          destroyUnboundServer(candidate);
+        });
+      },
+    ).pipe(
+      // onError covers failures and interruption; success leaves the queue open.
+      Effect.onError(() => Queue.shutdown(messageQueue)),
+    );
 
-    close: (): Effect.Effect<void, never> =>
-      Effect.gen(function* () {
-        yield* Effect.log("HTTP Input closing");
+    yield* Effect.log(
+      `HTTP Input listening on ${host}:${config.port}${path}`,
+    );
 
-        // Close server
-        if (server) {
+    const stream = Stream.fromQueue(messageQueue);
+
+    return {
+      name: "http-input",
+      getMetrics: () => metrics.getInputMetrics(),
+      stream,
+
+      close: (): Effect.Effect<void, never> =>
+        Effect.gen(function* () {
+          yield* Effect.log("HTTP Input closing");
+
           yield* Effect.async<void>((resume) => {
-            server!.close((error) => {
+            server.close((error) => {
               if (error) {
                 resume(
                   Effect.logError(`Failed to close HTTP server: ${error}`),
@@ -353,9 +416,8 @@ export const createHttpInput = (
               }
             });
           });
-        }
 
-        yield* emitInputMetrics(metrics.getInputMetrics());
-      }),
-  };
-};
+          yield* emitInputMetrics(metrics.getInputMetrics());
+        }),
+    };
+  });
