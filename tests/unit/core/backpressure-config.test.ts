@@ -9,7 +9,7 @@ import {
   loadConfig,
   PipelineConfigSchema,
 } from "../../../src/core/config-loader.js";
-import { withDLQ } from "../../../src/core/dlq.js";
+import { withBackpressure, withDLQ } from "../../../src/core/dlq.js";
 import {
   ComponentError,
   type ErrorCategory,
@@ -487,6 +487,211 @@ describe("pipeline backpressure configuration", () => {
 
     expect(Exit.isSuccess(result)).toBe(true);
     expect(startOrder).toEqual(["a", "b", "a"]);
+  });
+
+  it("does not double-wrap when binder omits bindPrimaryOutputPermits on bound copy", async () => {
+    // A conforming binder may return an already-guarded Output without
+    // re-exposing bindPrimaryOutputPermits. The runner must decide outer
+    // wrap from whether the original output had a binder, not the bound copy.
+    const config = await Effect.runPromise(
+      S.decodeUnknown(PipelineConfigSchema)({
+        input: {
+          generate: {
+            count: 1,
+            template: { value: "test" },
+          },
+        },
+        output: {
+          capture: {},
+        },
+        pipeline: {
+          backpressure: {
+            max_concurrent_messages: 1,
+            max_concurrent_outputs: 1,
+          },
+        },
+      }),
+    );
+
+    const pipeline = await Effect.runPromise(buildPipeline(config));
+
+    let primaryStarts = 0;
+    const primary: Output = {
+      name: "binder-omits-method",
+      send: () =>
+        Effect.sync(() => {
+          primaryStarts += 1;
+        }),
+      bindPrimaryOutputPermits: (permits) => ({
+        name: "binder-omits-method-bound",
+        send: (msg: Message) => permits.withPermits(1)(primary.send(msg)),
+        // Intentionally omit bindPrimaryOutputPermits on the bound copy.
+      }),
+    };
+
+    const result = await Effect.runPromise(
+      run({
+        ...pipeline,
+        output: primary,
+      }).pipe(Effect.timeout("500 millis"), Effect.exit),
+    );
+
+    expect(Exit.isSuccess(result)).toBe(true);
+    if (Exit.isSuccess(result)) {
+      expect(result.value.success).toBe(true);
+      expect(result.value.stats.processed).toBe(1);
+    }
+    expect(primaryStarts).toBe(1);
+  });
+
+  it("preserves binder this when binding primary output permits", async () => {
+    // Extracting bindPrimaryOutputPermits into a free function drops the
+    // receiver. A type-conforming method binder that reads `this.name` must
+    // still complete one send; silent success with processed:0 is a hard failure.
+    const config = await Effect.runPromise(
+      S.decodeUnknown(PipelineConfigSchema)({
+        input: {
+          generate: {
+            count: 1,
+            template: { value: "test" },
+          },
+        },
+        output: {
+          capture: {},
+        },
+        pipeline: {
+          backpressure: {
+            max_concurrent_messages: 1,
+            max_concurrent_outputs: 1,
+          },
+        },
+      }),
+    );
+
+    const pipeline = await Effect.runPromise(buildPipeline(config));
+
+    let sends = 0;
+    const output: Output = {
+      name: "receiver-aware",
+      send() {
+        sends += 1;
+        return Effect.void;
+      },
+      bindPrimaryOutputPermits(permits) {
+        // Method form reads the receiver. Optional-chain only so a lost
+        // `this` still returns a binder copy; the subsequent self.send call
+        // then defects and the run reports success with processed:0.
+        const self = this;
+        return {
+          name: `${this?.name}-bound`,
+          send(msg: Message) {
+            return permits.withPermits(1)(self.send(msg));
+          },
+          bindPrimaryOutputPermits: this?.bindPrimaryOutputPermits,
+        };
+      },
+    };
+
+    const result = await Effect.runPromise(
+      run({
+        ...pipeline,
+        output,
+      }).pipe(Effect.timeout("500 millis"), Effect.exit),
+    );
+
+    expect(Exit.isSuccess(result)).toBe(true);
+    if (Exit.isSuccess(result)) {
+      expect(result.value.success).toBe(true);
+      expect(result.value.stats.processed).toBe(1);
+    }
+    expect(sends).toBe(1);
+  });
+
+  it("recursively binds nested permit-aware wrappers under withDLQ", async () => {
+    // Outer withDLQ must not hold the sole primary permit across an inner
+    // wrapper's own DLQ routing. Nested shape:
+    //   withDLQ(withBackpressure(withDLQ(primary, dlq)))
+    const config = await Effect.runPromise(
+      S.decodeUnknown(PipelineConfigSchema)({
+        input: {
+          generate: {
+            count: 2,
+            template: { value: "test" },
+          },
+        },
+        output: {
+          capture: {},
+        },
+        pipeline: {
+          backpressure: {
+            max_concurrent_messages: 2,
+            max_concurrent_outputs: 1,
+          },
+        },
+      }),
+    );
+
+    const pipeline = await Effect.runPromise(buildPipeline(config));
+
+    let primaryStarts = 0;
+    let dlqStarts = 0;
+    const secondPrimaryStarted = await Effect.runPromise(Deferred.make<void>());
+
+    const primary: Output = {
+      name: "nested-primary-fail-first",
+      send: () =>
+        Effect.suspend(() => {
+          primaryStarts += 1;
+          const attempt = primaryStarts;
+          if (attempt === 1) {
+            return Effect.fail(
+              new CategorizedTestError("primary unavailable", "logical"),
+            );
+          }
+          return Deferred.succeed(secondPrimaryStarted, undefined).pipe(
+            Effect.asVoid,
+          );
+        }),
+    };
+
+    const dlq: Output = {
+      name: "nested-dlq-waits-for-second-primary",
+      send: () =>
+        Effect.gen(function* () {
+          dlqStarts += 1;
+          // Completes only after another primary send starts — deadlocks if
+          // the outer withDLQ still holds the sole output permit during DLQ.
+          yield* Deferred.await(secondPrimaryStarted);
+        }),
+    };
+
+    const nested = withDLQ({
+      output: withBackpressure({
+        output: withDLQ({
+          output: primary,
+          dlq,
+          maxRetries: 0,
+          retrySchedule: Schedule.spaced(0),
+        }),
+      }),
+      maxRetries: 0,
+      retrySchedule: Schedule.spaced(0),
+    });
+
+    const result = await Effect.runPromise(
+      run({
+        ...pipeline,
+        output: nested,
+      }).pipe(Effect.timeout("500 millis"), Effect.exit),
+    );
+
+    expect(Exit.isSuccess(result)).toBe(true);
+    if (Exit.isSuccess(result)) {
+      expect(result.value.success).toBe(true);
+      expect(result.value.stats.processed).toBe(2);
+    }
+    expect(primaryStarts).toBe(2);
+    expect(dlqStarts).toBe(1);
   });
 
   it("collapses an empty backpressure object to undefined", async () => {

@@ -423,7 +423,12 @@ export const run = <E, R>(
     const processorDlqOutput =
       pipeline.dlqOutput ?? pipeline.output.getDLQOutput?.();
 
-    const processMessage = (msg: Message, outputPermits: Effect.Semaphore) => {
+    const processMessage = (
+      msg: Message,
+      output: (typeof pipeline)["output"],
+      wrapOuterPermit: boolean,
+      outputPermits: Effect.Semaphore,
+    ) => {
       const recordMessageFailure = (
         error: unknown,
         options: { readonly routeToDlq: boolean },
@@ -469,11 +474,8 @@ export const run = <E, R>(
       // Prefer wrapper-local primary permits (withDLQ / withBackpressure) so
       // retry backoff and DLQ routing do not hold a primary output slot.
       // Ordinary unwrapped outputs keep the outer permit guard below.
-      const output =
-        pipeline.output.bindPrimaryOutputPermits?.(outputPermits) ??
-        pipeline.output;
-      const wrapOuterPermit = output.bindPrimaryOutputPermits === undefined;
-
+      // Decide outer wrap from whether the original output exposed a binder
+      // (bound copies may omit the optional method without meaning "unbound").
       return pipe(
         runProcessorChain(msg, pipeline.processors),
         Effect.flatMap((messages) =>
@@ -516,6 +518,14 @@ export const run = <E, R>(
         const workers = yield* FiberSet.make<void, never>();
         const permits = yield* Effect.makeSemaphore(maxConcurrentMessages);
         const outputPermits = yield* Effect.makeSemaphore(maxConcurrentOutputs);
+        // Bind once per run. Fallback outer wrap depends on the pre-bind hook,
+        // not on whether the returned copy re-exposes bindPrimaryOutputPermits.
+        const bindPrimary = pipeline.output.bindPrimaryOutputPermits;
+        const output =
+          bindPrimary !== undefined
+            ? bindPrimary.call(pipeline.output, outputPermits)
+            : pipeline.output;
+        const wrapOuterPermit = bindPrimary === undefined;
         // Stop intake on external shutdown OR internal fatal halt.
         const intakeStop = yield* Deferred.make<void>();
         yield* Effect.forkScoped(
@@ -552,7 +562,7 @@ export const run = <E, R>(
               }
               yield* FiberSet.run(
                 workers,
-                processMessage(message, outputPermits).pipe(
+                processMessage(message, output, wrapOuterPermit, outputPermits).pipe(
                   Effect.ensuring(permits.release(1)),
                 ),
               );
