@@ -173,8 +173,7 @@ describe("Redis reconnect policy", () => {
   it.each([
     {
       redis_list: {
-        host: "localhost",
-        port: 6379,
+        url: "redis://localhost:6379",
         key: "tasks",
         max_reconnect_attempts: 4,
         reconnect_backoff_ms: 250,
@@ -206,8 +205,7 @@ describe("Redis reconnect policy", () => {
         Schema.decodeUnknown(PipelineConfigSchema)({
           input: {
             redis_list: {
-              host: "localhost",
-              port: 6379,
+              url: "redis://localhost:6379",
               key: "tasks",
               max_reconnect_attempts: -1,
               reconnect_backoff_ms: 0,

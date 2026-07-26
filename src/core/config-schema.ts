@@ -2,7 +2,15 @@
  * Pipeline configuration schemas
  */
 import * as S from "effect/Schema";
+import { hasEffectiveAssertCheck } from "../testing/assert-processor.js";
 import type { ComponentKind, ComponentRegistry } from "./component-registry.js";
+import { tryParseRedisUrl } from "./redis-url.js";
+
+const RedisUrlSchema = S.String.pipe(
+  S.filter((url) => tryParseRedisUrl(url) !== undefined, {
+    message: () => "must be a valid redis:// URL",
+  }),
+);
 
 const validateExactlyOneComponent = (
   label: string,
@@ -114,8 +122,7 @@ const StdinInputSchema = S.Struct({
  * Schema for Redis Pub/Sub Input configuration (Bento style)
  */
 const RedisPubSubInputSchema = S.Struct({
-  host: S.String,
-  port: S.Number,
+  url: RedisUrlSchema,
   password: S.optional(S.String),
   db: S.optional(S.Number),
   channels: S.optional(S.Array(S.String)),
@@ -134,8 +141,7 @@ const RedisPubSubInputSchema = S.Struct({
  * Schema for Redis List Input configuration (Bento style)
  */
 const RedisListInputSchema = S.Struct({
-  host: S.String,
-  port: S.Number,
+  url: RedisUrlSchema,
   key: S.Union(S.String, S.Array(S.String)),
   password: S.optional(S.String),
   db: S.optional(S.Number),
@@ -311,7 +317,12 @@ const AssertProcessorSchema = S.Struct({
   hasFields: S.optional(S.Array(S.String)),
   error: S.optional(S.String),
   logPassing: S.optional(S.Boolean),
-});
+}).pipe(
+  S.filter(hasEffectiveAssertCheck, {
+    message: () =>
+      "Assert Processor requires at least one effective check: a non-blank 'condition' or at least one non-blank 'hasFields' path.",
+  }),
+);
 
 /**
  * Processor configuration - recursive to support nested processors (branch, switch)
@@ -427,8 +438,7 @@ const HttpOutputSchema = S.Struct({
  * Schema for Redis Pub/Sub Output configuration (Bento style)
  */
 const RedisPubSubOutputSchema = S.Struct({
-  host: S.String,
-  port: S.Number,
+  url: RedisUrlSchema,
   channel: S.String,
   password: S.optional(S.String),
   db: S.optional(S.Number),
@@ -445,8 +455,7 @@ const RedisPubSubOutputSchema = S.Struct({
  * Schema for Redis List Output configuration (Bento style)
  */
 const RedisListOutputSchema = S.Struct({
-  host: S.String,
-  port: S.Number,
+  url: RedisUrlSchema,
   key: S.String,
   password: S.optional(S.String),
   db: S.optional(S.Number),

@@ -89,10 +89,15 @@ input:
 
 Each message includes the following metadata automatically:
 
-- `source`: "sqs"
+- `source`: "sqs-input"
 - `externalId`: SQS Message ID
 - `receivedAt`: ISO 8601 timestamp
-- `correlationId`: Auto-generated if not present
+
+The SQS input does **not** generate a `correlationId` on the message envelope
+(`message.correlationId`) or in `metadata.correlationId`. If you need generated
+correlation IDs for tracing, configure the
+[Metadata Processor](../processors/metadata.md) explicitly in your pipeline —
+it is not applied automatically by this input.
 
 ## Troubleshooting
 
@@ -119,5 +124,6 @@ Each message includes the following metadata automatically:
 
 - [Redis Streams Input](redis-streams.md) - Alternative message input
 - [SQS Output](../outputs/sqs.md) - Send messages to SQS
+- [Metadata Processor](../processors/metadata.md) - Generate correlation IDs when needed
 - [Dead Letter Queue](../advanced/dlq.md) - Handle failed messages
 - [Backpressure Control](../advanced/backpressure.md) - Control message throughput

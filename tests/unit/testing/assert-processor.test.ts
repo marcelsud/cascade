@@ -3,7 +3,9 @@ import { Effect } from "effect";
 import {
   createAssertProcessor,
   AssertProcessorError,
+  AssertProcessorConfigError,
 } from "../../../src/testing/assert-processor.js";
+import { AssertProcessorConfigError as RootAssertProcessorConfigError } from "../../../src/index.js";
 import { createMessage } from "../../../src/core/types.js";
 
 describe("AssertProcessor", () => {
@@ -274,37 +276,59 @@ describe("AssertProcessor", () => {
     });
   });
 
-  describe("Empty Configuration", () => {
-    it("should pass all messages when no assertions configured", async () => {
-      const processor = createAssertProcessor({});
+  describe("Vacuous Configuration", () => {
+    const vacuousConfigurations = [
+      ["undefined config", () => createAssertProcessor()],
+      ["empty config", () => createAssertProcessor({})],
+      ["empty condition", () => createAssertProcessor({ condition: "" })],
+      ["blank condition", () => createAssertProcessor({ condition: "   " })],
+      ["empty field list", () => createAssertProcessor({ hasFields: [] })],
+      [
+        "blank-only field list",
+        () => createAssertProcessor({ hasFields: ["   "] }),
+      ],
+      ["error-only config", () => createAssertProcessor({ error: "x" })],
+      [
+        "logPassing-only config",
+        () => createAssertProcessor({ logPassing: true }),
+      ],
+    ] as const;
 
-      const message = createMessage({ any: "data" });
-
-      const result = await Effect.runPromise(processor.process(message));
-
-      expect(result).toEqual(message);
+    it.each(vacuousConfigurations)("rejects %s", (_name, create) => {
+      expect(create).toThrow(AssertProcessorConfigError);
+      expect(create).toThrow(
+        "Assert Processor requires at least one effective check: a non-blank 'condition' or at least one non-blank 'hasFields' path.",
+      );
     });
 
-    it("should work with undefined config", async () => {
-      const processor = createAssertProcessor();
+    it("names the non-blank hasFields path requirement for blank-only arrays", () => {
+      expect(() => createAssertProcessor({ hasFields: ["   "] })).toThrow(
+        "Assert Processor requires at least one effective check: a non-blank 'condition' or at least one non-blank 'hasFields' path.",
+      );
+    });
 
-      const message = createMessage({ any: "data" });
+    it("exports AssertProcessorConfigError from the package root", () => {
+      expect(RootAssertProcessorConfigError).toBe(AssertProcessorConfigError);
+      expect(() => {
+        throw new RootAssertProcessorConfigError("boom");
+      }).toThrow(AssertProcessorConfigError);
+    });
 
-      const result = await Effect.runPromise(processor.process(message));
-
-      expect(result).toEqual(message);
+    it("accepts configurations with an effective check", () => {
+      expect(() => createAssertProcessor({ condition: "true" })).not.toThrow();
+      expect(() => createAssertProcessor({ hasFields: ["id"] })).not.toThrow();
     });
   });
 
   describe("Component Properties", () => {
     it("should have correct component name", () => {
-      const processor = createAssertProcessor();
+      const processor = createAssertProcessor({ condition: "true" });
 
       expect(processor.name).toBe("assert-processor");
     });
 
     it("should have process method", () => {
-      const processor = createAssertProcessor();
+      const processor = createAssertProcessor({ condition: "true" });
 
       expect(processor.process).toBeDefined();
       expect(typeof processor.process).toBe("function");
@@ -334,18 +358,6 @@ describe("AssertProcessor", () => {
       await expect(
         Effect.runPromise(processor.process(message)),
       ).rejects.toThrow("Missing field 'value'");
-    });
-
-    it("should handle empty field list", async () => {
-      const processor = createAssertProcessor({
-        hasFields: [],
-      });
-
-      const message = createMessage({ value: "test" });
-
-      const result = await Effect.runPromise(processor.process(message));
-
-      expect(result).toEqual(message);
     });
   });
 });

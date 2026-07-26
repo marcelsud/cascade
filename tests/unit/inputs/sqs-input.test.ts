@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  Effect,
-  Fiber,
-  Logger,
-  Stream,
-  TestClock,
-} from "effect";
+import { Effect, Fiber, Logger, Stream, TestClock } from "effect";
 import * as TestContext from "effect/TestContext";
 import {
   DeleteMessageCommand,
@@ -18,6 +12,9 @@ import {
 import { run } from "../../../src/core/pipeline.js";
 import { withDLQ } from "../../../src/core/dlq.js";
 import { createMessage, type Message } from "../../../src/core/types.js";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const createMockClient = () => {
   const commands: Array<ReceiveMessageCommand | DeleteMessageCommand> = [];
@@ -455,4 +452,72 @@ describe("SQS polling recovery", () => {
       );
     },
   );
+});
+
+const extractMessageMetadataSection = (markdown: string): string => {
+  const match = markdown.match(/## Message Metadata\n([\s\S]*?)(?=\n## |\n*$)/);
+  if (!match) {
+    throw new Error("Message Metadata section not found");
+  }
+  return match[1];
+};
+
+describe("SQS emitted message metadata contract", () => {
+  it("emits source sqs-input and does not generate correlation IDs", async () => {
+    const { client } = createMockClient();
+    let captured: Message | undefined;
+
+    await Effect.runPromise(
+      runOneSqsMessage(client, {
+        name: "capture-output",
+        send: (message) =>
+          Effect.sync(() => {
+            captured = message;
+          }),
+      }),
+    );
+
+    expect(captured).toBeDefined();
+    expect(captured!.metadata.source).toBe("sqs-input");
+    expect(captured!.correlationId).toBeUndefined();
+    expect(captured!.metadata.correlationId).toBeUndefined();
+  });
+
+  it("documents the same source and correlation contract as runtime", async () => {
+    const { client } = createMockClient();
+    let captured: Message | undefined;
+
+    await Effect.runPromise(
+      runOneSqsMessage(client, {
+        name: "capture-output",
+        send: (message) =>
+          Effect.sync(() => {
+            captured = message;
+          }),
+      }),
+    );
+
+    expect(captured).toBeDefined();
+
+    const docsPath = join(
+      dirname(fileURLToPath(import.meta.url)),
+      "../../../docs/inputs/sqs.md",
+    );
+    const section = extractMessageMetadataSection(
+      readFileSync(docsPath, "utf8"),
+    );
+
+    const documentedSource = section.match(/`source`:\s*"([^"]+)"/)?.[1];
+    expect(documentedSource).toBe(captured!.metadata.source);
+    expect(documentedSource).toBe("sqs-input");
+    expect(section).not.toMatch(
+      /correlationId.*Auto-generated if not present/i,
+    );
+    expect(section).not.toMatch(/auto-generat/i);
+
+    // Docs must not claim generation when runtime emits neither field.
+    expect(captured!.correlationId).toBeUndefined();
+    expect(captured!.metadata.correlationId).toBeUndefined();
+    expect(section.toLowerCase()).toContain("metadata processor");
+  });
 });

@@ -82,17 +82,24 @@ export const withDLQ = <E>(config: DLQConfig<E>): Output<E | DLQError> => {
     (close): close is NonNullable<typeof close> => close !== undefined,
   );
 
-  return {
+  const build = (outputPermits?: Effect.Semaphore): Output<E | DLQError> => ({
     name: `${config.output.name}-with-dlq`,
     send: (msg: Message): Effect.Effect<void, E | DLQError> =>
       Effect.gen(function* () {
         let attempts = 0;
 
         // Count every primary send, including the first attempt.
-        const sendOnce = Effect.suspend(() => {
-          attempts += 1;
-          return config.output.send(msg);
-        });
+        // Hold a primary permit only for the underlying send itself so
+        // retry delays and DLQ routing cannot starve other primaries.
+        const sendOnce: Effect.Effect<void, E | DLQError> = Effect.suspend(
+          () => {
+            attempts += 1;
+            const primarySend = config.output.send(msg);
+            return outputPermits === undefined
+              ? primarySend
+              : outputPermits.withPermits(1)(primarySend);
+          },
+        );
 
         // Only intermittent failures consume the configured retry budget.
         const sendWithRetry = sendOnce.pipe(
@@ -163,7 +170,10 @@ export const withDLQ = <E>(config: DLQConfig<E>): Output<E | DLQError> => {
     getMetrics: config.output.getMetrics,
     getDLQMetrics: config.dlq?.getMetrics,
     getDLQOutput: config.dlq ? () => config.dlq : undefined,
-  };
+    bindPrimaryOutputPermits: (permits) => build(permits),
+  });
+
+  return build();
 };
 
 /**
@@ -182,16 +192,27 @@ export interface OutputBackpressureConfig<E> {
 export const withBackpressure = <E>(
   config: OutputBackpressureConfig<E>,
 ): Output<E> => {
-  return {
+  const build = (output: Output<E>): Output<E> => ({
     name: `${config.output.name}-with-backpressure`,
     send: (msg: Message): Effect.Effect<void, E> =>
       Effect.gen(function* () {
-        // Send to underlying output (concurrency handled by caller)
-        yield* config.output.send(msg);
+        // Send to underlying output (concurrency handled by caller / binder)
+        yield* output.send(msg);
       }),
-    close: config.output.close,
-    getMetrics: config.output.getMetrics,
-    getDLQMetrics: config.output.getDLQMetrics,
-    getDLQOutput: config.output.getDLQOutput,
-  };
+    close: output.close,
+    getMetrics: output.getMetrics,
+    getDLQMetrics: output.getDLQMetrics,
+    getDLQOutput: output.getDLQOutput,
+    bindPrimaryOutputPermits: (permits) => {
+      const boundInner =
+        output.bindPrimaryOutputPermits?.(permits) ??
+        ({
+          ...output,
+          send: (msg: Message) => permits.withPermits(1)(output.send(msg)),
+        } satisfies Output<E>);
+      return build(boundInner);
+    },
+  });
+
+  return build(config.output);
 };

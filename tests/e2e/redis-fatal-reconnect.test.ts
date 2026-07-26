@@ -123,8 +123,7 @@ describe("Redis fatal reconnect with password-protected Redis", () => {
       configPath,
       `input:
   redis_list:
-    host: "${host}"
-    port: ${port}
+    url: "redis://${host}:${port}"
     key: cascade-fatal-auth-cli
     connect_timeout: 1000
     command_timeout: 1000

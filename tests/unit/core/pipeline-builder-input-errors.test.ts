@@ -104,8 +104,7 @@ describe("pipeline-builder input construction errors", () => {
       {
         input: {
           redis_pubsub: {
-            host: "localhost",
-            port: 6379,
+            url: "redis://localhost:6379",
           },
         },
         output: {
@@ -191,8 +190,7 @@ describe("pipeline-builder input construction errors", () => {
       fixturePath,
       `input:
   redis_pubsub:
-    host: localhost
-    port: 6379
+    url: redis://localhost:6379
 output:
   stdout: {}
 `,

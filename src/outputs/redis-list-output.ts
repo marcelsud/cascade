@@ -148,14 +148,18 @@ export const createRedisListOutput = (
   // Metrics tracking
   const metrics = new MetricsAccumulator("redis-list-output");
   let messageCount = 0;
+  let connectionLogged = false;
 
   return {
     name: "redis-list-output",
     getMetrics: () => metrics.getOutputMetrics(),
     send: (msg: Message): Effect.Effect<void, RedisListOutputError> => {
       return Effect.gen(function* () {
-        // Log connection on first send (INFO level)
-        yield* Effect.logInfo(`Connected to Redis: ${connectionInfo}`);
+        // Log connection once per output lifecycle (INFO level)
+        if (!connectionLogged) {
+          connectionLogged = true;
+          yield* Effect.logInfo(`Connected to Redis: ${connectionInfo}`);
+        }
 
         // Interpolate key name with message data
         const key = interpolateKey(config.key, msg);

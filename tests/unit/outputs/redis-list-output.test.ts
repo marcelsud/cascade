@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { Effect } from "effect";
+import { Effect, Logger, LogLevel } from "effect";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -417,8 +417,7 @@ describe("RedisListOutput", () => {
         },
         output: {
           redis_list: {
-            host: "localhost",
-            port: 6379,
+            url: "redis://localhost:6379",
             key,
             max_length: 2,
           },
@@ -461,8 +460,7 @@ describe("RedisListOutput", () => {
         },
         output: {
           redis_list: {
-            host: "localhost",
-            port: 6379,
+            url: "redis://localhost:6379",
             key,
             max_len: 2,
           },
@@ -491,6 +489,123 @@ describe("RedisListOutput", () => {
       }
       if (pipeline.input.close) {
         await Effect.runPromise(pipeline.input.close());
+      }
+    });
+  });
+
+  describe("connection logging", () => {
+    const connectionMessage = "Connected to Redis: redis://localhost:6379/0";
+
+    const captureLogs = <A, E>(effect: Effect.Effect<A, E>) => {
+      const messages: unknown[] = [];
+      const logger = Logger.make<unknown, void>(({ message }) => {
+        messages.push(message);
+      });
+      return Effect.runPromise(
+        effect.pipe(
+          Logger.withMinimumLogLevel(LogLevel.Info),
+          Effect.provide(Logger.replace(Logger.defaultLogger, logger)),
+        ),
+      ).then(() => messages);
+    };
+
+    const connectionEvents = (messages: unknown[]) =>
+      messages.filter((message) => {
+        if (typeof message === "string") {
+          return message === connectionMessage;
+        }
+        if (Array.isArray(message)) {
+          return message.some((part) => part === connectionMessage);
+        }
+        return false;
+      });
+
+    it("emits zero connection events until the first send", async () => {
+      const messages = await captureLogs(
+        Effect.sync(() => {
+          createRedisListOutput({
+            host: "localhost",
+            port: 6379,
+            key: "tasks",
+          });
+        }),
+      );
+      expect(connectionEvents(messages)).toHaveLength(0);
+    });
+
+    it("emits exactly one connection event across sequential sends", async () => {
+      const output = createRedisListOutput({
+        host: "localhost",
+        port: 6379,
+        key: "tasks",
+      });
+
+      const messages = await captureLogs(
+        Effect.gen(function* () {
+          yield* output.send(createMessage("A"));
+          yield* output.send(createMessage("B"));
+          yield* output.send(createMessage("C"));
+        }),
+      );
+
+      expect(connectionEvents(messages)).toHaveLength(1);
+
+      if (output.close) {
+        await Effect.runPromise(output.close());
+      }
+    });
+
+    it("emits exactly one connection event for concurrent first sends", async () => {
+      const output = createRedisListOutput({
+        host: "localhost",
+        port: 6379,
+        key: "tasks",
+      });
+
+      const messages = await captureLogs(
+        Effect.all(
+          [
+            output.send(createMessage("A")),
+            output.send(createMessage("B")),
+            output.send(createMessage("C")),
+          ],
+          { concurrency: "unbounded" },
+        ),
+      );
+
+      expect(connectionEvents(messages)).toHaveLength(1);
+
+      if (output.close) {
+        await Effect.runPromise(output.close());
+      }
+    });
+
+    it("emits one connection event per separately constructed instance", async () => {
+      const first = createRedisListOutput({
+        host: "localhost",
+        port: 6379,
+        key: "tasks-a",
+      });
+      const second = createRedisListOutput({
+        host: "localhost",
+        port: 6379,
+        key: "tasks-b",
+      });
+
+      const messages = await captureLogs(
+        Effect.gen(function* () {
+          yield* first.send(createMessage("A"));
+          yield* second.send(createMessage("B"));
+        }),
+      );
+
+      expect(connectionEvents(messages)).toHaveLength(2);
+
+      if (first.close) {
+        await Effect.runPromise(first.close());
+      }
+      if (second.close) {
+        await Effect.runPromise(second.close());
       }
     });
   });

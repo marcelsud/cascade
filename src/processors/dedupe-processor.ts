@@ -188,6 +188,9 @@ export const createDedupeProcessor = (
     misses: 0,
     extractionFailures: 0,
   });
+  // Bounded component-metrics cadence (same shape as stdout-output).
+  // Processors have no close hook, so count-based emission is the whole mechanism.
+  let messageCount = 0;
 
   const getMetrics = (): Effect.Effect<DedupeMetrics> =>
     Effect.gen(function* () {
@@ -213,6 +216,15 @@ export const createDedupeProcessor = (
       return Effect.gen(function* () {
         const now = Date.now();
 
+        const emitOnCadence = () =>
+          Effect.gen(function* () {
+            messageCount++;
+            if (messageCount >= 100) {
+              yield* emitDedupeMetrics(yield* getMetrics());
+              messageCount = 0;
+            }
+          });
+
         // Extract dedupe key — fail with typed error if extraction yields undefined
         const dedupeKey = extractKey(keyPath, msg);
         if (dedupeKey === undefined) {
@@ -227,6 +239,9 @@ export const createDedupeProcessor = (
             `Dedupe key extraction failed for message ${msg.id}`,
             { keyPath, reason, messageId: msg.id },
           );
+          // Count failed attempts toward the cadence so extractionFailures
+          // appear in the next coherent post-update snapshot.
+          yield* emitOnCadence();
           return yield* Effect.fail(
             new DedupeKeyExtractionError(keyPath, msg.id, reason),
           );
@@ -254,6 +269,7 @@ export const createDedupeProcessor = (
             dedupeKey,
             messageId: msg.id,
           });
+          yield* emitOnCadence();
           return [] as Message[];
         }
 
@@ -268,6 +284,7 @@ export const createDedupeProcessor = (
           messageId: msg.id,
         });
 
+        yield* emitOnCadence();
         return msg;
       });
     },
