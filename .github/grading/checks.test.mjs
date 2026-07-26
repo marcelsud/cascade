@@ -702,6 +702,159 @@ test("RT-2 fails closed on config dir plus passWithNoTests", () => {
   })
 })
 
+test("RT-2 fails closed when --mode narrows a config factory collection", () => {
+  withRepository(({ cwd, base }) => {
+    writeRelative(
+      cwd,
+      "vitest.config.ts",
+      `import { defineConfig } from "vitest/config"\n` +
+        `export default defineConfig(({ mode }) => ({\n` +
+        `  test: {\n` +
+        `    include: mode === "narrow" ? ["tests/unit/core/**"] : ["tests/**/*.test.ts"],\n` +
+        `    exclude: ["tests/e2e/**"],\n` +
+        `  },\n` +
+        `}))\n`,
+    )
+    writeRelative(
+      cwd,
+      "package.json",
+      `${JSON.stringify(
+        {
+          name: "cascade-grading-fixture",
+          private: true,
+          scripts: {
+            "test:unit": "vitest run tests/unit --mode narrow",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    )
+    commit(cwd, "mode-narrow factory")
+    assert.throws(
+      () => checkTestIntegrity({ base, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(detail, /blocking unit|dropped|reduced|selector reduced/)
+        assert.match(
+          detail,
+          /tests\/unit\/extra\/sample\.test\.ts|tests\/unit\/baseline\.test\.ts/,
+        )
+        return true
+      },
+    )
+  })
+})
+
+test("RT-2 ignores config stdout and trusts only vitest --json collection", () => {
+  withRepository(({ cwd, base }) => {
+    // Counterfeit every omitted path on stdout. The pre-fix parser treated
+    // unrecognized stdout lines as collected files and restored set equality.
+    writeRelative(
+      cwd,
+      "vitest.config.ts",
+      `console.log("tests/unit/extra/sample.test.ts")\n` +
+        `console.log("tests/unit/baseline.test.ts")\n` +
+        `export default { test: { include: ["tests/unit/core/**"] } }\n`,
+    )
+    commit(cwd, "config logs omitted paths")
+    assert.throws(
+      () => checkTestIntegrity({ base, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(detail, /blocking unit|dropped|reduced/)
+        assert.match(detail, /tests\/unit\/extra\/sample\.test\.ts|tests\/unit\/baseline\.test\.ts/)
+        return true
+      },
+    )
+  })
+})
+test("RT-2 fails closed when lockfile/dependencies differ between base and head", () => {
+  withRepository(({ cwd, base }) => {
+    // No test-file drop: only dependency manifests change. The pre-fix checker
+    // reused head's install for the base worktree and would still report equal
+    // collections. Fail closed on the drift itself instead.
+    writeRelative(
+      cwd,
+      "package.json",
+      `${JSON.stringify(
+        {
+          name: "cascade-grading-fixture",
+          private: true,
+          scripts: {
+            "test:unit": "vitest run tests/unit",
+          },
+          devDependencies: {
+            vitest: "2.1.9",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    )
+    writeRelative(
+      cwd,
+      "bun.lock",
+      `{\n  "lockfileVersion": 1,\n  "workspaces": {\n    "": {\n      "name": "cascade-grading-fixture",\n      "devDependencies": {\n        "vitest": "2.1.8"\n      }\n    }\n  }\n}\n`,
+    )
+    commit(cwd, "dependency drift only")
+    assert.throws(
+      () => checkTestIntegrity({ base, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        assert.match(
+          error.message,
+          /dependency changes|package manager|Vitest upgrades|lockfile/,
+        )
+        return true
+      },
+    )
+  })
+})
+
+test("RT-2 fails closed on nested workspace project testNamePattern", () => {
+  withRepository(({ cwd, base }) => {
+    writeRelative(cwd, "vitest.workspace.ts", `export default ["packages/*"]\n`)
+    writeRelative(
+      cwd,
+      "packages/a/vitest.config.ts",
+      `export default {\n` +
+        `  test: {\n` +
+        `    name: "a",\n` +
+        `    include: ["../../tests/**/*.test.ts"],\n` +
+        `  },\n` +
+        `}\n`,
+    )
+    // Establish the workspace at the merge-base so the nested project config
+    // change is the only execution-key delta under test.
+    const workspaceBase = commit(cwd, "workspace baseline")
+
+    writeRelative(
+      cwd,
+      "packages/a/vitest.config.ts",
+      `export default {\n` +
+        `  test: {\n` +
+        `    name: "a",\n` +
+        `    include: ["../../tests/**/*.test.ts"],\n` +
+        `    testNamePattern: /core/,\n` +
+        `  },\n` +
+        `}\n`,
+    )
+    commit(cwd, "nested project testNamePattern")
+    assert.throws(
+      () => checkTestIntegrity({ base: workspaceBase, cwd }),
+      (error) => {
+        assert.ok(error instanceof CheckFailure)
+        const detail = `${error.message}\n${error.findings.join("\n")}`
+        assert.match(detail, /execution configuration changed|testNamePattern/)
+        return true
+      },
+    )
+  })
+})
+
 
 
 

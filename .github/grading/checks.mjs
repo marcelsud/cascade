@@ -1,9 +1,19 @@
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync } from "node:fs"
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs"
+import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import ts from "typescript"
 import { parse as parseYaml } from "yaml"
 
@@ -45,21 +55,16 @@ const VITEST_WORKSPACE_CANDIDATES = [
   "vitest.projects.cjs",
 ]
 // Config keys that can change which tests execute without changing the file set
-// returned by `vitest list --filesOnly`. Any add/change between base and head
-// fails RT-2 closed — list alone cannot see them.
-const VITEST_EXECUTION_AFFECTING_KEYS = new Set([
-  "dir",
-  "testNamePattern",
-  "passWithNoTests",
-  "includeSource",
-  "allowOnly",
-])
+// returned by `vitest list --filesOnly`. Compared from resolved Vitest project
+// contexts at both revisions.
+const VITEST_EXECUTION_AFFECTING_KEYS = ["dir", "testNamePattern", "passWithNoTests", "includeSource", "allowOnly"]
 const VITEST_LIST_TIMEOUT_MS = 60_000
 const VITEST_RUN_SUBCOMMAND = "run"
 const VITEST_NON_RUN_SUBCOMMANDS = new Set(["watch", "dev", "related", "bench", "list"])
-// Runner flags that do not change which files Vitest collects. Value forms
-// consume the next argv token; boolean forms do not.
-const VITEST_HARMLESS_VALUE_OPTIONS = new Set([
+// Accepted option/value pairs forwarded to `vitest list` so config factories
+// (notably `--mode`) resolve the same way the real unit run does.
+const VITEST_FORWARDED_VALUE_OPTIONS = new Set([
+  "--mode",
   "--reporter",
   "--pool",
   "--poolOptions",
@@ -68,7 +73,6 @@ const VITEST_HARMLESS_VALUE_OPTIONS = new Set([
   "--api",
   "--outputFile",
   "--environment",
-  "--mode",
   "--testTimeout",
   "--hookTimeout",
   "--bail",
@@ -82,6 +86,8 @@ const VITEST_HARMLESS_VALUE_OPTIONS = new Set([
   "--inspectBrk",
   "--expect",
 ])
+const LOCKFILE_CANDIDATES = ["bun.lock", "bun.lockb", "package-lock.json", "pnpm-lock.yaml", "yarn.lock"]
+const PACKAGE_MANIFEST = "package.json"
 const VITEST_HARMLESS_BOOLEAN_OPTIONS = new Set([
   "-u",
   "--update",
@@ -485,9 +491,11 @@ const parseVitestUnitCommand = (script) => {
 
   const filters = []
   const cliExcludes = []
+  const forwardedOptions = []
   let configPath
   let dir
   let root
+  let mode
   let passWithNoTests = false
   let allowOnly = false
 
@@ -525,6 +533,9 @@ const parseVitestUnitCommand = (script) => {
         dir = takeValue(flag, inline).split(path.sep).join("/")
       } else if (flag === "--root" || flag === "-r") {
         root = takeValue(flag, inline).split(path.sep).join("/")
+      } else if (flag === "--mode") {
+        mode = takeValue(flag, inline)
+        forwardedOptions.push(["--mode", mode])
       } else if (flag === "--passWithNoTests") {
         passWithNoTests = true
       } else if (flag === "--allowOnly") {
@@ -533,8 +544,9 @@ const parseVitestUnitCommand = (script) => {
         throw new CheckFailure(
           `RT-2 cannot model unsupported Vitest selector in test:unit: ${flag} (script: ${script})`,
         )
-      } else if (VITEST_HARMLESS_VALUE_OPTIONS.has(flag)) {
-        takeValue(flag, inline)
+      } else if (VITEST_FORWARDED_VALUE_OPTIONS.has(flag)) {
+        const value = takeValue(flag, inline)
+        forwardedOptions.push([flag, value])
       } else if (
         VITEST_HARMLESS_BOOLEAN_OPTIONS.has(flag) ||
         flag.startsWith("--coverage.") ||
@@ -582,6 +594,7 @@ const parseVitestUnitCommand = (script) => {
   if (cliExcludes.length > 0) selectorParts.push(`exclude=${JSON.stringify(cliExcludes)}`)
   if (dir) selectorParts.push(`dir=${dir}`)
   if (root) selectorParts.push(`root=${root}`)
+  if (mode) selectorParts.push(`mode=${mode}`)
   if (passWithNoTests) selectorParts.push("passWithNoTests")
   if (allowOnly) selectorParts.push("allowOnly")
 
@@ -591,7 +604,9 @@ const parseVitestUnitCommand = (script) => {
     cliExcludes,
     dir,
     root,
+    mode,
     configPath,
+    forwardedOptions,
     passWithNoTests,
     allowOnly,
     selector: selectorParts.length > 0 ? selectorParts.join(" ") : "(all included files)",
@@ -618,7 +633,18 @@ const readPackageUnitScript = (cwd, revision) => {
 
 const normalizeRepoPath = (file) => file.split(path.sep).join("/").replace(/^\.\//, "")
 
-const resolveVitestEntry = () => {
+const resolveLocalVitestEntry = (cwd) => {
+  const candidates = [
+    path.join(cwd, "node_modules", "vitest", "vitest.mjs"),
+    path.join(cwd, "node_modules", "vitest", "vitest.js"),
+  ]
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate
+  }
+  return undefined
+}
+
+const resolveCheckerVitestEntry = () => {
   const candidates = [
     path.join(CHECKER_REPO_ROOT, "node_modules", "vitest", "vitest.mjs"),
     path.join(CHECKER_REPO_ROOT, "node_modules", "vitest", "vitest.js"),
@@ -633,7 +659,8 @@ const resolveVitestEntry = () => {
   )
 }
 
-const buildVitestListArgs = (command) => {
+
+const buildVitestListArgs = (command, jsonPath) => {
   const args = ["list"]
   if (command.configPath) {
     args.push("--config", command.configPath)
@@ -644,67 +671,125 @@ const buildVitestListArgs = (command) => {
   if (command.root) {
     args.push("--root", command.root)
   }
+  for (const [flag, value] of command.forwardedOptions ?? []) {
+    args.push(flag, value)
+  }
   for (const pattern of command.cliExcludes) {
     args.push("--exclude", pattern)
   }
   for (const filter of command.filters) {
     args.push(filter)
   }
-  args.push("--filesOnly")
+  args.push("--filesOnly", `--json=${jsonPath}`)
   return args
 }
 
-const parseVitestListOutput = (output, cwd) => {
+const isPathInside = (root, candidate) => {
+  const relative = path.relative(root, candidate)
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
+}
+
+const parseVitestListJson = (jsonText, cwd) => {
+  let parsed
+  try {
+    parsed = JSON.parse(jsonText)
+  } catch (error) {
+    throw new CheckFailure(
+      `RT-2 failed to parse Vitest --json collection output: ${error.message}`,
+    )
+  }
+  if (!Array.isArray(parsed)) {
+    throw new CheckFailure("RT-2 expected Vitest --json collection output to be an array")
+  }
+
+  const absoluteRoot = path.resolve(cwd)
   const files = []
-  for (const rawLine of output.split("\n")) {
-    let line = rawLine.trim()
-    if (!line) continue
-    // Workspace/project mode prefixes rows as `[name] path/to/file`.
-    const projectPrefix = line.match(/^\[[^\]]+\]\s+(.+)$/)
-    if (projectPrefix) line = projectPrefix[1].trim()
-    if (!line || line.startsWith("✓") || line.startsWith("×") || line.startsWith("-")) continue
-    // Ignore noisy non-path lines Vitest may still emit on stdout.
-    if (/^(DEV|WAR|ERR|The CJS build)\b/i.test(line)) continue
-    let file = line
-    if (path.isAbsolute(file)) {
-      file = path.relative(cwd, file)
-      if (file.startsWith("..") || path.isAbsolute(file)) continue
+  for (const entry of parsed) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new CheckFailure("RT-2 rejected non-object entry in Vitest --json collection output")
     }
-    file = normalizeRepoPath(file)
-    if (!file || file.includes("\u0000")) continue
-    files.push(file)
+    const rawFile = entry.file
+    if (typeof rawFile !== "string" || rawFile.trim() === "") {
+      throw new CheckFailure("RT-2 rejected Vitest --json entry without a string file path")
+    }
+    const absolute = path.isAbsolute(rawFile) ? path.normalize(rawFile) : path.resolve(cwd, rawFile)
+    if (!isPathInside(absoluteRoot, absolute)) {
+      throw new CheckFailure(
+        `RT-2 rejected out-of-repository Vitest collection path: ${rawFile}`,
+      )
+    }
+    if (!existsSync(absolute) || !statSync(absolute).isFile()) {
+      throw new CheckFailure(
+        `RT-2 rejected non-existent Vitest collection path: ${normalizeRepoPath(path.relative(absoluteRoot, absolute))}`,
+      )
+    }
+    files.push(normalizeRepoPath(path.relative(absoluteRoot, absolute)))
   }
   return [...new Set(files)].sort()
 }
 
-const runVitestList = (cwd, command) => {
-  const vitestEntry = resolveVitestEntry()
-  const args = buildVitestListArgs(command)
-  const nodePathEntries = [
-    path.join(CHECKER_REPO_ROOT, "node_modules"),
-    path.join(path.resolve(cwd), "node_modules"),
-  ]
-  if (process.env.NODE_PATH) nodePathEntries.push(process.env.NODE_PATH)
+const vitestProcessEnv = (moduleRoots) => {
+  const nodePathEntries = moduleRoots.filter((entry) => entry && existsSync(entry))
+  return {
+    ...process.env,
+    // Match the CI blocking run environment so env-gated configs resolve
+    // the same way the unit job does.
+    CI: "true",
+    // Keep list output machine-readable.
+    NO_COLOR: "1",
+    FORCE_COLOR: "0",
+    // Resolve packages only from explicitly provisioned module roots.
+    NODE_PATH: nodePathEntries.join(path.delimiter),
+  }
+}
+
+const moduleRootsForTree = (cwd, { allowCheckerFallback, matchedInstallRoot }) => {
+  const roots = []
+  const localModules = path.join(path.resolve(cwd), "node_modules")
+  if (existsSync(localModules)) roots.push(localModules)
+  if (matchedInstallRoot) {
+    const matchedModules = path.join(path.resolve(matchedInstallRoot), "node_modules")
+    if (existsSync(matchedModules)) roots.push(matchedModules)
+  }
+  if (allowCheckerFallback) {
+    roots.push(path.join(CHECKER_REPO_ROOT, "node_modules"))
+    if (process.env.NODE_PATH) roots.push(process.env.NODE_PATH)
+  }
+  return [...new Set(roots)]
+}
+
+const resolveVitestBinary = (cwd, { allowCheckerFallback, matchedInstallRoot }) => {
+  const local = resolveLocalVitestEntry(cwd)
+  if (local) return local
+  if (matchedInstallRoot) {
+    const matched = resolveLocalVitestEntry(matchedInstallRoot)
+    if (matched) return matched
+  }
+  if (allowCheckerFallback) return resolveCheckerVitestEntry()
+  throw new CheckFailure(
+    `RT-2 cannot locate Vitest binary for tree ${cwd} (expected node_modules/vitest/vitest.mjs)`,
+  )
+}
+
+const runVitestList = (cwd, command, options) => {
+  const vitestEntry = resolveVitestBinary(cwd, options)
+  const jsonDir = mkdtempSync(path.join(tmpdir(), "cascade-rt2-json-"))
+  const jsonPath = path.join(jsonDir, "list.json")
+  const args = buildVitestListArgs(command, jsonPath)
   try {
-    const output = execFileSync(process.execPath, [vitestEntry, ...args], {
+    execFileSync(process.execPath, [vitestEntry, ...args], {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: VITEST_LIST_TIMEOUT_MS,
-      env: {
-        ...process.env,
-        // Match the CI blocking run environment so env-gated configs resolve
-        // the same way the unit job does.
-        CI: "true",
-        // Keep list output machine-readable.
-        NO_COLOR: "1",
-        FORCE_COLOR: "0",
-        // Allow fixtures / detached base worktrees without local installs to
-        // resolve `vitest/config` from the checker repository.
-        NODE_PATH: nodePathEntries.join(path.delimiter),
-      },
+      env: vitestProcessEnv(moduleRootsForTree(cwd, options)),
     })
-    return parseVitestListOutput(output, cwd)
+    if (!existsSync(jsonPath)) {
+      throw new CheckFailure(
+        "RT-2 failed to obtain Vitest collection: --json output file was not written",
+      )
+    }
+    return parseVitestListJson(readFileSync(jsonPath, "utf8"), cwd)
   } catch (error) {
     if (error instanceof CheckFailure) throw error
     const timedOut = error?.killed || /ETIMEDOUT|timed out/i.test(String(error?.message ?? ""))
@@ -716,117 +801,293 @@ const runVitestList = (cwd, command) => {
         ? `RT-2 timed out obtaining Vitest collection via \`vitest list\` (limit ${VITEST_LIST_TIMEOUT_MS}ms)`
         : `RT-2 failed to obtain Vitest collection via \`vitest list\`: ${detail}`,
     )
+  } finally {
+    rmSync(jsonDir, { recursive: true, force: true })
+  }
+}
+
+const serializeExecutionValue = (value) => {
+  if (value == null) return null
+  if (value instanceof RegExp) return value.toString()
+  if (Array.isArray(value)) return value.map((entry) => String(entry))
+  if (typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
+    return value
+  }
+  return String(value)
+}
+
+const EXECUTION_KEYS_HELPER_SOURCE = `import { createVitest } from {{VITEST_NODE_URL}}
+import { writeFileSync } from "node:fs"
+import path from "node:path"
+
+const root = process.argv[2]
+const options = JSON.parse(process.argv[3] || "{}")
+const outputPath = process.argv[4]
+process.chdir(root)
+
+const cli = { watch: false }
+if (options.configPath) cli.config = options.configPath
+if (options.dir) cli.dir = options.dir
+if (options.root) cli.root = options.root
+if (Array.isArray(options.cliExcludes) && options.cliExcludes.length > 0) {
+  cli.exclude = options.cliExcludes
+}
+
+const vite = {}
+if (options.mode) vite.mode = options.mode
+
+const vitest = await createVitest("test", cli, vite)
+const serialize = (value) => {
+  if (value == null) return null
+  if (value instanceof RegExp) return value.toString()
+  if (Array.isArray(value)) return value.map((entry) => String(entry))
+  if (typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
+    return value
+  }
+  return String(value)
+}
+const projects = vitest.projects.map((project) => {
+  const configPath = project.path
+    ? path.relative(root, project.path).split(path.sep).join("/")
+    : ""
+  return {
+    path: configPath,
+    name: project.name ?? project.config?.name ?? "",
+    dir: serialize(project.config?.dir),
+    testNamePattern: serialize(project.config?.testNamePattern),
+    passWithNoTests: serialize(project.config?.passWithNoTests),
+    includeSource: serialize(project.config?.includeSource),
+    allowOnly: serialize(project.config?.allowOnly),
+  }
+})
+projects.sort((left, right) => {
+  const leftKey = \`\${left.path}::\${left.name}\`
+  const rightKey = \`\${right.path}::\${right.name}\`
+  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0
+})
+writeFileSync(outputPath, JSON.stringify(projects))
+await vitest.close()
+`
+
+const resolveExecutionKeysFromProjects = (cwd, command, options) => {
+  const vitestEntry = resolveVitestBinary(cwd, options)
+  const require = createRequire(path.join(path.dirname(vitestEntry), "package.json"))
+  let vitestNodeEntry
+  try {
+    vitestNodeEntry = require.resolve("vitest/node")
+  } catch (error) {
+    throw new CheckFailure(
+      `RT-2 cannot resolve vitest/node for execution-key fingerprint: ${error.message}`,
+    )
+  }
+
+  const helperDir = mkdtempSync(path.join(tmpdir(), "cascade-rt2-exec-"))
+  const helperPath = path.join(helperDir, "execution-keys.mjs")
+  const outputPath = path.join(helperDir, "projects.json")
+  writeFileSync(
+    helperPath,
+    EXECUTION_KEYS_HELPER_SOURCE.replace(
+      "{{VITEST_NODE_URL}}",
+      JSON.stringify(pathToFileURL(vitestNodeEntry).href),
+    ),
+  )
+
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        helperPath,
+        path.resolve(cwd),
+        JSON.stringify({
+          configPath: command.configPath ?? null,
+          dir: command.dir ?? null,
+          root: command.root ?? null,
+          mode: command.mode ?? null,
+          cliExcludes: command.cliExcludes ?? [],
+        }),
+        outputPath,
+      ],
+      {
+        cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: VITEST_LIST_TIMEOUT_MS,
+        env: vitestProcessEnv(moduleRootsForTree(cwd, options)),
+      },
+    )
+    if (!existsSync(outputPath)) {
+      throw new CheckFailure(
+        "RT-2 failed to resolve Vitest project execution keys: output file was not written",
+      )
+    }
+    let projects
+    try {
+      projects = JSON.parse(readFileSync(outputPath, "utf8"))
+    } catch (error) {
+      throw new CheckFailure(
+        `RT-2 failed to parse resolved Vitest project execution keys: ${error.message}`,
+      )
+    }
+    if (!Array.isArray(projects)) {
+      throw new CheckFailure("RT-2 expected resolved Vitest project execution keys to be an array")
+    }
+
+    const entries = []
+    for (const project of projects) {
+      if (!project || typeof project !== "object") {
+        throw new CheckFailure("RT-2 rejected non-object resolved Vitest project execution key")
+      }
+      const label =
+        typeof project.path === "string" && project.path !== ""
+          ? project.path
+          : typeof project.name === "string" && project.name !== ""
+            ? `project:${project.name}`
+            : "project:(root)"
+      for (const key of VITEST_EXECUTION_AFFECTING_KEYS) {
+        entries.push(`${label}:${key}=${JSON.stringify(serializeExecutionValue(project[key]))}`)
+      }
+    }
+    return entries.sort()
+  } catch (error) {
+    if (error instanceof CheckFailure) throw error
+    const timedOut = error?.killed || /ETIMEDOUT|timed out/i.test(String(error?.message ?? ""))
+    const stderr = error?.stderr?.toString().trim() || ""
+    const stdout = error?.stdout?.toString().trim() || ""
+    const detail = stderr || stdout || error?.message || String(error)
+    throw new CheckFailure(
+      timedOut
+        ? `RT-2 timed out resolving Vitest project execution keys (limit ${VITEST_LIST_TIMEOUT_MS}ms)`
+        : `RT-2 failed to resolve Vitest project execution keys: ${detail}`,
+    )
+  } finally {
+    rmSync(helperDir, { recursive: true, force: true })
+  }
+}
+
+const digestText = (content) => createHash("sha256").update(content).digest("hex")
+
+// Fingerprint only dependency-relevant package fields + lockfiles. Script-only
+// package.json edits must not look like a Vitest dependency change.
+const collectDependencyFingerprint = (cwd) => {
+  const parts = []
+  const packageJson = readTextAt(cwd, PACKAGE_MANIFEST, undefined)
+  if (packageJson) {
+    try {
+      const parsed = JSON.parse(packageJson)
+      const dependencySlice = {
+        dependencies: parsed?.dependencies ?? null,
+        devDependencies: parsed?.devDependencies ?? null,
+        peerDependencies: parsed?.peerDependencies ?? null,
+        optionalDependencies: parsed?.optionalDependencies ?? null,
+        packageManager: parsed?.packageManager ?? null,
+        resolutions: parsed?.resolutions ?? null,
+        overrides: parsed?.overrides ?? null,
+      }
+      parts.push(
+        `${PACKAGE_MANIFEST}.deps:${digestText(JSON.stringify(dependencySlice))}`,
+      )
+    } catch {
+      parts.push(`${PACKAGE_MANIFEST}.raw:${digestText(packageJson)}`)
+    }
+  }
+  for (const lockfile of LOCKFILE_CANDIDATES) {
+    const content = readTextAt(cwd, lockfile, undefined)
+    if (content) parts.push(`${lockfile}:${digestText(content)}`)
+  }
+  return parts.sort().join("|")
+}
+
+const dependencyFingerprintsMatch = (headCwd, baseCwd) =>
+  collectDependencyFingerprint(headCwd) === collectDependencyFingerprint(baseCwd)
+
+const describeDependencyDrift = (headCwd, baseCwd) => {
+  const head = collectDependencyFingerprint(headCwd)
+  const base = collectDependencyFingerprint(baseCwd)
+  return `base=${base || "(none)"} head=${head || "(none)"}`
+}
+
+const removeWorktreeBestEffort = (absoluteRepo, worktree) => {
+  try {
+    rmSync(path.join(worktree, "node_modules"), { recursive: true, force: true })
+  } catch {
+    // ignore
+  }
+  try {
+    git(absoluteRepo, ["worktree", "remove", "--force", worktree], { allowFailure: true })
+  } catch {
+    // Best-effort cleanup; rmSync below still runs.
+  }
+  try {
+    rmSync(worktree, { recursive: true, force: true })
+  } catch {
+    // ignore
   }
 }
 
 const withRevisionWorktree = (repoCwd, revision, fn) => {
   const absoluteRepo = path.resolve(repoCwd)
   const worktree = mkdtempSync(path.join(tmpdir(), "cascade-rt2-"))
-  let added = false
+  // Track registration separately from successful completion: a failing
+  // post-checkout hook can leave git's worktree registry populated even when
+  // `git worktree add` exits non-zero.
+  let registered = false
   try {
     try {
       git(absoluteRepo, ["worktree", "add", "--detach", worktree, revision])
-      added = true
+      registered = true
     } catch (error) {
+      registered =
+        existsSync(path.join(worktree, ".git")) ||
+        git(absoluteRepo, ["worktree", "list", "--porcelain"], { allowFailure: true }).includes(
+          worktree,
+        )
       const detail = error instanceof CheckFailure ? error.message : String(error)
       throw new CheckFailure(
         `RT-2 cannot check out merge base ${revision} to obtain Vitest collection: ${detail}`,
       )
     }
 
-    // Detached base trees do not carry gitignored node_modules. Point Vitest at
-    // an existing install so ESM config imports (`vitest/config`) resolve.
+    // Never reuse head dependencies when the committed lockfile/manifest
+    // dependency set differs. A full base install is too costly/networked for
+    // CI, so fail closed and ask maintainers to land dependency changes alone.
+    if (!dependencyFingerprintsMatch(absoluteRepo, worktree)) {
+      throw new CheckFailure(
+        `RT-2 refuses to compare Vitest collections across dependency changes; land package manager / Vitest upgrades in a dedicated PR without test-set reductions (${describeDependencyDrift(absoluteRepo, worktree)})`,
+      )
+    }
+
+    // Same committed dependency set: detached worktrees lack gitignored
+    // node_modules. Link the matched head install so ESM config imports
+    // (`vitest/config`) resolve, then invoke the worktree-local vitest path.
     const worktreeModules = path.join(worktree, "node_modules")
-    if (!existsSync(worktreeModules)) {
-      const moduleSources = [
-        path.join(absoluteRepo, "node_modules"),
-        path.join(CHECKER_REPO_ROOT, "node_modules"),
-      ]
-      for (const source of moduleSources) {
-        if (!existsSync(source)) continue
-        try {
-          symlinkSync(source, worktreeModules, "dir")
-          break
-        } catch {
-          // Try the next candidate; failure to link is handled when list runs.
-        }
+    const headModules = path.join(absoluteRepo, "node_modules")
+    if (!existsSync(worktreeModules) && existsSync(headModules)) {
+      try {
+        symlinkSync(headModules, worktreeModules, "dir")
+      } catch {
+        // Resolution falls back through matchedInstallRoot / checker roots.
       }
     }
 
-    return fn(worktree)
+    return fn(worktree, {
+      matchedInstallRoot: resolveLocalVitestEntry(absoluteRepo) ? absoluteRepo : undefined,
+      allowCheckerFallback: !resolveLocalVitestEntry(absoluteRepo),
+    })
   } finally {
-    if (added) {
-      try {
-        // Drop the temporary install link before worktree removal.
-        rmSync(path.join(worktree, "node_modules"), { recursive: true, force: true })
-      } catch {
-        // ignore
-      }
-      try {
-        git(absoluteRepo, ["worktree", "remove", "--force", worktree], { allowFailure: true })
-      } catch {
-        // Best-effort cleanup; rmSync below still runs.
-      }
-    }
-    rmSync(worktree, { recursive: true, force: true })
-  }
-}
-
-const scanExecutionAffectingKeys = (content, file) => {
-  const source = ts.createSourceFile(file, content, ts.ScriptTarget.Latest, true, sourceKind(file))
-  const found = []
-  const visit = (node) => {
-    if (ts.isObjectLiteralExpression(node)) {
-      for (const property of node.properties) {
-        if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) {
-          continue
-        }
-        const key =
-          property.name && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))
-            ? property.name.text
-            : undefined
-        if (!key || !VITEST_EXECUTION_AFFECTING_KEYS.has(key)) continue
-        if (ts.isShorthandPropertyAssignment(property)) {
-          found.push(`${key}=<shorthand>`)
-          continue
-        }
-        const valueText = property.initializer.getText(source).replace(/\s+/g, " ").trim()
-        found.push(`${key}=${valueText}`)
-      }
-    }
-    ts.forEachChild(node, visit)
-  }
-  visit(source)
-  return found.sort()
-}
-
-const executionConfigFingerprint = (cwd, revision, preferredConfig) => {
-  const files = new Set([
-    ...VITEST_CONFIG_CANDIDATES,
-    ...VITEST_WORKSPACE_CANDIDATES,
-  ])
-  if (preferredConfig) files.add(normalizeRepoPath(preferredConfig))
-
-  const entries = []
-  for (const file of [...files].sort()) {
-    const content = readTextAt(cwd, file, revision)
-    if (!content) continue
-    const isWorkspace = VITEST_WORKSPACE_CANDIDATES.includes(file)
-    if (isWorkspace) {
-      const digest = createHash("sha256").update(content).digest("hex").slice(0, 16)
-      entries.push(`${file}:workspace:${digest}`)
-    }
-    for (const key of scanExecutionAffectingKeys(content, file)) {
-      entries.push(`${file}:${key}`)
+    if (registered) {
+      removeWorktreeBestEffort(absoluteRepo, worktree)
+    } else {
+      rmSync(worktree, { recursive: true, force: true })
     }
   }
-  return entries
 }
 
 const executionCommandFingerprint = (command) =>
   JSON.stringify({
     passWithNoTests: Boolean(command.passWithNoTests),
     allowOnly: Boolean(command.allowOnly),
+    mode: command.mode ?? null,
+    forwardedOptions: command.forwardedOptions ?? [],
   })
 
 const describeConfigSurface = (cwd, revision, command) => {
@@ -847,33 +1108,39 @@ const describeConfigSurface = (cwd, revision, command) => {
   return present.length > 0 ? present.join(",") : "(vitest defaults)"
 }
 
+const collectFromTree = (treeCwd, command, unitScript, options) => {
+  const files = runVitestList(treeCwd, command, options)
+  const configLabel = describeConfigSurface(treeCwd, undefined, command)
+  const executionKeys = resolveExecutionKeysFromProjects(treeCwd, command, options)
+  return {
+    files,
+    command,
+    config: {
+      file: configLabel,
+      executionKeys,
+      executionCommand: executionCommandFingerprint(command),
+    },
+    unitScript,
+  }
+}
+
 export const collectBlockingTestFiles = (cwd, revision, unitScriptOverride) => {
+  const absoluteCwd = path.resolve(cwd)
   const unitScript =
     typeof unitScriptOverride === "string" && unitScriptOverride.trim() !== ""
       ? unitScriptOverride.trim()
       : readPackageUnitScript(cwd, revision)
   const command = parseVitestUnitCommand(unitScript)
 
-  const collectFromTree = (treeCwd, treeRevision) => {
-    const files = runVitestList(treeCwd, command)
-    const configLabel = describeConfigSurface(treeCwd, treeRevision, command)
-    const executionKeys = executionConfigFingerprint(treeCwd, treeRevision, command.configPath)
-    return {
-      files,
-      command,
-      config: {
-        file: configLabel,
-        executionKeys,
-        executionCommand: executionCommandFingerprint(command),
-      },
-      unitScript,
-    }
+  if (revision) {
+    return withRevisionWorktree(cwd, revision, (worktree, options) =>
+      collectFromTree(worktree, command, unitScript, options),
+    )
   }
 
-  if (revision) {
-    return withRevisionWorktree(cwd, revision, (worktree) => collectFromTree(worktree, undefined))
-  }
-  return collectFromTree(cwd, undefined)
+  return collectFromTree(absoluteCwd, command, unitScript, {
+    allowCheckerFallback: !resolveLocalVitestEntry(absoluteCwd),
+  })
 }
 
 const readApprovedRemovals = (cwd, base) => {
