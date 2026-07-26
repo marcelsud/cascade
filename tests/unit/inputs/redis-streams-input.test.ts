@@ -5,6 +5,10 @@ import {
   createRedisStreamsInput,
   RedisStreamsInputError,
 } from "../../../src/inputs/redis-streams-input.js";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import type { Message } from "../../../src/core/types.js";
 
 // Mock ioredis
 vi.mock("ioredis", () => {
@@ -546,5 +550,112 @@ describe("RedisStreamsInput", () => {
       expect(disconnect).toHaveBeenCalledOnce();
       expect(quit).not.toHaveBeenCalled();
     });
+  });
+});
+
+const extractMessageMetadataSection = (markdown: string): string => {
+  const match = markdown.match(/## Message Metadata\n([\s\S]*?)(?=\n## |\n*$)/);
+  if (!match) {
+    throw new Error("Message Metadata section not found");
+  }
+  return match[1];
+};
+
+const consumeOneRedisMessage = async (fields: string[]): Promise<Message> => {
+  const input = createRedisStreamsInput({
+    host: "localhost",
+    port: 6379,
+    stream: "test-stream",
+    mode: "simple",
+    blockMs: 1,
+    count: 1,
+  });
+
+  const RedisCtor = (await import("ioredis")).default as unknown as {
+    mock: { results: Array<{ value: Record<string, any> }> };
+  };
+  const mockClient = RedisCtor.mock.results.at(-1)!.value;
+  mockClient.xread.mockResolvedValueOnce([
+    ["test-stream", [["1234567890-0", fields]]],
+  ]);
+
+  const head = await Effect.runPromise(
+    Stream.runHead(input.stream).pipe(Effect.map((opt) => opt)),
+  );
+
+  expect(head._tag).toBe("Some");
+  if (head._tag !== "Some") {
+    throw new Error("expected a redis streams message");
+  }
+
+  await Effect.runPromise(input.close!());
+  return head.value;
+};
+
+describe("Redis Streams emitted message metadata contract", () => {
+  it("emits source redis-streams-input and does not generate correlation IDs", async () => {
+    const message = await consumeOneRedisMessage([
+      "content",
+      JSON.stringify({ test: "data" }),
+      "metadata",
+      "{}",
+      "timestamp",
+      "1234567890",
+    ]);
+
+    expect(message.metadata.source).toBe("redis-streams-input");
+    expect(message.correlationId).toBeUndefined();
+    expect(message.metadata.correlationId).toBeUndefined();
+  });
+
+  it("preserves a non-empty stream correlationId on the message envelope", async () => {
+    const message = await consumeOneRedisMessage([
+      "content",
+      JSON.stringify({ test: "data" }),
+      "metadata",
+      "{}",
+      "timestamp",
+      "1234567890",
+      "correlationId",
+      "stream-corr-id",
+    ]);
+
+    expect(message.metadata.source).toBe("redis-streams-input");
+    expect(message.correlationId).toBe("stream-corr-id");
+    // Input preserves envelope correlationId only; it does not copy into metadata.
+    expect(message.metadata.correlationId).toBeUndefined();
+  });
+
+  it("documents the same source and correlation contract as runtime", async () => {
+    const message = await consumeOneRedisMessage([
+      "content",
+      JSON.stringify({ test: "data" }),
+      "metadata",
+      "{}",
+      "timestamp",
+      "1234567890",
+    ]);
+
+    const docsPath = join(
+      dirname(fileURLToPath(import.meta.url)),
+      "../../../docs/inputs/redis-streams.md",
+    );
+    const section = extractMessageMetadataSection(
+      readFileSync(docsPath, "utf8"),
+    );
+
+    const documentedSource = section.match(/`source`:\s*"([^"]+)"/)?.[1];
+    expect(documentedSource).toBe(message.metadata.source);
+    expect(documentedSource).toBe("redis-streams-input");
+    expect(section).not.toMatch(
+      /correlationId.*Auto-generated if not present/i,
+    );
+    expect(section).not.toMatch(/auto-generat/i);
+
+    // Docs must not claim generation when runtime emits neither field.
+    expect(message.correlationId).toBeUndefined();
+    expect(message.metadata.correlationId).toBeUndefined();
+    expect(section.toLowerCase()).toContain("metadata processor");
+    expect(section.toLowerCase()).toMatch(/preserv/);
   });
 });
