@@ -18,6 +18,7 @@
 - Acquisition and release remain cancellation-safe; close never leaks source handles.
 - HTTP input factory is Effect-returning: it fails with a typed fatal `HttpInputError` if bind is rejected, releases any queue/server resources on that path, and emits the listening log only after a confirmed bind.
 - Failures retain the project's fatal, intermittent, and logical categories.
+- File one-shot (`follow: false`): clean EOF completes the stream successfully after drain; a terminal open/stat/read failure drains accepted records first, then fails the stream with `FileInputError` (counted once in input metrics). Follow mode retains retry/rotation and does not use that terminal path.
 
 ## Work Guidance
 

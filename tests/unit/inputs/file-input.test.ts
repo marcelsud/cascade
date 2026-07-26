@@ -1,14 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Duration, Effect, Stream } from "effect";
+import { Cause, Duration, Effect, Exit, Option, Stream } from "effect";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { createFileInput } from "../../../src/inputs/file-input.js";
+import {
+  createFileInput,
+  FileInputError,
+} from "../../../src/inputs/file-input.js";
 import { run } from "../../../src/core/pipeline.js";
-import type { Output } from "../../../src/core/types.js";
+import type { Message, Output } from "../../../src/core/types.js";
 import { createCaptureOutput } from "../../../src/testing/capture-output.js";
 
 const createdPaths: string[] = [];
@@ -1032,4 +1035,203 @@ describe("FileInput", () => {
     expect(timedOut).toBe(false);
     expect(exitCode).toBe(0);
   }, 30_000);
+
+  it("terminates one-shot stream with FileInputError when first async read fails", async () => {
+    const filePath = await createTempFile('{"id":1}\n{"id":2}\n');
+    const input = createFileInput(
+      {
+        path: filePath,
+        follow: false,
+        startAt: "beginning",
+        pollIntervalMs: 5,
+      },
+      {
+        beforeRead: async () => {
+          throw Object.assign(new Error("ENOENT: no such file or directory"), {
+            code: "ENOENT",
+          });
+        },
+      },
+    );
+
+    const exit = await Effect.runPromiseExit(Stream.runCollect(input.stream));
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      expect(Option.isSome(Cause.failureOption(exit.cause))).toBe(true);
+      expect(Option.isNone(Cause.dieOption(exit.cause))).toBe(true);
+      const failure = Option.getOrThrow(Cause.failureOption(exit.cause));
+      expect(failure).toBeInstanceOf(FileInputError);
+      expect(failure.message).toContain(filePath);
+      expect(failure.message).toMatch(/ENOENT|no such file/i);
+      expect(failure.category).toBe("fatal");
+    }
+
+    expect(input.getMetrics?.()).toMatchObject({
+      messagesProcessed: 0,
+      messagesDropped: 0,
+      errorsEncountered: 1,
+    });
+  });
+
+  it("drains accepted records in source order before terminal one-shot failure", async () => {
+    // Multi-chunk fixture so the first 64 KiB of complete lines is emitted
+    // before the injected second-read failure.
+    const recordCount =
+      Math.ceil((MAX_READ_CHUNK_BYTES + 2_048) / '{"id":0}\n'.length) + 8;
+    const filePath = await createTempFile(buildJsonlFixture(recordCount));
+
+    // node:fs/promises does not export FileHandle as a constructable class;
+    // take the prototype from a live handle so we can fail the second disk read.
+    const probe = await fs.open(filePath, "r");
+    const fileHandleProto = Object.getPrototypeOf(probe) as {
+      read: (...args: unknown[]) => Promise<unknown>;
+    };
+    const originalRead = fileHandleProto.read;
+    await probe.close();
+
+    let readCalls = 0;
+    let spy: ReturnType<typeof vi.spyOn> | undefined;
+
+    const input = createFileInput(
+      {
+        path: filePath,
+        follow: false,
+        startAt: "beginning",
+        pollIntervalMs: 5,
+        queueSize: recordCount,
+        overflow: "block",
+      },
+      {
+        beforeRead: async () => {
+          spy = vi.spyOn(fileHandleProto, "read").mockImplementation(function (
+            this: unknown,
+            ...args: unknown[]
+          ) {
+            readCalls++;
+            if (readCalls >= 2) {
+              return Promise.reject(
+                new Error("simulated mid-drain I/O failure"),
+              );
+            }
+            return originalRead.apply(this, args);
+          });
+        },
+      },
+    );
+
+    const collected: Message[] = [];
+    try {
+      const exit = await Effect.runPromiseExit(
+        input.stream.pipe(
+          Stream.tap((message) =>
+            Effect.sync(() => {
+              collected.push(message);
+            }),
+          ),
+          Stream.runDrain,
+        ),
+      );
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) {
+        expect(Option.isSome(Cause.failureOption(exit.cause))).toBe(true);
+        expect(Option.isNone(Cause.dieOption(exit.cause))).toBe(true);
+        const failure = Option.getOrThrow(Cause.failureOption(exit.cause));
+        expect(failure).toBeInstanceOf(FileInputError);
+        expect(failure.message).toContain("simulated mid-drain I/O failure");
+      }
+
+      expect(collected.length).toBeGreaterThan(0);
+      expect(collected.length).toBeLessThan(recordCount);
+      expect(collected.map((message) => contentId(message.content))).toEqual(
+        Array.from({ length: collected.length }, (_, id) => id),
+      );
+      expect(input.getMetrics?.()).toMatchObject({
+        messagesProcessed: collected.length,
+        messagesDropped: 0,
+        errorsEncountered: 1,
+      });
+    } finally {
+      spy?.mockRestore();
+    }
+  });
+
+  it("completes one-shot clean EOF successfully with all records", async () => {
+    const filePath = await createTempFile(
+      '{"id":0}\n{"id":1}\n{"id":2}\nplain\n',
+    );
+    const input = createFileInput({
+      path: filePath,
+      follow: false,
+      startAt: "beginning",
+      pollIntervalMs: 5,
+    });
+
+    const exit = await Effect.runPromiseExit(Stream.runCollect(input.stream));
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      const messages = Array.from(exit.value);
+      expect(messages).toHaveLength(4);
+      expect(messages.map((message) => message.content)).toEqual([
+        { id: 0 },
+        { id: 1 },
+        { id: 2 },
+        { raw: "plain" },
+      ]);
+    }
+
+    expect(input.getMetrics?.()).toMatchObject({
+      messagesProcessed: 4,
+      messagesDropped: 0,
+      errorsEncountered: 0,
+    });
+  });
+
+  it("pipeline reports failure when one-shot first async read fails", async () => {
+    const filePath = await createTempFile('{"id":1}\n{"id":2}\n');
+    const input = createFileInput(
+      {
+        path: filePath,
+        follow: false,
+        startAt: "beginning",
+        pollIntervalMs: 5,
+      },
+      {
+        beforeRead: async () => {
+          throw Object.assign(new Error("ENOENT: no such file or directory"), {
+            code: "ENOENT",
+          });
+        },
+      },
+    );
+
+    const capture = await Effect.runPromise(createCaptureOutput());
+    const result = await Effect.runPromise(
+      run({
+        name: "file-input-one-shot-read-failure",
+        input,
+        processors: [],
+        output: capture,
+      }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.stats.failed).toBeGreaterThanOrEqual(1);
+    expect(
+      result.errors?.some(
+        (error) =>
+          error instanceof FileInputError ||
+          (error instanceof Error && error.message.includes("File input failed")),
+      ),
+    ).toBe(true);
+
+    const messages = await Effect.runPromise(capture.getMessages());
+    expect(messages).toHaveLength(0);
+    expect(input.getMetrics?.()).toMatchObject({
+      messagesProcessed: 0,
+      errorsEncountered: 1,
+    });
+  });
 });
