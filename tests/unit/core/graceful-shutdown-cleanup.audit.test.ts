@@ -82,4 +82,67 @@ describe("graceful shutdown resource cleanup on force/timeout", () => {
       expect(closeOrder).toEqual(["input", "output"]);
     },
   );
+
+  it("closes input and output exactly once when force races timeout", async () => {
+    let inputCloseEntries = 0;
+    let inputClosed = 0;
+    let outputClosed = 0;
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const outputStarted = yield* Deferred.make<void>();
+        const shutdown = yield* makeShutdownController();
+        const fiber = yield* Effect.fork(
+          run(
+            {
+              name: "shutdown-cleanup-force-timeout-race",
+              input: {
+                name: "one",
+                stream: Stream.make(createMessage(1)),
+                // Slow enough that a second concurrent force/timeout arm can
+                // enter ensureClose before the first flight finishes.
+                close: () =>
+                  Effect.sync(() => {
+                    inputCloseEntries += 1;
+                  }).pipe(
+                    Effect.zipRight(Effect.sleep("60 millis")),
+                    Effect.zipRight(
+                      Effect.sync(() => {
+                        inputClosed += 1;
+                      }),
+                    ),
+                  ),
+              },
+              processors: [],
+              output: {
+                name: "blocked",
+                send: () =>
+                  Deferred.succeed(outputStarted, undefined).pipe(
+                    Effect.zipRight(Effect.never),
+                  ),
+                close: () =>
+                  Effect.sync(() => {
+                    outputClosed += 1;
+                  }),
+              },
+            },
+            { shutdown, shutdownTimeoutMs: 100 },
+          ),
+        );
+
+        yield* Deferred.await(outputStarted);
+        yield* shutdown.request;
+        // Force near the graceful deadline so timeout may also enter cleanup.
+        yield* Effect.sleep("70 millis");
+        yield* shutdown.requestForce;
+        return yield* Fiber.join(fiber);
+      }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(["forced", "timed-out"]).toContain(result.shutdown);
+    expect(inputCloseEntries).toBe(1);
+    expect(inputClosed).toBe(1);
+    expect(outputClosed).toBe(1);
+  });
 });

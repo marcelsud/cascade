@@ -148,7 +148,10 @@ export const run = <E, R>(
     const fatalHalt = yield* Deferred.make<void>();
     const fatalCauseRef = yield* Ref.make<FatalCauseSlot>(NO_FATAL_CAUSE);
     // Ensure input/output close runs at most once across fatal/normal paths.
+    // Serialize concurrent force/timeout callers and replay the same Exit.
     const closedRef = yield* Ref.make(false);
+    const closeExitRef = yield* Ref.make<Exit.Exit<void, unknown> | null>(null);
+    const closeLock = yield* Effect.makeSemaphore(1);
 
     const snapshotMetrics = () => {
       const input = pipeline.input.getMetrics?.();
@@ -250,24 +253,35 @@ export const run = <E, R>(
       });
 
     // Close once across normal completion and fatal-timeout interrupt paths.
-    // If the fatal watchdog interrupts a close already in progress, leave it
-    // unclaimed so the watchdog can retry cleanup after execution stops.
-    const ensureClose = Effect.uninterruptibleMask((restore) =>
-      Effect.gen(function* () {
-        if (yield* Ref.get(closedRef)) {
-          return;
-        }
-        const exit = yield* Effect.exit(
-          restore(closePipeline(pipeline, shutdownTimeoutMs)),
-        );
-        if (!Exit.isInterrupted(exit)) {
-          yield* Ref.set(closedRef, true);
-        }
-        return yield* Exit.matchEffect(exit, {
-          onSuccess: () => Effect.void,
-          onFailure: Effect.failCause,
-        });
-      }),
+    // Concurrent force/timeout arms share one flight: waiters replay the same
+    // Exit. If the fatal watchdog interrupts a close already in progress, leave
+    // it unclaimed so the watchdog can retry cleanup after execution stops.
+    const ensureClose = closeLock.withPermits(1)(
+      Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const prior = yield* Ref.get(closeExitRef);
+          if (prior !== null) {
+            return yield* Exit.matchEffect(prior, {
+              onSuccess: () => Effect.void,
+              onFailure: Effect.failCause,
+            });
+          }
+          if (yield* Ref.get(closedRef)) {
+            return;
+          }
+          const exit = yield* Effect.exit(
+            restore(closePipeline(pipeline, shutdownTimeoutMs)),
+          );
+          if (!Exit.isInterrupted(exit)) {
+            yield* Ref.set(closeExitRef, exit);
+            yield* Ref.set(closedRef, true);
+          }
+          return yield* Exit.matchEffect(exit, {
+            onSuccess: () => Effect.void,
+            onFailure: Effect.failCause,
+          });
+        }),
+      ),
     );
 
     const maxConcurrentMessages =
