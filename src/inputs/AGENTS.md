@@ -14,6 +14,7 @@
 - Inputs return a stable name, stream, optional close, metrics, and correct shutdown mode.
 - Sources that remove or advance data before delivery attach an idempotent `ack` when supported and finish active destructive pulls during graceful shutdown.
 - Queue size and `block`, `drop_new`, or `drop_old` behavior stay bounded and reflected in metrics.
+- HTTP request bodies are bounded by a configured byte limit enforced before buffering; oversized requests are rejected without becoming messages.
 - Acquisition and release remain cancellation-safe; close never leaks source handles.
 - Failures retain the project's fatal, intermittent, and logical categories.
 

@@ -15,6 +15,7 @@ Receives HTTP POST requests as a webhook server. Each incoming request is conver
 - `host`: Host address to bind to (default: "0.0.0.0")
 - `path`: URL path to listen on (default: "/webhook")
 - `timeout`: Absolute deadline in milliseconds for reading an accepted POST request body (default: 30000). Incomplete bodies receive `408 Request Timeout` and the connection closes.
+- `max_body_bytes`: Maximum accepted request body in bytes (default: `1048576`, 1 MiB). Larger requests receive `413 Payload Too Large` and the connection closes; enforcement is incremental, so oversized chunked bodies are cut off mid-stream rather than buffered.
 - `queue_size`: Maximum messages buffered in memory (default: `1000`)
 - `overflow`: `block`, `drop_new`, or `drop_old` (default: `block`)
 
@@ -53,6 +54,7 @@ input:
     host: "0.0.0.0"
     path: "/api/webhooks"
     timeout: 30000
+    max_body_bytes: 1048576
 
 pipeline:
   processors:
@@ -213,11 +215,14 @@ fetch('http://localhost:8080/webhook', {
 - `200 OK`: Request successfully received and queued for processing
 - `404 Not Found`: Wrong URL path or HTTP method
 - `408 Request Timeout`: The configured request-body deadline elapsed before the complete body arrived; the connection is closed
+- `413 Payload Too Large`: The request body exceeds `max_body_bytes` (by declared `Content-Length` or by bytes received); the connection is closed
 - `500 Internal Server Error`: Server error during request processing
 
 ## Security Considerations
 
 - The HTTP input does not include authentication by default
+- Request body size is bounded by `max_body_bytes` (default 1 MiB), limiting per-request memory consumption before buffering
+- Enforcement is per request and follows HTTP framing: octets sent past a request's declared `Content-Length` are parsed as a new pipelined request and bounded by Node's header limit, so they cannot grow a single request's buffer
 - Consider using a reverse proxy (nginx, Caddy) for:
   - TLS/HTTPS termination
   - Authentication (API keys, JWT validation)

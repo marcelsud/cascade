@@ -275,6 +275,7 @@ const buildInputInternal = (
           host: http.host,
           path: http.path,
           timeout: http.timeout,
+          maxBodyBytes: http.max_body_bytes,
           queueSize: http.queue_size,
           overflow: http.overflow,
         }),

@@ -36,6 +36,7 @@ export interface HttpInputConfig {
   readonly host?: string;
   readonly path?: string; // Webhook path (default: "/webhook")
   readonly timeout?: number; // Request timeout in milliseconds
+  readonly maxBodyBytes?: number;
   readonly queueSize?: number;
   readonly overflow?: OverflowPolicy;
 }
@@ -60,6 +61,7 @@ export const HttpInputConfigSchema = Schema.Struct({
   host: Schema.optional(NonEmptyString),
   path: Schema.optional(NonEmptyString),
   timeout: Schema.optional(TimeoutMs),
+  maxBodyBytes: Schema.optional(PositiveInt),
   queueSize: Schema.optional(PositiveInt),
   overflow: Schema.optional(Schema.Literal("block", "drop_new", "drop_old")),
 });
@@ -88,15 +90,29 @@ class RequestBodyTimeoutError extends Error {
 
 const isRequestBodyTimeoutError = (
   error: unknown,
-): error is RequestBodyTimeoutError =>
-  error instanceof RequestBodyTimeoutError;
+): error is RequestBodyTimeoutError => error instanceof RequestBodyTimeoutError;
+
+class RequestBodyTooLargeError extends Error {
+  readonly _tag = "RequestBodyTooLargeError" as const;
+
+  constructor(readonly limitBytes: number) {
+    super(`Request body exceeded ${limitBytes} bytes`);
+    this.name = "RequestBodyTooLargeError";
+  }
+}
+
+const isRequestBodyTooLargeError = (
+  error: unknown,
+): error is RequestBodyTooLargeError =>
+  error instanceof RequestBodyTooLargeError;
 
 /**
- * Read request body as string, enforcing an absolute timeout from the start of reading.
+ * Read request body as string, enforcing an absolute timeout and byte limit.
  */
 const readBody = (
   request: IncomingMessage,
   timeoutMs: number,
+  maxBytes: number,
 ): Promise<string> => {
   let resolve!: (value: string) => void;
   let reject!: (reason?: unknown) => void;
@@ -106,9 +122,16 @@ const readBody = (
   });
   const chunks: Buffer[] = [];
   let settled = false;
+  let received = 0;
 
   const onData = (chunk: Buffer | string) => {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+    const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+    received += buffer.length;
+    if (received > maxBytes) {
+      settle(() => reject(new RequestBodyTooLargeError(maxBytes)));
+      return;
+    }
+    chunks.push(buffer);
   };
 
   const cleanup = () => {
@@ -201,6 +224,7 @@ export const createHttpInput = (
   const host = config.host ?? "0.0.0.0";
   const path = config.path ?? "/webhook";
   const timeout = config.timeout ?? 30_000;
+  const maxBodyBytes = config.maxBodyBytes ?? 1_048_576;
   const queueSize = config.queueSize ?? 1_000;
   const overflow = config.overflow ?? "block";
 
@@ -225,8 +249,13 @@ export const createHttpInput = (
         return;
       }
 
-      // Read request body with configured absolute timeout
-      const body = await readBody(req, timeout);
+      const declaredLength = Number(req.headers["content-length"]);
+      if (Number.isFinite(declaredLength) && declaredLength > maxBodyBytes) {
+        throw new RequestBodyTooLargeError(maxBodyBytes);
+      }
+
+      // Read request body with configured absolute timeout and byte limit
+      const body = await readBody(req, timeout, maxBodyBytes);
 
       // Convert to message and measure duration
       const result = await Effect.runPromise(
@@ -260,14 +289,13 @@ export const createHttpInput = (
       metrics.recordError();
 
       const canWrite = !res.headersSent && !res.writableEnded && !res.destroyed;
-      if (isRequestBodyTimeoutError(error)) {
+      const endAndClose = (status: number, text: string) => {
         if (canWrite) {
-          res.writeHead(408, {
+          res.writeHead(status, {
             "Content-Type": "text/plain",
             Connection: "close",
           });
-          res.end("Request Timeout", () => {
-            // Ensure the request/socket is terminated after the response flushes.
+          res.end(text, () => {
             if (!req.destroyed) {
               req.destroy();
             }
@@ -275,6 +303,12 @@ export const createHttpInput = (
         } else if (!req.destroyed) {
           req.destroy();
         }
+      };
+
+      if (isRequestBodyTimeoutError(error)) {
+        endAndClose(408, "Request Timeout");
+      } else if (isRequestBodyTooLargeError(error)) {
+        endAndClose(413, "Payload Too Large");
       } else if (canWrite) {
         res.writeHead(500, { "Content-Type": "text/plain" });
         res.end("Internal Server Error");
