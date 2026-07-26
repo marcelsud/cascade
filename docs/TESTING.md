@@ -67,7 +67,7 @@ We provide three special components that enable isolated testing:
 
 1. **Generate Input** - Creates test messages without external dependencies
 2. **Capture Output** - Collects messages for assertions
-3. **Assert Processor** - Validates message structure inline
+3. **Assert Processor** - Validates message structure inline (requires a non-blank `condition` or at least one non-blank `hasFields` path)
 
 These utilities eliminate the need for mocking or external services in most tests.
 
@@ -147,6 +147,8 @@ await Effect.runPromise(output.clear())
 ### 3. Assert Processor
 
 Validates message structure and conditions during pipeline execution.
+
+An assert processor requires at least one effective check — a non-blank `condition` or at least one non-blank `hasFields` path; an empty or misspelled configuration fails at build time rather than silently passing.
 
 **Features:**
 - Field existence validation (including nested paths)

@@ -444,8 +444,15 @@ const buildProcessor = (
   }
 
   // Testing utility: assert processor
-  if ((config as any).assert) {
-    return Effect.succeed(createAssertProcessor((config as any).assert));
+  const assertConfig = config.assert;
+  if (assertConfig) {
+    return Effect.try({
+      try: () => createAssertProcessor(assertConfig),
+      catch: (error) =>
+        new BuildError(
+          `Invalid assert processor configuration: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+    });
   }
 
   const selected = configuredComponent(config);

@@ -6,6 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as yaml from "yaml";
 import {
+  ConfigValidationError,
   loadConfig,
   PipelineConfigSchema,
 } from "../../../src/core/config-loader.js";
@@ -77,6 +78,32 @@ describe("component selection validation", () => {
       );
     }
   });
+
+  it.each([
+    ["empty", {}],
+    ["typo-only", { conditon: "content.value > 10" }],
+    ["blank-only hasFields", { hasFields: ["   "] }],
+  ] as const)(
+    "rejects %s assert configurations through loadConfig",
+    async (_name, assertConfig) => {
+      const result = await loadYamlConfig({
+        input: validInput,
+        pipeline: { processors: [{ assert: assertConfig }] },
+        output: validOutput,
+      });
+
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) {
+        expect(result.left).toBeInstanceOf(ConfigValidationError);
+        if (result.left instanceof ConfigValidationError) {
+          expect(result.left.message).toContain("Assert Processor");
+          expect(result.left.message).toContain(
+            "at least one non-blank 'hasFields' path",
+          );
+        }
+      }
+    },
+  );
 
   it("rejects multiple input components and names them", () => {
     // If either component payload is invalid, its field error may take

@@ -15,6 +15,16 @@ export interface AssertProcessorConfig {
   readonly logPassing?: boolean; // Log when assertions pass (default: false)
 }
 
+export const hasEffectiveAssertCheck = (
+  config: AssertProcessorConfig,
+): boolean =>
+  (typeof config.condition === "string" &&
+    config.condition.trim().length > 0) ||
+  (Array.isArray(config.hasFields) &&
+    config.hasFields.some(
+      (field) => typeof field === "string" && field.trim().length > 0,
+    ));
+
 /**
  * Validation schema for Assert Processor configuration
  */
@@ -23,7 +33,21 @@ export const AssertProcessorConfigSchema = Schema.Struct({
   hasFields: Schema.optional(Schema.Array(Schema.String)),
   error: Schema.optional(Schema.String),
   logPassing: Schema.optional(Schema.Boolean),
-});
+}).pipe(
+  Schema.filter(hasEffectiveAssertCheck, {
+    message: () =>
+      "Assert Processor requires at least one effective check: a non-blank 'condition' or at least one non-blank 'hasFields' path.",
+  }),
+);
+
+export class AssertProcessorConfigError extends Error {
+  readonly _tag = "AssertProcessorConfigError";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "AssertProcessorConfigError";
+  }
+}
 
 export class AssertProcessorError extends ComponentError {
   readonly _tag = "AssertProcessorError";
@@ -71,6 +95,12 @@ const hasNestedField = (obj: unknown, path: string): boolean => {
 export const createAssertProcessor = (
   config: AssertProcessorConfig = {},
 ): Processor<AssertProcessorError> => {
+  if (!hasEffectiveAssertCheck(config)) {
+    throw new AssertProcessorConfigError(
+      "Assert Processor requires at least one effective check: a non-blank 'condition' or at least one non-blank 'hasFields' path.",
+    );
+  }
+
   const {
     condition,
     hasFields,

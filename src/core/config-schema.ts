@@ -2,6 +2,7 @@
  * Pipeline configuration schemas
  */
 import * as S from "effect/Schema";
+import { hasEffectiveAssertCheck } from "../testing/assert-processor.js";
 import type { ComponentKind, ComponentRegistry } from "./component-registry.js";
 
 const validateExactlyOneComponent = (
@@ -311,7 +312,12 @@ const AssertProcessorSchema = S.Struct({
   hasFields: S.optional(S.Array(S.String)),
   error: S.optional(S.String),
   logPassing: S.optional(S.Boolean),
-});
+}).pipe(
+  S.filter(hasEffectiveAssertCheck, {
+    message: () =>
+      "Assert Processor requires at least one effective check: a non-blank 'condition' or at least one non-blank 'hasFields' path.",
+  }),
+);
 
 /**
  * Processor configuration - recursive to support nested processors (branch, switch)
