@@ -544,6 +544,69 @@ describe("pipeline backpressure configuration", () => {
     expect(primaryStarts).toBe(1);
   });
 
+  it("preserves binder this when binding primary output permits", async () => {
+    // Extracting bindPrimaryOutputPermits into a free function drops the
+    // receiver. A type-conforming method binder that reads `this.name` must
+    // still complete one send; silent success with processed:0 is a hard failure.
+    const config = await Effect.runPromise(
+      S.decodeUnknown(PipelineConfigSchema)({
+        input: {
+          generate: {
+            count: 1,
+            template: { value: "test" },
+          },
+        },
+        output: {
+          capture: {},
+        },
+        pipeline: {
+          backpressure: {
+            max_concurrent_messages: 1,
+            max_concurrent_outputs: 1,
+          },
+        },
+      }),
+    );
+
+    const pipeline = await Effect.runPromise(buildPipeline(config));
+
+    let sends = 0;
+    const output: Output = {
+      name: "receiver-aware",
+      send() {
+        sends += 1;
+        return Effect.void;
+      },
+      bindPrimaryOutputPermits(permits) {
+        // Method form reads the receiver. Optional-chain only so a lost
+        // `this` still returns a binder copy; the subsequent self.send call
+        // then defects and the run reports success with processed:0.
+        const self = this;
+        return {
+          name: `${this?.name}-bound`,
+          send(msg: Message) {
+            return permits.withPermits(1)(self.send(msg));
+          },
+          bindPrimaryOutputPermits: this?.bindPrimaryOutputPermits,
+        };
+      },
+    };
+
+    const result = await Effect.runPromise(
+      run({
+        ...pipeline,
+        output,
+      }).pipe(Effect.timeout("500 millis"), Effect.exit),
+    );
+
+    expect(Exit.isSuccess(result)).toBe(true);
+    if (Exit.isSuccess(result)) {
+      expect(result.value.success).toBe(true);
+      expect(result.value.stats.processed).toBe(1);
+    }
+    expect(sends).toBe(1);
+  });
+
   it("recursively binds nested permit-aware wrappers under withDLQ", async () => {
     // Outer withDLQ must not hold the sole primary permit across an inner
     // wrapper's own DLQ routing. Nested shape:

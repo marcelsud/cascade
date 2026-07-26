@@ -523,7 +523,7 @@ export const run = <E, R>(
         const bindPrimary = pipeline.output.bindPrimaryOutputPermits;
         const output =
           bindPrimary !== undefined
-            ? bindPrimary(outputPermits)
+            ? bindPrimary.call(pipeline.output, outputPermits)
             : pipeline.output;
         const wrapOuterPermit = bindPrimary === undefined;
         // Stop intake on external shutdown OR internal fatal halt.
