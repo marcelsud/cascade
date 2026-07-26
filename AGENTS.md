@@ -206,6 +206,7 @@ for every deterministic step. Nothing spawns or supervises you.
 
 ```bash
 node .github/grading/audit-run.mjs start          # selects the topic, opens the run
+node .github/grading/audit-run.mjs start --topic <id>   # on-demand run of a named topic
 #   ... examine the topic, write a candidate issue body ...
 node .github/grading/audit-run.mjs check c.md     # dedup, verify reproduction, grade
 node .github/grading/audit-run.mjs file  c.md     # create the issue   (--dry-run to rehearse)

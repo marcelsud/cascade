@@ -36,20 +36,72 @@ ledger already holds for this topic. Read those first: re-proposing one wastes t
 **Audit only the topic you were given.** You did not choose it, and you may not change it. If it
 looks unpromising, that is still the topic; report nothing and finish.
 
-## 2. Examine
+## 2. Investigate
 
-Read the topic's `paths` against its `objectives`. The objective tells you what property is
-supposed to hold — you are looking for a case where it does not.
+Do not start by guessing at defects. A hypothesis pulled from memory is nearly always wrong, and
+checking it teaches you nothing about the subsystem. Build an understanding first; the defects
+fall out of the gaps.
 
-Useful questions, in rough order of yield:
+Work through these in order. Each one produces notes you will use in the next.
 
-- What does the documentation or the type signature promise that the code does not deliver?
-- What happens on the error path, not the happy path?
-- What happens when a resource is acquired and then something fails before release?
-- What is unbounded — memory, time, retries, queue depth?
-- What is reported as success when it is not?
+### 2a. Establish the contract
 
-Prefer one defect you can demonstrate over three you can argue for.
+Before you can call anything a defect, you need to know what the code is supposed to do.
+
+Read, in this order: the objective text in `.github/grading/config.yml`, the subsystem's
+`AGENTS.md` Local Contracts, its `docs/` page, then its exported types and doc comments.
+
+Write down the guarantees as a short list of testable statements. If a guarantee is vague
+("handles errors gracefully"), that vagueness is itself worth noting — an untestable contract
+cannot be violated, and cannot be relied on either.
+
+### 2b. Map the actual behavior
+
+Trace the code and enumerate the paths. Do not summarise; build a table.
+
+For most subsystems the useful axes are the ones that multiply: error category × configuration
+present or absent × downstream outcome. For a DLQ that is roughly
+`{fatal, intermittent, logical} × {dlq configured, not} × {dlq send ok, fails}` — twelve cells,
+each with an answer for *does the send fail, is the message acknowledged, what is counted*.
+
+A table is the point. Prose lets you skip a cell without noticing; a table shows the hole.
+
+### 2c. Diff contract against behavior
+
+Compare 2a with 2b, cell by cell. Defects live in three places:
+
+- a guarantee with no corresponding path;
+- a path that contradicts a guarantee;
+- a cell you could not fill in, because the behavior is genuinely unclear.
+
+The third is often the most productive. Code no one can predict is code no one has tested.
+
+### 2d. Check what the tests actually assert
+
+Find the subsystem's tests and read their assertions, not their names. A suite can be large and
+still assert nothing about the cell you care about.
+
+Map your 2b table onto the tests: which cells are covered, which are named but not asserted,
+which are absent. An uncovered cell is where a defect survives, and it is the cheapest place to
+look next.
+
+### 2e. Probe, do not speculate
+
+**This is the step that separates a finding from a guess.** Write a throwaway script and observe
+what the code actually does at the boundary you care about. Measure it.
+
+Reading produces hypotheses. Only running produces answers, and the answer is frequently that
+your hypothesis was wrong — which is worth learning in ten minutes rather than after you have
+written an issue.
+
+Probe the cells your table could not fill and the ones the tests do not cover. Delete the scripts
+afterward; their output belongs in the candidate's Evidence section.
+
+---
+
+Only now consider whether you have a defect. Prefer one you can demonstrate over three you can
+argue for. If the investigation produced no gap, say so and finish the run — that is the expected
+outcome, and the notes are still worth the run because they will sharpen the topic next time.
 
 ## 3. Write a candidate
 
