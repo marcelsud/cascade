@@ -302,6 +302,40 @@ tests:
     expect(output).toMatch(/Tests: 0 passed, 1 failed, 1 total/);
   }, 30_000);
 
+  it("rejects typo-only assert configurations in the runner and CLI", async () => {
+    const dir = await createTempDir();
+    const fixture = await writeFile(
+      dir,
+      "typo-only-assert.test.yaml",
+      `name: Typo-only Assert Suite
+tests:
+  - name: "typo-only assert fails closed"
+    pipeline:
+      input:
+        generate:
+          count: 1
+          template:
+            value: 1
+      processors:
+        - assert:
+            conditon: "content.value > 10"
+      output:
+        capture: {}
+`,
+    );
+
+    const result = await Effect.runPromise(runYamlTests(fixture));
+
+    expect(result.totalTests).toBe(1);
+    expect(result.failedTests).toBe(1);
+    expect(result.passedTests).toBe(0);
+    expect(result.files[0]?.tests[0]?.error).toMatch(/assert/i);
+    expect(result.files[0]?.tests[0]?.error).toMatch(/condition|hasFields/i);
+
+    const { code } = await runCliTest(fixture);
+    expect(code).toBe(1);
+  }, 30_000);
+
   it("routes primary output failures to capture DLQ and honors retry config", async () => {
     const dir = await createTempDir();
     await writeFile(
