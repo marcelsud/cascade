@@ -12,3 +12,4 @@
 {"topic_id":"gate-trustworthiness","run_id":"974e38e-48254","commit_audited":"974e38e1285ec3e8d58eb3fd01b6acdb6baac933","seed":1061892299,"outcome":"completed","candidates":1,"filed":1,"dispositions":{"filed":1}}
 {"topic_id":"error-classification","run_id":"974e38e-92897","commit_audited":"974e38e1285ec3e8d58eb3fd01b6acdb6baac933","seed":2936663881,"outcome":"completed","candidates":0,"filed":0,"dispositions":{}}
 {"topic_id":"error-classification","run_id":"974e38e-89184","commit_audited":"974e38e1285ec3e8d58eb3fd01b6acdb6baac933","seed":1911738010,"outcome":"completed","candidates":2,"filed":1,"dispositions":{"ineligible":1,"filed":1}}
+{"topic_id":"cli-surface","run_id":"974e38e-3267","commit_audited":"974e38e1285ec3e8d58eb3fd01b6acdb6baac933","seed":1258473445,"outcome":"completed","candidates":0,"filed":0,"dispositions":{}}
