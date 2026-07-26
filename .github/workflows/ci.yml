@@ -21,6 +21,8 @@ jobs:
         run: npm run lint:unused
       - name: Grading tool tests
         run: node --test .github/grading/checks.test.mjs
+      - name: Audit tool tests
+        run: node --test .github/grading/audit.test.mjs
       - name: RT-1 type safety
         run: npm run lint
       - name: RT-1 build
