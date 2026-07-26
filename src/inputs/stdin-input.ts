@@ -5,7 +5,11 @@ import { Effect, Option, Queue, Stream } from "effect";
 import * as Schema from "effect/Schema";
 import type { Readable } from "node:stream";
 import type { Input, Message } from "../core/types.js";
-import { ComponentError, type ErrorCategory } from "../core/errors.js";
+import {
+  ComponentError,
+  detectCategory,
+  type ErrorCategory,
+} from "../core/errors.js";
 import { MetricsAccumulator, emitInputMetrics } from "../core/metrics.js";
 import { validate, NonEmptyString, PositiveInt } from "../core/validation.js";
 import { createTextMessage, splitCompleteLines } from "./text-input-utils.js";
@@ -73,7 +77,8 @@ export const createStdinInput = (
   let wholeText = "";
   let messageCount = 0;
   let work = Promise.resolve();
-
+  /** Set when the readable emits a terminal error; stream fails after drain. */
+  let terminalError: Error | undefined;
   const shutdownQueue = async (): Promise<void> => {
     if (closed) {
       return;
@@ -202,12 +207,25 @@ export const createStdinInput = (
   };
 
   const onError = (error: Error) => {
+    // Exactly once for this terminal event; do not flush partial payloads as EOF.
     metrics.recordError();
-    work = work.finally(() =>
-      Effect.runPromise(
-        Effect.logError(`stdin-input stream error: ${error.message}`),
-      ).catch(() => undefined),
-    );
+    terminalError = error;
+    work = work
+      .then(async () => {
+        await signalEof();
+      })
+      .catch((finalizeError) => {
+        return Effect.runPromise(
+          Effect.logError(
+            `stdin-input error finalization failed: ${finalizeError instanceof Error ? finalizeError.message : String(finalizeError)}`,
+          ),
+        ).catch(() => undefined);
+      })
+      .finally(() =>
+        Effect.runPromise(
+          Effect.logError(`stdin-input stream error: ${error.message}`),
+        ).catch(() => undefined),
+      );
   };
 
   readable.setEncoding(encoding);
@@ -222,6 +240,21 @@ export const createStdinInput = (
     stream: Stream.fromQueue(queue).pipe(
       Stream.filterMapWhile((element) =>
         element === STDIN_EOF ? Option.none() : Option.some(element),
+      ),
+      // After complete pre-error records drain, fail the stream when the
+      // readable ended via error rather than clean EOF.
+      Stream.concat(
+        Stream.suspend(() =>
+          terminalError
+            ? Stream.fail(
+                new StdinInputError(
+                  `stdin stream error: ${terminalError.message}`,
+                  detectCategory(terminalError),
+                  terminalError,
+                ),
+              )
+            : Stream.empty,
+        ),
       ),
     ),
     close: () =>

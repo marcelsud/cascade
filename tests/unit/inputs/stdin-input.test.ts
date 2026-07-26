@@ -3,7 +3,10 @@ import { Effect, Stream } from "effect";
 import { PassThrough } from "node:stream";
 import { run } from "../../../src/core/pipeline.js";
 import type { InputMetrics } from "../../../src/core/metrics.js";
-import { createStdinInput } from "../../../src/inputs/stdin-input.js";
+import {
+  createStdinInput,
+  StdinInputError,
+} from "../../../src/inputs/stdin-input.js";
 import { createCaptureOutput } from "../../../src/testing/capture-output.js";
 
 const collectChunk = async <T, E>(effect: Effect.Effect<Iterable<T>, E>) =>
@@ -369,5 +372,114 @@ describe("StdinInput", () => {
       messagesProcessed: 1,
       messagesDropped: 2,
     });
+  });
+
+  it("settles the stream as StdinInputError when the readable is destroyed without end", async () => {
+    const readable = new PassThrough();
+    const input = createStdinInput(
+      { mode: "lines", queueSize: 4, overflow: "block" },
+      readable,
+    );
+    const output = await Effect.runPromise(createCaptureOutput());
+    const sentinelError = new Error("simulated EIO");
+
+    try {
+      // Start the pipeline first so the queue consumer is attached before destroy.
+      const runFiber = Effect.runPromise(
+        run({
+          name: "stdin-error-pipeline",
+          input,
+          processors: [],
+          output,
+        }).pipe(
+          Effect.timeoutFail({
+            duration: TEST_TIMEOUT,
+            onTimeout: () =>
+              new Error(
+                "stdin destroy path timed out waiting for stream settlement",
+              ),
+          }),
+        ),
+      );
+
+      // One complete line must be delivered before the terminal failure.
+      readable.write('{"id":1}\n');
+      // Incomplete trailing payload must NOT be finalized as clean EOF.
+      readable.write('{"partial":');
+      readable.destroy(sentinelError);
+
+      const result = await runFiber;
+      const messages = await Effect.runPromise(output.getMessages());
+
+      expect(result.success).toBe(false);
+      expect(result.shutdown).toBeUndefined();
+      expect(messages).toHaveLength(1);
+      expect(contentOf(messages)).toEqual([{ id: 1 }]);
+      expect(result.errors?.[0]).toBeInstanceOf(StdinInputError);
+      expect(result.errors?.[0]).toMatchObject({
+        _tag: "StdinInputError",
+        cause: sentinelError,
+      });
+      expect(result.errors?.[0]?.message).toContain("simulated EIO");
+      expect(input.getMetrics?.()).toMatchObject({
+        messagesProcessed: 1,
+        errorsEncountered: 1,
+      });
+    } finally {
+      if (input.close) {
+        await Effect.runPromise(input.close());
+      }
+    }
+  });
+
+  it("fails Stream.runCollect with StdinInputError after complete pre-error lines drain", async () => {
+    const readable = new PassThrough();
+    const input = createStdinInput(
+      { mode: "lines", queueSize: 4, overflow: "block" },
+      readable,
+    );
+    const sentinelError = new Error("simulated EIO");
+
+    try {
+      const collectFiber = Effect.runPromise(
+        Stream.runCollect(input.stream).pipe(
+          Effect.map((chunk) => Array.from(chunk)),
+          Effect.either,
+          Effect.timeoutFail({
+            duration: TEST_TIMEOUT,
+            onTimeout: () =>
+              new Error(
+                "stdin stream collect timed out after readable.destroy",
+              ),
+          }),
+        ),
+      );
+
+      readable.write("complete-before-error\n");
+      readable.write("partial-without-newline");
+      readable.destroy(sentinelError);
+
+      const collected = await collectFiber;
+
+      expect(collected._tag).toBe("Left");
+      if (collected._tag === "Left") {
+        expect(collected.left).toBeInstanceOf(StdinInputError);
+        expect(collected.left).toMatchObject({
+          _tag: "StdinInputError",
+          cause: sentinelError,
+        });
+        expect(collected.left.message).toContain("simulated EIO");
+      }
+
+      // Metric path: complete line offered once; incomplete trailing not flushed.
+      expect(input.getMetrics?.()).toMatchObject({
+        messagesProcessed: 1,
+        errorsEncountered: 1,
+      });
+    } finally {
+      if (input.close) {
+        await Effect.runPromise(input.close());
+      }
+    }
   });
 });
