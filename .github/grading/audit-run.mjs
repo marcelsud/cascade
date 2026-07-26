@@ -188,7 +188,7 @@ const createIssue = ({ title, bodyFile, labels, cwd }) => {
 
 const nowId = (cwd) => `${git(["rev-parse", "--short", "HEAD"], cwd)}-${process.pid}`
 
-const cmdStart = ({ cwd, configFile, seedArg }) => {
+const cmdStart = ({ cwd, configFile, seedArg, topicId }) => {
   const abandoned = readState(cwd)
   let recovered = null
 
@@ -220,12 +220,25 @@ const cmdStart = ({ cwd, configFile, seedArg }) => {
   }
   const { runs, findings } = readLedger({ cwd })
   const seed = seedArg === undefined ? Math.floor(Math.random() * 2 ** 32) : Number(seedArg)
-  const { selected } = selectTopic({
-    topics: eligible,
-    runs,
-    seed,
-    churnOf: (topic, since) => churnSince({ paths: topic.paths, sinceCommit: since, cwd }),
-  })
+
+  // §11: an on-demand run MAY name its topic. It still records a history entry,
+  // so a named run costs the same coverage bookkeeping as a selected one.
+  let selected
+  if (topicId) {
+    selected = eligible.find((topic) => topic.id === topicId)
+    if (!selected) {
+      throw new AuditFailure(
+        `no selectable topic named ${topicId}; known: ${eligible.map((t) => t.id).join(", ")}`,
+      )
+    }
+  } else {
+    ;({ selected } = selectTopic({
+      topics: eligible,
+      runs,
+      seed,
+      churnOf: (topic, since) => churnSince({ paths: topic.paths, sinceCommit: since, cwd }),
+    }))
+  }
 
   const commit = git(["rev-parse", "HEAD"], cwd)
   const state = {
@@ -233,6 +246,7 @@ const cmdStart = ({ cwd, configFile, seedArg }) => {
     topic_id: selected.id,
     commit_audited: commit,
     seed,
+    named_topic: Boolean(topicId),
     checked: [],
   }
   writeState(cwd, state)
@@ -463,7 +477,14 @@ const runCli = async () => {
   const emit = (value) => process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
 
   if (command === "start") {
-    emit(cmdStart({ cwd, configFile: option(args, "--config") ?? DEFAULT_CONFIG, seedArg: option(args, "--seed") }))
+    emit(
+      cmdStart({
+        cwd,
+        configFile: option(args, "--config") ?? DEFAULT_CONFIG,
+        seedArg: option(args, "--seed"),
+        topicId: option(args, "--topic"),
+      }),
+    )
     return
   }
   if (command === "check") {
@@ -494,7 +515,7 @@ const runCli = async () => {
     return
   }
 
-  throw new AuditFailure("usage: audit-run.mjs <start|check|file|drop|finish|status> [--dry-run]")
+  throw new AuditFailure("usage: audit-run.mjs <start|check|file|drop|finish|status> [--topic <id>] [--seed <n>] [--dry-run]")
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
