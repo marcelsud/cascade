@@ -1733,8 +1733,9 @@ export const checkDuplicates = ({ base, minimumTokens, cwd = process.cwd() }) =>
     throw new CheckFailure("RT-6 minimum_tokens must be a positive integer")
   }
 
-  const baseFiles = listRevisionFiles(cwd, base, "src")
-  const headFiles = listWorkingFiles(cwd, "src")
+  const isSource = (file) => SOURCE_EXTENSIONS.has(path.extname(file))
+  const baseFiles = listRevisionFiles(cwd, base, "src").filter(isSource)
+  const headFiles = listWorkingFiles(cwd, "src").filter(isSource)
   const before = duplicateGroups(readSources(cwd, baseFiles, base), minimum)
   const after = duplicateGroups(readSources(cwd, headFiles), minimum)
   const findings = []
