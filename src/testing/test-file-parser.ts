@@ -94,7 +94,15 @@ const AssertionSchema: Schema.Schema<Assertion> = Schema.Union(
     type: Schema.Literal("field_value"),
     message: Schema.Number,
     path: Schema.String,
-    expected: Schema.Unknown,
+    expected: Schema.Unknown.pipe(
+      Schema.filter(
+        (value): value is unknown => value !== undefined,
+        {
+          message: () =>
+            "field_value assertion requires an expected value (no expected value was supplied)",
+        },
+      ),
+    ),
     target: Schema.optional(
       Schema.Union(Schema.Literal("output"), Schema.Literal("dlq")),
     ),

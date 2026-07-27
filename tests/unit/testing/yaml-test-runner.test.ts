@@ -580,6 +580,40 @@ tests:
     );
   });
 
+  it("fails field_value assertions that omit expected", async () => {
+    const dir = await createTempDir();
+    await writeFile(
+      dir,
+      "vacuous-field-value.test.yaml",
+      `name: Vacuous Field Value Suite
+tests:
+  - name: "field_value without expected must fail"
+    pipeline:
+      input:
+        generate:
+          count: 1
+          template:
+            value: 1
+      output:
+        capture: {}
+    assertions:
+      - type: field_value
+        message: 0
+        path: content.value
+`,
+    );
+
+    const result = await Effect.runPromise(
+      runYamlTests(path.join(dir, "*.test.yaml")),
+    );
+
+    expect(result.totalTests).toBe(1);
+    expect(result.failedTests).toBe(1);
+    expect(result.passedTests).toBe(0);
+    expect(result.files[0]?.tests[0]?.passed).toBe(false);
+    expect(result.files[0]?.tests[0]?.error).toMatch(/field_value|expected/i);
+  });
+
   it("rejects nonsense globs with a failed run and nonzero CLI exit", async () => {
     const pattern = path.join(
       await createTempDir(),
