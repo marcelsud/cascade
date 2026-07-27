@@ -780,6 +780,7 @@ describe("SQS message conversion and receive shapes", () => {
 
   it.each([
     ["null response", null],
+    ["primitive non-object response", "malformed-response"],
     ["missing Messages", {}],
     ["non-array Messages", { Messages: { MessageId: "x" } }],
   ] as const)(
