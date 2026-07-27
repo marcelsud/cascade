@@ -88,6 +88,15 @@ export const serializeRedisMessagePayload = (msg: Message): string =>
   });
 
 /**
+ * Retry policy shared by every retried Redis command: bounded attempts with
+ * exponential backoff starting at one second.
+ */
+export const redisRetryPolicy = (maxRetries: number) => ({
+  times: maxRetries,
+  schedule: Schedule.exponential("1 second"),
+});
+
+/**
  * Run a Redis send promise with the shared retry / metrics / error-log policy.
  */
 export const runRedisSendWithRetry = <
@@ -101,10 +110,7 @@ export const runRedisSendWithRetry = <
 ): Effect.Effect<readonly [A, number], E> =>
   measureDuration(
     operation.pipe(
-      Effect.retry({
-        times: maxRetries,
-        schedule: Schedule.exponential("1 second"),
-      }),
+      Effect.retry(redisRetryPolicy(maxRetries)),
       Effect.tapError((error) => {
         metrics.recordSendError();
         return Effect.logError(`${failureLogPrefix}${error.message}`);
