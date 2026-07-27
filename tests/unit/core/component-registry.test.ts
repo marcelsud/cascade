@@ -337,4 +337,160 @@ dlq:
     expect(first.getProcessor("custom")).toBeDefined();
     expect(second.getProcessor("custom")).toBeUndefined();
   });
+
+  it("rejects empty and whitespace-only component names", () => {
+    const emptyBuild = {
+      schema: Schema.Struct({}),
+      build: () =>
+        Effect.succeed({
+          name: "unused",
+          stream: Stream.empty,
+        }),
+    };
+
+    for (const name of ["", "   ", "\t"]) {
+      expect(() =>
+        createComponentRegistry().registerInput({ name, ...emptyBuild }),
+      ).toThrow(ComponentRegistrationError);
+      expect(() =>
+        createComponentRegistry().registerProcessor({
+          name,
+          schema: Schema.Struct({}),
+          build: () =>
+            Effect.succeed({
+              name: "unused",
+              process: (message) => Effect.succeed(message),
+            }),
+        }),
+      ).toThrow(ComponentRegistrationError);
+      expect(() =>
+        createComponentRegistry().registerOutput({
+          name,
+          schema: Schema.Struct({}),
+          build: () =>
+            Effect.succeed({ name: "unused", send: () => Effect.void }),
+        }),
+      ).toThrow(ComponentRegistrationError);
+    }
+  });
+
+  it("returns undefined for unknown component lookups", () => {
+    const registry = createComponentRegistry();
+
+    expect(registry.getInput("missing")).toBeUndefined();
+    expect(registry.getProcessor("missing")).toBeUndefined();
+    expect(registry.getOutput("missing")).toBeUndefined();
+  });
+
+  it("returns schemas only for the requested kind", () => {
+    const inputSchema = Schema.Struct({ values: Schema.Array(Schema.String) });
+    const processorSchema = Schema.Struct({ flag: Schema.Boolean });
+    const outputSchema = Schema.Struct({ target: Schema.String });
+
+    const registry = createComponentRegistry()
+      .registerInput({
+        name: "values",
+        schema: inputSchema,
+        build: () =>
+          Effect.succeed({
+            name: "values",
+            stream: Stream.empty,
+          }),
+      })
+      .registerProcessor({
+        name: "flag",
+        schema: processorSchema,
+        build: () =>
+          Effect.succeed({
+            name: "flag",
+            process: (message) => Effect.succeed(message),
+          }),
+      })
+      .registerOutput({
+        name: "target",
+        schema: outputSchema,
+        build: () =>
+          Effect.succeed({ name: "target", send: () => Effect.void }),
+      });
+
+    expect(registry.getSchemas("input")).toEqual({ values: inputSchema });
+    expect(registry.getSchemas("processor")).toEqual({ flag: processorSchema });
+    expect(registry.getSchemas("output")).toEqual({ target: outputSchema });
+    expect(createComponentRegistry().getSchemas("input")).toEqual({});
+    expect(createComponentRegistry().getSchemas("processor")).toEqual({});
+    expect(createComponentRegistry().getSchemas("output")).toEqual({});
+  });
+
+  it("allows the same name across kinds but not within one kind", () => {
+    const registry = createComponentRegistry()
+      .registerInput({
+        name: "shared",
+        schema: Schema.Struct({}),
+        build: () =>
+          Effect.succeed({
+            name: "shared-input",
+            stream: Stream.empty,
+          }),
+      })
+      .registerOutput({
+        name: "shared",
+        schema: Schema.Struct({}),
+        build: () =>
+          Effect.succeed({ name: "shared-output", send: () => Effect.void }),
+      });
+
+    expect(registry.getInput("shared")?.name).toBe("shared");
+    expect(registry.getOutput("shared")?.name).toBe("shared");
+
+    expect(() =>
+      registry.registerInput({
+        name: "shared",
+        schema: Schema.Struct({}),
+        build: () =>
+          Effect.succeed({
+            name: "shared-input-2",
+            stream: Stream.empty,
+          }),
+      }),
+    ).toThrow(ComponentRegistrationError);
+  });
+
+  it("assertNoConflicts throws only on reserved overlaps", () => {
+    const registry = createComponentRegistry().registerInput({
+      name: "http",
+      schema: Schema.Struct({}),
+      build: () =>
+        Effect.succeed({
+          name: "http",
+          stream: Stream.empty,
+        }),
+    });
+
+    expect(() =>
+      registry.assertNoConflicts("input", new Set(["http"])),
+    ).toThrow("the name is reserved by a built-in component");
+
+    expect(() =>
+      registry.assertNoConflicts("input", new Set(["generate", "sqs"])),
+    ).not.toThrow();
+  });
+
+  it("createComponentRegistry returns a fresh empty instance", () => {
+    const first = createComponentRegistry().registerProcessor({
+      name: "custom",
+      schema: Schema.Struct({}),
+      build: () =>
+        Effect.succeed({
+          name: "custom",
+          process: (message) => Effect.succeed(message),
+        }),
+    });
+    const second = createComponentRegistry();
+
+    expect(first).not.toBe(second);
+    expect(second.getSchemas("input")).toEqual({});
+    expect(second.getSchemas("processor")).toEqual({});
+    expect(second.getSchemas("output")).toEqual({});
+    expect(second.getProcessor("custom")).toBeUndefined();
+  });
 });

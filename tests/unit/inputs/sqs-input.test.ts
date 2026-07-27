@@ -647,3 +647,213 @@ describe("SQS emitted message metadata contract", () => {
     expect(section.toLowerCase()).toContain("metadata processor");
   });
 });
+
+describe("SQS input config validation", () => {
+  it.each([
+    ["empty queueUrl", { queueUrl: "" }],
+    [
+      "waitTimeSeconds above 20",
+      {
+        queueUrl: "http://localhost:4566/000000000000/test-queue",
+        waitTimeSeconds: 21,
+      },
+    ],
+    [
+      "maxMessages above 10",
+      {
+        queueUrl: "http://localhost:4566/000000000000/test-queue",
+        maxMessages: 11,
+      },
+    ],
+    [
+      "maxMessages below 1",
+      {
+        queueUrl: "http://localhost:4566/000000000000/test-queue",
+        maxMessages: 0,
+      },
+    ],
+  ] as const)("rejects %s at createSqsInput", (_label, config) => {
+    expect(() => createSqsInput(config as never)).toThrow();
+  });
+});
+
+describe("SQS message conversion and receive shapes", () => {
+  const captureOne = async (
+    client: SqsClientLike,
+    options: {
+      readonly maxMessages?: number;
+      readonly waitTimeSeconds?: number;
+    } = { waitTimeSeconds: 0 },
+  ) => {
+    let captured: Message | undefined;
+    await Effect.runPromise(
+      runOneSqsMessage(
+        client,
+        {
+          name: "capture-output",
+          send: (message) =>
+            Effect.sync(() => {
+              captured = message;
+            }),
+        },
+        options,
+      ),
+    );
+    return captured;
+  };
+
+  it("parses valid JSON bodies and wraps invalid or missing bodies", async () => {
+    const bodies = ['{"value":1}', "not-json", undefined] as const;
+    let receiveIndex = 0;
+    const client: SqsClientLike = {
+      send: async (command) => {
+        if (command instanceof ReceiveMessageCommand) {
+          const body = bodies[receiveIndex++];
+          return {
+            Messages: [
+              {
+                MessageId: `message-${receiveIndex}`,
+                ReceiptHandle: `receipt-${receiveIndex}`,
+                ...(body === undefined ? {} : { Body: body }),
+              },
+            ],
+          };
+        }
+        return {};
+      },
+      destroy: () => undefined,
+    };
+
+    const contents: unknown[] = [];
+    const sqsInput = createSqsInput(
+      {
+        queueUrl: "http://localhost:4566/000000000000/test-queue",
+        endpoint: "http://localhost:4566",
+        waitTimeSeconds: 0,
+      },
+      client,
+    );
+
+    await Effect.runPromise(
+      run({
+        name: "sqs-body-parse",
+        input: {
+          ...sqsInput,
+          stream: sqsInput.stream.pipe(Stream.take(3)),
+        },
+        processors: [],
+        output: {
+          name: "capture",
+          send: (message) =>
+            Effect.sync(() => {
+              contents.push(message.content);
+            }),
+        },
+      }),
+    );
+
+    expect(contents).toEqual([{ value: 1 }, { raw: "not-json" }, {}]);
+  });
+
+  it("omits ack when ReceiptHandle is missing", async () => {
+    const client: SqsClientLike = {
+      send: async (command) => {
+        if (command instanceof ReceiveMessageCommand) {
+          return {
+            Messages: [
+              {
+                MessageId: "message-1",
+                Body: '{"value":1}',
+              },
+            ],
+          };
+        }
+        return {};
+      },
+      destroy: () => undefined,
+    };
+
+    const captured = await captureOne(client);
+    expect(captured).toBeDefined();
+    expect(captured!.ack).toBeUndefined();
+  });
+
+  it.each([
+    ["null response", null],
+    ["missing Messages", {}],
+    ["non-array Messages", { Messages: { MessageId: "x" } }],
+  ] as const)(
+    "treats %s as an empty batch and continues polling",
+    async (_label, firstResponse) => {
+      let receiveAttempts = 0;
+      const client: SqsClientLike = {
+        send: async (command) => {
+          if (command instanceof ReceiveMessageCommand) {
+            receiveAttempts += 1;
+            if (receiveAttempts === 1) {
+              return firstResponse as never;
+            }
+            return {
+              Messages: [
+                {
+                  MessageId: "message-1",
+                  ReceiptHandle: "receipt-1",
+                  Body: '{"value":1}',
+                },
+              ],
+            };
+          }
+          return {};
+        },
+        destroy: () => undefined,
+      };
+
+      const captured = await captureOne(client);
+      expect(receiveAttempts).toBeGreaterThanOrEqual(2);
+      expect(captured?.content).toEqual({ value: 1 });
+    },
+  );
+
+  it("defaults MaxNumberOfMessages to 10 and forwards explicit maxMessages", async () => {
+    const defaultClient = createMockClient();
+    await captureOne(defaultClient.client);
+    expect(
+      (defaultClient.commands[0] as ReceiveMessageCommand).input
+        .MaxNumberOfMessages,
+    ).toBe(10);
+
+    const explicitClient = createMockClient();
+    await captureOne(explicitClient.client, {
+      waitTimeSeconds: 0,
+      maxMessages: 3,
+    });
+    expect(
+      (explicitClient.commands[0] as ReceiveMessageCommand).input
+        .MaxNumberOfMessages,
+    ).toBe(3);
+  });
+});
+
+describe("SQS input close", () => {
+  it("destroys the injected client", async () => {
+    let destroyed = false;
+    const client: SqsClientLike = {
+      send: async () => ({ Messages: [] }),
+      destroy: () => {
+        destroyed = true;
+      },
+    };
+
+    const input = createSqsInput(
+      {
+        queueUrl: "http://localhost:4566/000000000000/test-queue",
+        endpoint: "http://localhost:4566",
+        waitTimeSeconds: 0,
+      },
+      client,
+    );
+
+    await Effect.runPromise(input.close!());
+    expect(destroyed).toBe(true);
+  });
+});
