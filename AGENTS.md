@@ -269,7 +269,7 @@ Three rules the loop depends on:
 - An agent that produces no conforming artifact is a **failed run**, never a dry
   run. Recording it as dry marks the topic audited and opens a coverage hole.
 
-### GitHub Issue Delivery (seven-stage multi-model workflow)
+### GitHub Issue Delivery (five-step workflow)
 
 For graded Cascade GitHub issues, the default done state is **end-to-end
 delivery** unless the user explicitly limits scope. Do not stop after local
@@ -281,26 +281,26 @@ convergence rules from `/home/marcelsud/.claude/CLAUDE.md` (Blocker / Material /
 Cosmetic; hard cap 2 rounds per artifact). **Do not redefine severity here** —
 reference and apply that canonical guidance.
 
-**Configured model selectors (exact; no silent substitution):**
+Steps 1–3 are the main thread's own work. The only delegated steps are the two
+reviews.
 
-| Role | Selector |
-|------|----------|
-| Plan | orchestrating session itself — never delegated |
-| Primary local ship-gate (Stage 3) | `openai-codex/gpt-5.6-sol` |
-| Implement | `grok-4.5` |
-| Independent post-PR reviews (Stage 5) | `anthropic/claude-opus-5` **and** `openai-codex/gpt-5.6-sol` (parallel, distinct) |
+| Step | Runs on |
+|------|---------|
+| 1 Plan | main thread |
+| 2 Present the plan | main thread |
+| 3 Implement | main thread |
+| 4 Ship-gate review → delivery | review: `openai-codex/gpt-5.6-sol:high` (read-only) → commit / push / PR: main thread |
+| 5 Independent pair review | `openai-codex/gpt-5.6-sol:high` **and** the second seat selected in step 5 |
 
-- Container role aliases in `/home/marcelsud/projects/cascade/AGENTS.md` are
-  the dispatch source of truth (`@advisor` → Claude post-PR,
-  `@slow` → ship-gate + the other post-PR, `@smol` → implement only). Report
-  the resolved model ids in the completion proof.
-- If a required selector is unavailable, **stop and report the blocker**. Never
-  silently substitute another model.
-- Shared lint, format, and project-wide checks run **once centrally** after
-  implementation (or after a fix round). Subagents run focused verification
-  only — not full-suite or format passes.
+If a required selector is unavailable, **stop and report the blocker**. Never
+silently substitute another model. Report what each delegated seat resolved to
+in the completion proof.
 
-#### Stage 1 — Plan (orchestrating session; never delegated)
+Shared lint, format, and project-wide checks run **once centrally** in the main
+thread after implementation (or after a fix round). Review subagents run
+focused verification only.
+
+#### Step 1 — Plan (main thread, never delegated)
 
 1. Read the issue, `AGENTS.md`, canonical Claude instructions, relevant prior
    decisions, and affected code paths.
@@ -310,61 +310,92 @@ reference and apply that canonical guidance.
    step.
 4. Reuse existing architecture and testing conventions; do not invent a
    parallel pattern.
-5. Do **not** hand this stage to a subagent. Planning buys no parallelism and
-   fixes the contracts every later stage is graded against.
 
-#### Stage 2 — Implement (`grok-4.5`)
+Planning buys no parallelism — nothing runs until the plan exists — and it
+fixes the scope every later step is graded against. Delegating it and then
+grading the result is self-review.
 
-1. Hand the executor exact target files, scope exclusions, required invariants,
-   and acceptance criteria.
-2. Implement source changes plus the smallest behavior-focused regression
-   coverage that fails on the original bug.
-3. Run focused tests and the real scenario the issue requires; type-check the
+#### Step 2 — Present the plan (main thread)
+
+State the plan before editing code: scope and non-scope, the files to touch,
+each acceptance criterion mapped to its implementation and verification step,
+and the reproduction that proves the bug is real.
+
+This is a visibility gate, not an approval gate: proceed unless the user
+redirects.
+
+#### Step 3 — Implement (main thread)
+
+1. Implement the source change plus the smallest behavior-focused regression
+   coverage that fails on the original bug, and prove it fails before the fix.
+2. Run focused tests and the real scenario the issue requires; type-check the
    result.
-4. Do not expand scope. Do not leave compatibility shims, placeholders, or
+3. Do not expand scope. Do not leave compatibility shims, placeholders, or
    follow-up TODOs.
-5. Do not run project-wide formatting/test suites inside the implementer
-   subagent — those run once centrally.
+4. Run the shared lint/format/project-wide checks here, once.
 
-#### Stage 3 — Primary local ship-gate review (`openai-codex/gpt-5.6-sol`)
+#### Step 4 — Ship-gate review (`openai-codex/gpt-5.6-sol:high`), then open the PR
 
-This is the **pre-delivery** review of the completed local change. It is
-**not** one of the two post-PR independent reviews (Stage 5).
+The ship-gate is the **pre-delivery** review of the completed local change. It
+is not one of the two independent reviews in step 5. The reviewer is
+**read-only**; the main thread performs every mutation.
 
-1. Review the local diff before any delivery commit/PR.
-2. Apply the canonical severity gate: only **Blocker** or **Material** findings
-   require changes; drop **Cosmetic**.
-3. Check acceptance criteria, error paths, lifecycle/resource behavior, and
-   whether tests fail on the original bug.
-4. Resolve every Blocker/Material finding before creating the final delivery
-   commit.
-5. Ship-gate prompt: **"Any Blocker or Material issue? If no → APPROVED."**
+1. Dispatch the ship-gate on the uncommitted diff, before any delivery commit.
+   The prompt MUST carry the issue and its acceptance criteria, the step 2
+   plan, and the worktree's absolute path. Without them the reviewer cannot
+   grade the criteria it is being asked to grade.
+2. It applies the canonical severity gate: only **Blocker** or **Material**
+   findings require changes; drop **Cosmetic**.
+3. It checks acceptance criteria, error paths, lifecycle/resource behavior, and
+   whether the tests fail on the original bug.
+4. Ship-gate prompt: **"Any Blocker or Material issue? If no → APPROVED."**
+5. The **main thread** then resolves every Blocker/Material finding and
+   performs delivery itself: refresh `origin/main`, commit on a focused branch
+   name with a Conventional Commit message, push, and open the PR with a
+   summary, the exact verification commands, and `Closes #<issue>`.
 
-#### Stage 4 — Commit, push, and open the PR
+A local-only implementation is **not** complete when the task is to execute a
+GitHub issue end to end.
 
-1. Refresh `origin/main`, create/update the feature branch, and preserve
-   verified working-tree changes.
-2. Use a focused branch name and a Conventional Commit message.
-3. Push the branch and open a PR whose body includes summary, exact
-   verification commands, and `Closes #<issue>`.
-4. A local-only implementation is **not** complete when the task is to execute
-   a GitHub issue end to end.
+#### Step 5 — Independent pair review (parallel)
 
-#### Stage 5 — Two independent post-PR reviews (parallel)
+Two seats, run against the same pushed PR diff and issue context. Reviewers
+MUST NOT see or rely on each other's output.
 
-Run **both** reviews independently against the same pushed PR diff and issue
-context. Reviewers MUST NOT see or rely on each other's output.
+Seat one is always `openai-codex/gpt-5.6-sol:high`. Seat two is chosen by the
+**model family** running the main thread — compare families, never full
+selectors: a Grok main thread runs `grok-4.5:high` while the Grok seat is
+`grok-4.5:xhigh`, so a literal string comparison would seat Grok against Grok
+and destroy the independence the seat exists to provide.
 
-1. `anthropic/claude-opus-5` independent review (`@advisor`)
-2. `openai-codex/gpt-5.6-sol` independent review (`@slow`)
+| Main-thread family | Seat two |
+|---|---|
+| `xai-oauth/grok-4.5` | `anthropic/claude-opus-5:high` |
+| `anthropic/claude-opus-5` | `xai-oauth/grok-4.5:xhigh` |
+| anything else | **stop and report the blocker** |
+
+Any other main-thread model — GPT included — has no valid pairing, because
+seat one is already GPT and a GPT main thread would then review its own work.
+Stop rather than substitute.
+
+Take the main-thread family from the model the **harness reports for the
+running session**, not from configuration. `modelRoles.default` in
+`~/.omp/agent/config.yml` is only the *configured* default and `omp --model`
+overrides it, so the two disagree whenever a session was launched with an
+explicit model — reading config would then seat the main thread's own family
+against itself. Name both resolved seats in the completion proof.
+
+The second seat keeps both reviews independent of the work under review: the
+main thread wrote the plan and the implementation, so its own family cannot
+also sit in judgement of them.
 
 Publish **both** outputs as PR comments so maintainers can inspect the
-independent reasoning. Use the templates below.
+independent reasoning.
 
 **Independent PR review comment template**
 
 ```markdown
-**Independent review — <Claude Opus 5 | GPT 5.6 Sol>** (`<anthropic/claude-opus-5 | openai-codex/gpt-5.6-sol>`)
+**Independent review — <reviewer label>** (`<selector>`)
 
 **Verdict: APPROVED** | **Verdict: CHANGES REQUESTED**
 
@@ -376,11 +407,10 @@ independent reasoning. Use the templates below.
 - **<Blocker|Material>** `<path>:<lines>`: <impact>. <exact fix>.
 ```
 
-#### Stage 6 — Finding-resolution loop (max two rounds)
+#### Finding-resolution loop (max two rounds)
 
 1. If either independent review raises a **Blocker** or **Material** finding,
-   post it (already on the PR), fix it, run focused verification, commit, and
-   push the correction.
+   fix it, run focused verification, commit, and push the correction.
 2. Request **one** follow-up verification from the **same reviewer that raised
    the finding**, and post that follow-up as a PR comment.
 3. Apply the canonical two-round cap from `/home/marcelsud/.claude/CLAUDE.md`:
@@ -390,7 +420,7 @@ independent reasoning. Use the templates below.
 **Raising-reviewer follow-up comment template**
 
 ```markdown
-**<Claude Opus 5 | GPT 5.6 Sol> — follow-up review** (`<anthropic/claude-opus-5 | openai-codex/gpt-5.6-sol>`)
+**<reviewer label> — follow-up review** (`<selector>`)
 
 **Verdict: APPROVED** | **Verdict: CHANGES REQUESTED**
 
@@ -403,7 +433,7 @@ independent reasoning. Use the templates below.
 - **<Blocker|Material>** `<path>:<lines>`: <impact>. <exact fix>.
 ```
 
-#### Stage 7 — Completion proof
+#### Completion proof
 
 Before reporting done, verify and link all of the following:
 
@@ -415,20 +445,8 @@ Before reporting done, verify and link all of the following:
 - [ ] Local branch is fully pushed; working tree is clean
 - [ ] Temporary test infrastructure / services started for verification are stopped
 
-Report configured model selectors accurately; do not claim upstream model
+Report which model each delegated seat resolved to; do not claim upstream model
 identity beyond what the harness records.
-
-#### Worked example — issue #29 → PR #38
-
-| Stage | What ran |
-|-------|----------|
-| 1 Plan | Orchestrating session planned deferred Redis Streams consumer-group `XACK` until pipeline delivery succeeds |
-| 2 Implement | `grok-4.5` implemented deferred `ack`, pipeline failure-channel propagation, unit + real-Redis `XPENDING` coverage |
-| 3 Primary local review | `openai-codex/gpt-5.6-sol` ship-gated the local diff (Blocker/Material only) before delivery |
-| 4 PR | Branch pushed; PR #38 opened with verification commands and `Closes #29` |
-| 5 Independent reviews | Claude Opus 5 posted **APPROVED**; GPT 5.6 Sol posted **CHANGES REQUESTED** — both as PR comments, neither seeing the other |
-| 6 Fix + follow-up | GPT Material finding: E2E harness forwarded only host/port, dropping Redis URL password/DB (`tests/e2e/redis-streams-ack.test.ts`). Corrective commit parsed password + DB; focused proof: `CASCADE_E2E_REDIS_URL=redis://:secret@127.0.0.1:6380/2 bun test tests/e2e/redis-streams-ack.test.ts`. GPT follow-up **APPROVED** on the PR |
-| 7 Completion proof | Latest CI green, PR mergeable, both reviews + follow-up present, branch fully pushed and clean, temporary Redis/test services stopped |
 
 ## Component Guides
 
