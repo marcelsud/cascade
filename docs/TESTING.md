@@ -980,7 +980,7 @@ The YAML test runner supports 10 assertion types:
 - `message_count_greater_than`: Count > N
 
 **Field Assertions:**
-- `field_value`: Check field equals expected value
+- `field_value`: Check field equals expected value (requires `expected`; `null` allowed, omit/undefined rejected)
 - `field_exists`: Verify field is present
 
 **Condition Assertions (JSONata):**

@@ -261,6 +261,13 @@ const assertIndexedField = (
 
   const actual = getNestedValue(message, assertion.path);
   const expected = assertion.expected;
+  if (expected === undefined) {
+    return assertionResult(
+      false,
+      "✗ field_value assertion requires an expected value (no expected value was supplied)",
+      assertion,
+    );
+  }
   const passed = deepEqual(actual, expected);
   return assertionResult(
     passed,
