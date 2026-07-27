@@ -285,18 +285,22 @@ reference and apply that canonical guidance.
 
 | Role | Selector |
 |------|----------|
-| Plan + primary local ship-gate + one independent post-PR review | `openai-codex/gpt-5.6-sol` |
-| Implement + the other independent post-PR review | `grok-4.5` |
+| Plan | orchestrating session itself — never delegated |
+| Primary local ship-gate (Stage 3) | `openai-codex/gpt-5.6-sol` |
+| Implement | `grok-4.5` |
+| Independent post-PR reviews (Stage 5) | `anthropic/claude-opus-5` **and** `openai-codex/gpt-5.6-sol` (parallel, distinct) |
 
+- Container role aliases in `/home/marcelsud/projects/cascade/AGENTS.md` are
+  the dispatch source of truth (`@advisor` → Claude post-PR,
+  `@slow` → ship-gate + the other post-PR, `@smol` → implement only). Report
+  the resolved model ids in the completion proof.
 - If a required selector is unavailable, **stop and report the blocker**. Never
   silently substitute another model.
-- If the active agent already is the required GPT selector, it MAY plan/review
-  itself; otherwise delegate with the exact selector above.
 - Shared lint, format, and project-wide checks run **once centrally** after
   implementation (or after a fix round). Subagents run focused verification
   only — not full-suite or format passes.
 
-#### Stage 1 — Plan (`openai-codex/gpt-5.6-sol`)
+#### Stage 1 — Plan (orchestrating session; never delegated)
 
 1. Read the issue, `AGENTS.md`, canonical Claude instructions, relevant prior
    decisions, and affected code paths.
@@ -306,8 +310,8 @@ reference and apply that canonical guidance.
    step.
 4. Reuse existing architecture and testing conventions; do not invent a
    parallel pattern.
-5. If the active agent is not `openai-codex/gpt-5.6-sol`, delegate this planning
-   pass with that exact selector.
+5. Do **not** hand this stage to a subagent. Planning buys no parallelism and
+   fixes the contracts every later stage is graded against.
 
 #### Stage 2 — Implement (`grok-4.5`)
 
@@ -351,8 +355,8 @@ This is the **pre-delivery** review of the completed local change. It is
 Run **both** reviews independently against the same pushed PR diff and issue
 context. Reviewers MUST NOT see or rely on each other's output.
 
-1. `grok-4.5` independent review
-2. `openai-codex/gpt-5.6-sol` independent review
+1. `anthropic/claude-opus-5` independent review (`@advisor`)
+2. `openai-codex/gpt-5.6-sol` independent review (`@slow`)
 
 Publish **both** outputs as PR comments so maintainers can inspect the
 independent reasoning. Use the templates below.
@@ -360,7 +364,7 @@ independent reasoning. Use the templates below.
 **Independent PR review comment template**
 
 ```markdown
-**Independent review — <Grok 4.5 | GPT 5.6 Sol>** (`<grok-4.5 | openai-codex/gpt-5.6-sol>`)
+**Independent review — <Claude Opus 5 | GPT 5.6 Sol>** (`<anthropic/claude-opus-5 | openai-codex/gpt-5.6-sol>`)
 
 **Verdict: APPROVED** | **Verdict: CHANGES REQUESTED**
 
@@ -386,7 +390,7 @@ independent reasoning. Use the templates below.
 **Raising-reviewer follow-up comment template**
 
 ```markdown
-**<Grok 4.5 | GPT 5.6 Sol> — follow-up review** (`<grok-4.5 | openai-codex/gpt-5.6-sol>`)
+**<Claude Opus 5 | GPT 5.6 Sol> — follow-up review** (`<anthropic/claude-opus-5 | openai-codex/gpt-5.6-sol>`)
 
 **Verdict: APPROVED** | **Verdict: CHANGES REQUESTED**
 
@@ -418,11 +422,11 @@ identity beyond what the harness records.
 
 | Stage | What ran |
 |-------|----------|
-| 1 Plan | `openai-codex/gpt-5.6-sol` planned deferred Redis Streams consumer-group `XACK` until pipeline delivery succeeds |
+| 1 Plan | Orchestrating session planned deferred Redis Streams consumer-group `XACK` until pipeline delivery succeeds |
 | 2 Implement | `grok-4.5` implemented deferred `ack`, pipeline failure-channel propagation, unit + real-Redis `XPENDING` coverage |
 | 3 Primary local review | `openai-codex/gpt-5.6-sol` ship-gated the local diff (Blocker/Material only) before delivery |
 | 4 PR | Branch pushed; PR #38 opened with verification commands and `Closes #29` |
-| 5 Independent reviews | Grok posted **APPROVED**; GPT posted **CHANGES REQUESTED** — both as PR comments, neither seeing the other |
+| 5 Independent reviews | Claude Opus 5 posted **APPROVED**; GPT 5.6 Sol posted **CHANGES REQUESTED** — both as PR comments, neither seeing the other |
 | 6 Fix + follow-up | GPT Material finding: E2E harness forwarded only host/port, dropping Redis URL password/DB (`tests/e2e/redis-streams-ack.test.ts`). Corrective commit parsed password + DB; focused proof: `CASCADE_E2E_REDIS_URL=redis://:secret@127.0.0.1:6380/2 bun test tests/e2e/redis-streams-ack.test.ts`. GPT follow-up **APPROVED** on the PR |
 | 7 Completion proof | Latest CI green, PR mergeable, both reviews + follow-up present, branch fully pushed and clean, temporary Redis/test services stopped |
 
