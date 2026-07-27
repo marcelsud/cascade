@@ -31,6 +31,19 @@ const VALUE_RULE_GRADES = new Map([
   ["B-localized-material", "B"],
 ])
 const TEST_MODES = ["only", "skip", "todo", "skipIf", "runIf", "fails"]
+const VITEST_TEST_APIS = new Set(["it", "test", "describe", "suite"])
+// ChainableTestAPI / ChainableSuiteAPI keys from @vitest/runner (installed).
+const VITEST_CHAIN_MODIFIERS = new Set([
+  "concurrent",
+  "sequential",
+  "only",
+  "skip",
+  "todo",
+  "fails",
+  "shuffle",
+])
+// Methods that return a ChainableTestAPI / TestAPI for further mode chaining.
+const VITEST_CHAIN_RETURNS = new Set(["skipIf", "runIf", "extend"])
 const VITEST_CONFIG_CANDIDATES = [
   "vitest.config.ts",
   "vitest.config.mts",
@@ -336,6 +349,147 @@ const readSources = (cwd, files, revision) => {
   return sources
 }
 
+// Resolve nearest lexical binding origin: "api" | "namespace" | "other".
+const bindBindingName = (scope, name) => {
+  if (!name) return
+  if (ts.isIdentifier(name)) {
+    if (!scope.has(name.text)) scope.set(name.text, "other")
+    return
+  }
+  if (ts.isBindingElement(name)) {
+    bindBindingName(scope, name.name)
+    return
+  }
+  if (ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) {
+    for (const element of name.elements) {
+      if (!ts.isOmittedExpression(element)) bindBindingName(scope, element.name)
+    }
+  }
+}
+
+const collectImportBindings = (sourceFile) => {
+  const bindings = new Map()
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement) || !statement.importClause) continue
+    if (!ts.isStringLiteral(statement.moduleSpecifier)) continue
+    const fromVitest = statement.moduleSpecifier.text === "vitest"
+    const { importClause } = statement
+    if (importClause.name) bindings.set(importClause.name.text, "other")
+    const named = importClause.namedBindings
+    if (!named) continue
+    if (ts.isNamespaceImport(named)) {
+      bindings.set(named.name.text, fromVitest ? "namespace" : "other")
+      continue
+    }
+    for (const element of named.elements) {
+      const imported = (element.propertyName ?? element.name).text
+      bindings.set(
+        element.name.text,
+        fromVitest && VITEST_TEST_APIS.has(imported) ? "api" : "other",
+      )
+    }
+  }
+  return bindings
+}
+
+const resolveBindingOrigin = (scopes, name) => {
+  for (let index = scopes.length - 1; index >= 0; index -= 1) {
+    if (scopes[index].has(name)) return scopes[index].get(name)
+  }
+  return undefined
+}
+
+const isFunctionLikeScope = (node) =>
+  ts.isFunctionDeclaration(node) ||
+  ts.isFunctionExpression(node) ||
+  ts.isArrowFunction(node) ||
+  ts.isMethodDeclaration(node) ||
+  ts.isConstructorDeclaration(node) ||
+  ts.isGetAccessorDeclaration(node) ||
+  ts.isSetAccessorDeclaration(node)
+
+const isVitestModeReceiver = (expression, scopes) => {
+  const parts = []
+  let current = expression
+  while (true) {
+    if (ts.isPropertyAccessExpression(current)) {
+      parts.unshift(current.name.text)
+      current = current.expression
+      continue
+    }
+    if (
+      ts.isCallExpression(current) &&
+      ts.isPropertyAccessExpression(current.expression) &&
+      VITEST_CHAIN_RETURNS.has(current.expression.name.text)
+    ) {
+      current = current.expression.expression
+      continue
+    }
+    break
+  }
+  if (!ts.isIdentifier(current)) return false
+
+  const origin = resolveBindingOrigin(scopes, current.text)
+  const linksFrom = (start) =>
+    parts.slice(start).every((part) => VITEST_CHAIN_MODIFIERS.has(part))
+
+  if (origin === "api" || (origin === undefined && VITEST_TEST_APIS.has(current.text))) {
+    return linksFrom(0)
+  }
+  if (origin === "namespace") {
+    return parts.length > 0 && VITEST_TEST_APIS.has(parts[0]) && linksFrom(1)
+  }
+  return false
+}
+
+const isBlockScopedDeclarationList = (list) =>
+  (list.flags & ts.NodeFlags.BlockScoped) !== 0
+
+const bindDeclarationList = (target, list) => {
+  for (const declaration of list.declarations) bindBindingName(target, declaration.name)
+}
+
+// Bind direct const/let/function/class/enum/namespace/import-equals names to
+// blockScope; var names to varScope.
+const prebindBlockStatements = (blockScope, varScope, statements) => {
+  for (const statement of statements) {
+    if (ts.isVariableStatement(statement)) {
+      const target = isBlockScopedDeclarationList(statement.declarationList)
+        ? blockScope
+        : varScope
+      bindDeclarationList(target, statement.declarationList)
+      continue
+    }
+    if (ts.isFunctionDeclaration(statement) && statement.name) {
+      bindBindingName(blockScope, statement.name)
+    } else if (ts.isClassDeclaration(statement) && statement.name) {
+      bindBindingName(blockScope, statement.name)
+    } else if (ts.isEnumDeclaration(statement) && statement.name) {
+      bindBindingName(blockScope, statement.name)
+    } else if (
+      ts.isModuleDeclaration(statement) &&
+      statement.name &&
+      ts.isIdentifier(statement.name)
+    ) {
+      bindBindingName(blockScope, statement.name)
+    } else if (ts.isImportEqualsDeclaration(statement)) {
+      bindBindingName(blockScope, statement.name)
+    }
+  }
+}
+
+// Hoist nested `var` (not const/let) to the function/module scope; skip nested functions.
+const hoistNestedVars = (node, varScope) => {
+  const walk = (current) => {
+    if (isFunctionLikeScope(current)) return
+    if (ts.isVariableDeclarationList(current) && !isBlockScopedDeclarationList(current)) {
+      bindDeclarationList(varScope, current)
+    }
+    ts.forEachChild(current, walk)
+  }
+  walk(node)
+}
+
 const modeInventory = (sources) => {
   const counts = new Map(TEST_MODES.map((mode) => [mode, 0]))
   const conditionalSignatures = new Map([
@@ -345,8 +499,92 @@ const modeInventory = (sources) => {
 
   for (const [file, content] of sources) {
     const source = ts.createSourceFile(file, content, ts.ScriptTarget.Latest, true, sourceKind(file))
+    const moduleScope = collectImportBindings(source)
+    prebindBlockStatements(moduleScope, moduleScope, source.statements)
+    for (const statement of source.statements) hoistNestedVars(statement, moduleScope)
+    const scopes = [moduleScope]
+    const varScopes = [moduleScope]
+
     const visit = (node) => {
-      if (ts.isPropertyAccessExpression(node) && TEST_MODES.includes(node.name.text)) {
+      if (isFunctionLikeScope(node)) {
+        const bodyScope = new Map()
+        // Named function expressions are local to their own body only.
+        if (ts.isFunctionExpression(node) && node.name) {
+          bindBindingName(bodyScope, node.name)
+        }
+        for (const parameter of node.parameters) bindBindingName(bodyScope, parameter.name)
+        scopes.push(bodyScope)
+        varScopes.push(bodyScope)
+        if (node.body && ts.isBlock(node.body)) {
+          prebindBlockStatements(bodyScope, bodyScope, node.body.statements)
+          for (const statement of node.body.statements) hoistNestedVars(statement, bodyScope)
+        }
+        ts.forEachChild(node, visit)
+        varScopes.pop()
+        scopes.pop()
+        return
+      }
+
+      if (ts.isBlock(node) || ts.isModuleBlock(node)) {
+        // Function bodies were pre-bound onto the function scope above; avoid a
+        // duplicate inner scope that would hide those bindings mid-body.
+        const isFunctionBody =
+          isFunctionLikeScope(node.parent) && node.parent.body === node
+        if (!isFunctionBody) {
+          const blockScope = new Map()
+          const varScope = varScopes[varScopes.length - 1]
+          prebindBlockStatements(blockScope, varScope, node.statements)
+          for (const statement of node.statements) hoistNestedVars(statement, varScope)
+          scopes.push(blockScope)
+          ts.forEachChild(node, visit)
+          scopes.pop()
+          return
+        }
+      }
+
+      if (ts.isCaseBlock(node)) {
+        const caseScope = new Map()
+        const varScope = varScopes[varScopes.length - 1]
+        const statements = node.clauses.flatMap((clause) => clause.statements)
+        prebindBlockStatements(caseScope, varScope, statements)
+        for (const statement of statements) hoistNestedVars(statement, varScope)
+        scopes.push(caseScope)
+        ts.forEachChild(node, visit)
+        scopes.pop()
+        return
+      }
+
+      if (ts.isForStatement(node) || ts.isForInStatement(node) || ts.isForOfStatement(node)) {
+        const loopScope = new Map()
+        const varScope = varScopes[varScopes.length - 1]
+        const initializer =
+          ts.isForStatement(node) ? node.initializer : node.initializer
+        if (initializer && ts.isVariableDeclarationList(initializer)) {
+          const target = isBlockScopedDeclarationList(initializer) ? loopScope : varScope
+          bindDeclarationList(target, initializer)
+        }
+        scopes.push(loopScope)
+        ts.forEachChild(node, visit)
+        scopes.pop()
+        return
+      }
+
+      if (ts.isCatchClause(node)) {
+        const catchScope = new Map()
+        if (node.variableDeclaration) {
+          bindBindingName(catchScope, node.variableDeclaration.name)
+        }
+        scopes.push(catchScope)
+        ts.forEachChild(node, visit)
+        scopes.pop()
+        return
+      }
+
+      if (
+        ts.isPropertyAccessExpression(node) &&
+        TEST_MODES.includes(node.name.text) &&
+        isVitestModeReceiver(node.expression, scopes)
+      ) {
         const mode = node.name.text
         counts.set(mode, counts.get(mode) + 1)
         if (
@@ -362,8 +600,10 @@ const modeInventory = (sources) => {
           signatures.set(signature, (signatures.get(signature) ?? 0) + 1)
         }
       }
+
       ts.forEachChild(node, visit)
     }
+
     visit(source)
   }
 
@@ -1598,4 +1838,3 @@ if (isMain) {
     process.exitCode = 1
   }
 }
-
