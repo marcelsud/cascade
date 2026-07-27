@@ -494,6 +494,197 @@ describe("RedisListOutput", () => {
     });
   });
 
+  describe("maxLen trim failures never re-push", () => {
+    const seed = async (
+      client: MockRedisClient,
+      key: string,
+      ...ids: string[]
+    ): Promise<void> => {
+      for (const id of ids) {
+        await client.rpush(key, JSON.stringify({ id }));
+      }
+      client.rpush.mockClear();
+      client.lpush.mockClear();
+    };
+
+    const failLtrim = (
+      client: MockRedisClient,
+      failures: number,
+    ): (() => number) => {
+      const realLtrim = client.ltrim.getMockImplementation() as (
+        key: string,
+        start: number,
+        stop: number,
+      ) => Promise<string>;
+      let calls = 0;
+      client.ltrim.mockImplementation(
+        async (key: string, start: number, stop: number) => {
+          calls += 1;
+          if (calls <= failures) {
+            throw new Error(
+              "READONLY You can't write against a read only replica.",
+            );
+          }
+          return realLtrim(key, start, stop);
+        },
+      );
+      return () => calls;
+    };
+
+    // times=1 => one 1s exponential gap between the two trim attempts.
+    const runWithRetryGap = <A, E>(effect: Effect.Effect<A, E>) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.fork(effect);
+          yield* TestClock.adjust("1 second");
+          return yield* Fiber.join(fiber);
+        }).pipe(Effect.provide(TestContext.TestContext)),
+      );
+
+    it("right RPUSH retries only the trim, leaving one copy of the message", async () => {
+      const key = "tasks-trim-retry-right";
+      const output = createRedisListOutput({
+        host: "localhost",
+        port: 6379,
+        key,
+        maxLen: 2,
+        maxRetries: 1,
+      });
+
+      const client = latestClient();
+      await seed(client, key, "s1", "s2");
+      const ltrimCalls = failLtrim(client, 1);
+
+      await runWithRetryGap(output.send(createMessage("once")));
+
+      expect(client.rpush).toHaveBeenCalledTimes(1);
+      expect(ltrimCalls()).toBe(2);
+
+      const store = stores[stores.length - 1]!;
+      expect(listIds(store, key)).toEqual(["s2", "once"]);
+
+      if (output.close) {
+        await Effect.runPromise(output.close());
+      }
+    });
+
+    it("left LPUSH retries only the trim, leaving one copy of the message", async () => {
+      const key = "tasks-trim-retry-left";
+      const output = createRedisListOutput({
+        host: "localhost",
+        port: 6379,
+        key,
+        direction: "left",
+        maxLen: 2,
+        maxRetries: 1,
+      });
+
+      const client = latestClient();
+      await seed(client, key, "s1", "s2");
+      const ltrimCalls = failLtrim(client, 1);
+
+      await runWithRetryGap(output.send(createMessage("once")));
+
+      expect(client.lpush).toHaveBeenCalledTimes(1);
+      expect(ltrimCalls()).toBe(2);
+
+      const store = stores[stores.length - 1]!;
+      expect(listIds(store, key)).toEqual(["once", "s1"]);
+
+      if (output.close) {
+        await Effect.runPromise(output.close());
+      }
+    });
+
+    it("succeeds with a warning when every trim attempt fails, keeping one copy", async () => {
+      const key = "tasks-trim-exhausted";
+      const output = createRedisListOutput({
+        host: "localhost",
+        port: 6379,
+        key,
+        maxLen: 2,
+        maxRetries: 0,
+      });
+
+      const client = latestClient();
+      await seed(client, key, "s1", "s2");
+      const ltrimCalls = failLtrim(client, Number.POSITIVE_INFINITY);
+
+      const messages: unknown[] = [];
+      const logger = Logger.make<unknown, void>(({ message }) => {
+        messages.push(message);
+      });
+
+      const result = await Effect.runPromise(
+        Effect.either(
+          output
+            .send(createMessage("once"))
+            .pipe(
+              Logger.withMinimumLogLevel(LogLevel.Info),
+              Effect.provide(Logger.replace(Logger.defaultLogger, logger)),
+            ),
+        ),
+      );
+
+      expect(Either.isRight(result)).toBe(true);
+      expect(client.rpush).toHaveBeenCalledTimes(1);
+      expect(ltrimCalls()).toBe(1);
+
+      // Push is durable and unique; the cap is restored by the next trim.
+      const store = stores[stores.length - 1]!;
+      expect(listIds(store, key)).toEqual(["s1", "s2", "once"]);
+      expect(JSON.stringify(messages)).toContain(
+        `Redis list ${key} trim to maxLen 2 failed`,
+      );
+
+      if (output.close) {
+        await Effect.runPromise(output.close());
+      }
+    });
+
+    it("counts trim latency in the recorded send duration", async () => {
+      const key = "tasks-trim-duration";
+      const output = createRedisListOutput({
+        host: "localhost",
+        port: 6379,
+        key,
+        maxLen: 2,
+      });
+
+      const client = latestClient();
+      await seed(client, key, "s1", "s2");
+
+      // measureDuration reads Date.now(), so drive it deterministically: the
+      // clock only moves while the trim is in flight.
+      let nowMs = 1_000_000;
+      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+      const realLtrim = client.ltrim.getMockImplementation() as (
+        key: string,
+        start: number,
+        stop: number,
+      ) => Promise<string>;
+      client.ltrim.mockImplementation(
+        async (key: string, start: number, stop: number) => {
+          nowMs += 40;
+          return realLtrim(key, start, stop);
+        },
+      );
+
+      try {
+        await Effect.runPromise(output.send(createMessage("once")));
+      } finally {
+        nowSpy.mockRestore();
+      }
+
+      // The send blocked on the trim, so the duration metric must include it.
+      expect(output.getMetrics().totalDuration).toBe(40);
+
+      if (output.close) {
+        await Effect.runPromise(output.close());
+      }
+    });
+  });
+
   describe("live config and deferred close semantics", () => {
     it("close Effect built before a final send still flushes remaining metrics", async () => {
       const logs: unknown[] = [];
@@ -533,9 +724,9 @@ describe("RedisListOutput", () => {
           );
         });
 
-      expect(
-        metricPayloads.some((payload) => payload.messagesSent === 1),
-      ).toBe(true);
+      expect(metricPayloads.some((payload) => payload.messagesSent === 1)).toBe(
+        true,
+      );
     });
 
     it("reads maxRetries from config at send time, not construction", async () => {
@@ -568,9 +759,7 @@ describe("RedisListOutput", () => {
               output
                 .send(createMessage("m1"))
                 .pipe(
-                  Effect.provide(
-                    Logger.replace(Logger.defaultLogger, logger),
-                  ),
+                  Effect.provide(Logger.replace(Logger.defaultLogger, logger)),
                 ),
             );
             // times=1 => 2 attempts with one 1s exponential gap.

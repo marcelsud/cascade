@@ -9,7 +9,7 @@ import {
   type ErrorCategory,
   detectCategory,
 } from "../core/errors.js";
-import { MetricsAccumulator } from "../core/metrics.js";
+import { MetricsAccumulator, measureDuration } from "../core/metrics.js";
 import { validate, NonEmptyString, PositiveInt } from "../core/validation.js";
 import { formatRedisConnectionInfo } from "../core/redis-client-options.js";
 import {
@@ -22,6 +22,7 @@ import {
   openRedisOutputClient,
   recordRedisSendSuccess,
   redisConnectionSchemaFields,
+  redisRetryPolicy,
   runRedisSendWithRetry,
   serializeRedisMessagePayload,
   type RedisConnectionConfig,
@@ -102,33 +103,17 @@ export const createRedisListOutput = (
         const key = interpolateMessageTemplate(config.key, msg);
         const payload = serializeRedisMessagePayload(msg);
 
-        // Push with retry logic
-        const [listLength, duration] = yield* runRedisSendWithRetry(
+        const maxRetries = config.maxRetries ?? 3;
+
+        // Push and trim are separate Redis commands, so they get separate
+        // retry scopes: retrying a failed trim must never re-push a payload
+        // that is already durable on the list.
+        const [pushedLength, pushDuration] = yield* runRedisSendWithRetry(
           Effect.tryPromise({
-            try: async () => {
-              // Push to list
-              let length: number;
-              if (direction === "left") {
-                length = await client.lpush(key, payload);
-              } else {
-                length = await client.rpush(key, payload);
-              }
-
-              // Trim list if maxLen is configured, keeping the newest entries
-              // for the producer direction:
-              // - RPUSH (right): oldest→newest; keep the tail via LTRIM -N -1
-              // - LPUSH (left): newest→oldest; keep the head via LTRIM 0 N-1
-              if (config.maxLen && length > config.maxLen) {
-                if (direction === "left") {
-                  await client.ltrim(key, 0, config.maxLen - 1);
-                } else {
-                  await client.ltrim(key, -config.maxLen, -1);
-                }
-                return config.maxLen;
-              }
-
-              return length;
-            },
+            try: () =>
+              direction === "left"
+                ? client.lpush(key, payload)
+                : client.rpush(key, payload),
             catch: (error) =>
               new RedisListOutputError(
                 `Failed to push message to Redis list ${key}: ${error instanceof Error ? error.message : String(error)}`,
@@ -137,13 +122,53 @@ export const createRedisListOutput = (
               ),
           }),
           metrics,
-          config.maxRetries ?? 3,
-          `Redis push failed after ${config.maxRetries ?? 3} retries: `,
+          maxRetries,
+          `Redis push failed after ${maxRetries} retries: `,
         );
+
+        // Trim to maxLen, keeping the newest entries for the producer
+        // direction:
+        // - RPUSH (right): oldest→newest; keep the tail via LTRIM -N -1
+        // - LPUSH (left): newest→oldest; keep the head via LTRIM 0 N-1
+        // Both windows are absolute, so LTRIM is idempotent: a trim that
+        // exhausts its retries only leaves the cap exceeded until the next
+        // successful trim, and the message stays on the list exactly once.
+        const maxLen = config.maxLen;
+        let listLength = pushedLength;
+        let trimDuration = 0;
+        if (maxLen !== undefined && pushedLength > maxLen) {
+          const trim = Effect.tryPromise({
+            try: async () => {
+              if (direction === "left") {
+                await client.ltrim(key, 0, maxLen - 1);
+              } else {
+                await client.ltrim(key, -maxLen, -1);
+              }
+              return maxLen;
+            },
+            catch: (error) =>
+              new RedisListOutputError(
+                `Redis list ${key} trim to maxLen ${maxLen} failed: ${error instanceof Error ? error.message : String(error)}`,
+                detectCategory(error),
+                error,
+              ),
+          }).pipe(
+            Effect.retry(redisRetryPolicy(maxRetries)),
+            Effect.catchAll((error) =>
+              Effect.logWarning(
+                `${error.message} (message ${msg.id} delivered once; list may exceed maxLen until the next trim)`,
+              ).pipe(Effect.as(pushedLength)),
+            ),
+          );
+
+          // Trim latency (including its retry backoff) is part of how long the
+          // send actually blocked, so it belongs in the duration metric.
+          [listLength, trimDuration] = yield* measureDuration(trim);
+        }
 
         messageCount = yield* recordRedisSendSuccess(
           metrics,
-          duration,
+          pushDuration + trimDuration,
           messageCount,
         );
 

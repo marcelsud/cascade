@@ -135,9 +135,9 @@ output:
 
 - **Dynamic Key Routing**: Use template interpolation to route messages to different lists
 - **FIFO/LIFO Support**: Choose LPUSH or RPUSH based on use case
-- **Length Management**: Automatic LTRIM to prevent unbounded growth
+- **Length Management**: Best-effort LTRIM after each push to prevent unbounded growth
 - **Retry Logic**: Automatic retry with exponential backoff on failures
-- **Atomic Operations**: Messages pushed atomically
+- **No Trim-Induced Duplicates**: Push failures are retried, but once a push is confirmed, LTRIM retries never issue another LPUSH/RPUSH
 - **Connection Pooling**: Optimized connection management
 - **Metrics Tracking**: Built-in metrics for push success/failure rates
 
@@ -330,6 +330,25 @@ After each push:
 For `direction: "left"`, LPUSH adds at the head and LTRIM keeps the first
 `max_length` items instead. Both directions retain the newest entries.
 
+### Push and trim failure contract
+
+The push and the trim are two separate Redis commands, and they are retried
+independently:
+
+- The push (LPUSH/RPUSH) is retried on failure. Nothing else runs until it
+  succeeds.
+- Once the push succeeds, the entry is durable. A subsequent trim failure
+  retries **only the LTRIM** — the message is never pushed a second time, so a
+  transient trim error cannot duplicate it on the list.
+- If every trim attempt fails, the send still succeeds (the message was
+  delivered once) and a warning is logged. The LTRIM window is absolute
+  (`-N -1` for right, `0 N-1` for left), so the next successful trim restores
+  the cap.
+
+`max_length` is therefore a best-effort bound: it can be temporarily exceeded
+while trims are failing, but the list never holds a duplicate of a message
+because of a trim failure.
+
 **Use cases:**
 - Recent event log (keep last N)
 - Rate limiting (max N pending items)
@@ -376,7 +395,7 @@ For timeout issues:
 
 - **Atomic Operations**: Each LPUSH/RPUSH is atomic
 - **LTRIM Overhead**: max_length adds LTRIM after each push (small overhead)
-- **Network Round-Trip**: Each message requires one network round-trip
+- **Network Round-Trip**: Each message requires one network round-trip, plus a second one when `max_length` triggers a trim
 - **Pipelining**: Not yet implemented; consider for high throughput
 - **List Size**: Large lists (millions of items) may slow down operations
 - **Connection Pooling**: Optimize settings for throughput
@@ -392,6 +411,11 @@ Failed pushes are automatically retried with exponential backoff:
 5. **Retry 4**: Wait 8 seconds
 
 After `max_retries` failures, the message is sent to DLQ (if configured).
+
+A trim (LTRIM) is retried under the same policy, but separately from the push
+and only after the push succeeded. Exhausting the trim retries logs a warning
+and does not fail the send — see
+[Push and trim failure contract](#push-and-trim-failure-contract).
 
 ## Comparison with Redis Streams Output
 
