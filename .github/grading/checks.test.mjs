@@ -267,6 +267,30 @@ for (const [label, file, source, expectFailure, detail] of [
     false,
   ],
   [
+    "enum declarations shadowing Vitest globals",
+    "tests/unit/new.test.ts",
+    `enum test {\n  skip = 1,\n}\nvoid test.skip\n`,
+    false,
+  ],
+  [
+    "namespace declarations shadowing Vitest globals",
+    "tests/unit/new.test.ts",
+    `namespace test {\n  export const skip = () => {}\n}\ntest.skip()\n`,
+    false,
+  ],
+  [
+    "import-equals declarations shadowing Vitest globals",
+    "tests/unit/new.test.ts",
+    `import test = require("./helper")\ntest.skip("import equals", () => {})\n`,
+    false,
+  ],
+  [
+    "switch-case lexical declarations shadowing Vitest globals",
+    "tests/unit/new.test.ts",
+    `switch (1) {\n  case 1:\n    const test = { skip: () => {} }\n    test.skip()\n    break\n}\n`,
+    false,
+  ],
+  [
     "mode after Vitest chain modifiers",
     "tests/unit/new.test.ts",
     `it.concurrent.skip("disabled concurrent", () => {})\n`,

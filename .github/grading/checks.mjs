@@ -449,7 +449,8 @@ const bindDeclarationList = (target, list) => {
   for (const declaration of list.declarations) bindBindingName(target, declaration.name)
 }
 
-// Bind direct const/let/function/class names to blockScope; var names to varScope.
+// Bind direct const/let/function/class/enum/namespace/import-equals names to
+// blockScope; var names to varScope.
 const prebindBlockStatements = (blockScope, varScope, statements) => {
   for (const statement of statements) {
     if (ts.isVariableStatement(statement)) {
@@ -462,6 +463,16 @@ const prebindBlockStatements = (blockScope, varScope, statements) => {
     if (ts.isFunctionDeclaration(statement) && statement.name) {
       bindBindingName(blockScope, statement.name)
     } else if (ts.isClassDeclaration(statement) && statement.name) {
+      bindBindingName(blockScope, statement.name)
+    } else if (ts.isEnumDeclaration(statement) && statement.name) {
+      bindBindingName(blockScope, statement.name)
+    } else if (
+      ts.isModuleDeclaration(statement) &&
+      statement.name &&
+      ts.isIdentifier(statement.name)
+    ) {
+      bindBindingName(blockScope, statement.name)
+    } else if (ts.isImportEqualsDeclaration(statement)) {
       bindBindingName(blockScope, statement.name)
     }
   }
@@ -529,6 +540,18 @@ const modeInventory = (sources) => {
           scopes.pop()
           return
         }
+      }
+
+      if (ts.isCaseBlock(node)) {
+        const caseScope = new Map()
+        const varScope = varScopes[varScopes.length - 1]
+        const statements = node.clauses.flatMap((clause) => clause.statements)
+        prebindBlockStatements(caseScope, varScope, statements)
+        for (const statement of statements) hoistNestedVars(statement, varScope)
+        scopes.push(caseScope)
+        ts.forEachChild(node, visit)
+        scopes.pop()
+        return
       }
 
       if (ts.isForStatement(node) || ts.isForInStatement(node) || ts.isForOfStatement(node)) {
