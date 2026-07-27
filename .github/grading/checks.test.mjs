@@ -201,6 +201,127 @@ for (const [mode, source] of [
   })
 }
 
+for (const [label, file, source, expectFailure, detail] of [
+  [
+    "ordinary methods named skip",
+    "tests/unit/new.test.ts",
+    `it("cursor helper", () => {\n  const cursor = { skip: () => 1 }\n  cursor.skip()\n})\n`,
+    false,
+  ],
+  [
+    "named Vitest import alias modes",
+    "tests/unit/new.test.ts",
+    `import { it as spec } from "vitest"\nspec.skip("disabled via alias", () => {})\n`,
+    true,
+    /new Vitest skip mode/,
+  ],
+  [
+    "namespace-qualified Vitest modes",
+    "tests/unit/new.test.ts",
+    `import * as vitest from "vitest"\nvitest.it.skip("disabled via namespace", () => {})\n`,
+    true,
+    /new Vitest skip mode/,
+  ],
+  [
+    "local non-Vitest receivers with Vitest API names",
+    "tests/unit/new.test.ts",
+    `const it = { skip: (name, fn) => fn() }\nit.skip("not a vitest mode", () => {})\n`,
+    false,
+  ],
+  [
+    "nested parameter shadows of Vitest globals",
+    "tests/unit/new.test.ts",
+    `function run(it) {\n  it.skip("param shadow", () => {})\n}\nrun({ skip: () => {} })\n`,
+    false,
+  ],
+  [
+    "non-Vitest default import receivers",
+    "tests/unit/new.test.ts",
+    `import test from "./helper"\ntest.skip("default import", () => {})\n`,
+    false,
+  ],
+  [
+    "destructured local non-Vitest receivers",
+    "tests/unit/new.test.ts",
+    `const helper = { it: { skip: (name, fn) => fn() } }\nconst { it } = helper\nit.skip("destructured", () => {})\n`,
+    false,
+  ],
+  [
+    "closures over later same-spelled locals",
+    "tests/unit/new.test.ts",
+    `const run = () => test.skip("later local", () => {})\n` +
+      `const test = { skip: () => {} }\n` +
+      `run()\n`,
+    false,
+  ],
+  [
+    "block-contained var hoisted to function scope",
+    "tests/unit/new.test.ts",
+    `function run() {\n` +
+      `  {\n` +
+      `    var test = { skip: () => {} }\n` +
+      `  }\n` +
+      `  test.skip("var hoist", () => {})\n` +
+      `}\n` +
+      `run()\n`,
+    false,
+  ],
+  [
+    "mode after Vitest chain modifiers",
+    "tests/unit/new.test.ts",
+    `it.concurrent.skip("disabled concurrent", () => {})\n`,
+    true,
+    /new Vitest skip mode/,
+  ],
+  [
+    "global modes inside methods named like Vitest APIs",
+    "tests/unit/new.test.ts",
+    `const helpers = {\n  it() {\n    it.skip("still a vitest mode", () => {})\n  },\n}\n`,
+    true,
+    /new Vitest skip mode/,
+  ],
+  [
+    "mode after Vitest chain-returning calls",
+    "tests/unit/new.test.ts",
+    `it.skipIf(true).skip("disabled after skipIf", () => {})\n`,
+    true,
+    /new Vitest skip mode/,
+  ],
+  [
+    "changed conditional signatures on provenance-aware receivers",
+    "tests/unit/baseline.test.ts",
+    `import { it as spec } from "vitest"\n` +
+      `spec.skipIf(process.platform !== "darwin")("linux behavior", () => {})\n` +
+      `spec.runIf(process.platform === "linux")("available behavior", () => {})\n`,
+    true,
+    /new or changed conditional mode in blocking unit collection: skipIf\(process\.platform!=="darwin"\)/,
+  ],
+]) {
+  test(`RT-2 ${expectFailure ? "rejects" : "ignores"} ${label}`, () => {
+    withRepository(({ cwd, base }) => {
+      writeRelative(cwd, file, source)
+      commit(cwd, label)
+      if (!expectFailure) {
+        assert.doesNotThrow(() => checkTestIntegrity({ base, cwd }))
+        return
+      }
+      assert.throws(
+        () => checkTestIntegrity({ base, cwd }),
+        (error) => {
+          assert.ok(error instanceof CheckFailure)
+          const text = `${error.message}\n${error.findings.join("\n")}`
+          assert.match(text, detail)
+          if (file.endsWith("baseline.test.ts")) {
+            assert.doesNotMatch(text, /new Vitest skipIf mode/)
+            assert.doesNotMatch(text, /new Vitest runIf mode/)
+          }
+          return true
+        },
+      )
+    })
+  })
+}
+
 test("RT-2 rejects a test-discovery exclusion", () => {
   withRepository(({ cwd, base }) => {
     writeRelative(
