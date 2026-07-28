@@ -1166,3 +1166,14 @@ test("RT-6 reports a newly duplicated normalized function body", () => {
     )
   })
 })
+
+test("RT-6 ignores non-source files under src", () => {
+  withRepository(({ cwd }) => {
+    writeRelative(cwd, "src/first.ts", duplicatedFunction("firstRule"))
+    writeRelative(cwd, "src/AGENTS.md", "# notes\n")
+    const base = commit(cwd, "add first rule and notes")
+    writeRelative(cwd, "src/second.ts", "export const unrelated = () => 1\n")
+    commit(cwd, "add unrelated rule")
+    assert.deepEqual(checkDuplicates({ base, minimumTokens: 60, cwd }), { findings: [] })
+  })
+})
