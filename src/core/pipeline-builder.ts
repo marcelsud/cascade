@@ -72,6 +72,13 @@ const mapCustomBuildError = (name: string, error: unknown): BuildError =>
     `Failed to build registered component '${name}': ${formatBuildErrorMessage(error)}`,
   );
 
+const closeIgnoringFailure = (
+  close: (() => Effect.Effect<void, unknown>) | undefined,
+): Effect.Effect<void> =>
+  close
+    ? Effect.suspend(close).pipe(Effect.catchAllCause(() => Effect.void))
+    : Effect.void;
+
 const buildRegisteredComponent = <T>(
   config: object,
   kindLabel: string,
@@ -675,19 +682,32 @@ export const buildPipeline = (
       { concurrency: 1 },
     ).pipe(
       Effect.onExit((exit) => {
-        if (Exit.isSuccess(exit) || !input.close) {
+        if (Exit.isSuccess(exit)) {
           return Effect.void;
         }
-        return input.close().pipe(Effect.catchAllCause(() => Effect.void));
+        return closeIgnoringFailure(input.close);
       }),
     );
 
-    const primaryOutput = yield* buildOutput(config.output, registry);
+    const primaryOutput = yield* buildOutput(config.output, registry).pipe(
+      Effect.onExit((exit) =>
+        Exit.isSuccess(exit) ? Effect.void : closeIgnoringFailure(input.close),
+      ),
+    );
     let output = primaryOutput;
     let dlqOutput: Output<any> | undefined;
 
     if (config.dlq) {
-      dlqOutput = yield* buildOutput(config.dlq.output, registry);
+      dlqOutput = yield* buildOutput(config.dlq.output, registry).pipe(
+        Effect.onExit((exit) => {
+          if (Exit.isSuccess(exit)) {
+            return Effect.void;
+          }
+          return closeIgnoringFailure(primaryOutput.close).pipe(
+            Effect.andThen(closeIgnoringFailure(input.close)),
+          );
+        }),
+      );
       output = withDLQ({
         output: primaryOutput,
         dlq: dlqOutput,
