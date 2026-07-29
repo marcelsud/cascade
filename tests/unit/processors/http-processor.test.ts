@@ -497,8 +497,11 @@ describe("HttpProcessor", () => {
 
       try {
         for (const content of [
-          { orderId: "order-7", amount: 42 },
-          [{ orderId: "order-7" }, { orderId: "order-8" }],
+          { orderId: "order-7", amount: 42, note: "use $&", price: "$$" },
+          [
+            { orderId: "order-7", note: "$&" },
+            { orderId: "order-8", price: "$$" },
+          ],
         ]) {
           const processor = createHttpProcessor({
             url: `${baseUrl}/capture`,

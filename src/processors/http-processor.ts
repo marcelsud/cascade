@@ -141,7 +141,7 @@ const evaluateTemplate = (
             typeof value === "object"
               ? JSON.stringify(value)
               : String(value);
-          result = result.replace(match[0], rendered);
+          result = result.replace(match[0], () => rendered);
         }
 
         return result;
