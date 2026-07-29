@@ -492,6 +492,36 @@ describe("HttpProcessor", () => {
       };
     };
 
+    it("serializes object and array body expressions as JSON", async () => {
+      const { server, baseUrl, getCaptured } = await startCaptureServer();
+
+      try {
+        for (const content of [
+          { orderId: "order-7", amount: 42, note: "use $&", price: "$$" },
+          [
+            { orderId: "order-7", note: "$&" },
+            { orderId: "order-8", price: "$$" },
+          ],
+        ]) {
+          const processor = createHttpProcessor({
+            url: `${baseUrl}/capture`,
+            method: "POST",
+            body: "{{ content }}",
+            timeout: 5000,
+            maxRetries: 0,
+          });
+
+          await Effect.runPromise(processor.process(createMessage(content)));
+
+          expect(JSON.parse(getCaptured()!.bodyText)).toEqual(content);
+        }
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    });
+
     it("resolves unprefixed content/meta/message across URL body headers and result_mapping", async () => {
       const { server, baseUrl, getCaptured } = await startCaptureServer();
 
