@@ -122,6 +122,7 @@ const buildMessageContext = (msg: Message): MessageContext => ({
 const evaluateTemplate = (
   template: string,
   context: MessageContext,
+  serializeStructuredValues = false,
 ): Effect.Effect<string, HttpProcessorError> =>
   Effect.gen(function* () {
     const evaluatedTemplate = yield* Effect.tryPromise({
@@ -134,7 +135,13 @@ const evaluateTemplate = (
           const expr = match[1].trim();
           const expression = jsonata(expr);
           const value = await expression.evaluate(context, context);
-          result = result.replace(match[0], String(value));
+          const rendered =
+            serializeStructuredValues &&
+            value !== null &&
+            typeof value === "object"
+              ? JSON.stringify(value)
+              : String(value);
+          result = result.replace(match[0], rendered);
         }
 
         return result;
@@ -336,7 +343,7 @@ export const createHttpProcessor = (
           config.body &&
           (method === "POST" || method === "PUT" || method === "PATCH")
         ) {
-          requestBody = yield* evaluateTemplate(config.body, context);
+          requestBody = yield* evaluateTemplate(config.body, context, true);
         }
 
         // Evaluate custom header templates
