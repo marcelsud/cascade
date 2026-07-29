@@ -117,7 +117,10 @@ audit_candidate:
   consequence_category: reliability
   normalized_claim: request bodies buffered without a byte limit
   reproduction:
-    command: ["npx", "vitest", "run", "tests/unit/inputs/http-input.test.ts"]
+    runner: vitest
+    test_files: [tests/unit/inputs/http-input.test.ts]
+    test_name: rejects request bodies over the configured limit
+    failure_contains: expected status 413
 ```
 
 ## Problem
@@ -159,9 +162,14 @@ descriptive — not "bug in http input", but "request bodies buffered without a 
 
 **This is the part that decides whether your finding exists.**
 
-`reproduction.command` must be a command that **fails at the current commit**. The tool runs it
-itself and ignores anything you report about having run it. A command that succeeds demonstrates
-working software, and the candidate is recorded `unproven`.
+The reproduction must be a Vitest test that **fails at the audited commit**. You declare its files,
+test name, and a literal excerpt of the expected assertion failure; you do not choose the command.
+The tool creates a disposable worktree at the recorded commit, installs dependencies from the
+frozen lockfile with package scripts disabled, copies only the declared tests, and runs Vitest. It
+accepts the named failing assertion and failure message from Vitest's structured result—not process
+output. A collection error, printed text, passing test, unnamed failure, or different failure records
+the candidate as `unproven`. The ledger keeps bounded test contents, hashes, structured assertion
+output, the lockfile/runner identity, and a replay command.
 
 Usually that means writing a test that fails. Add it under `tests/`, point the command at it, and
 make sure it fails **for your reason**:
@@ -174,7 +182,7 @@ Check the second one deliberately. Ask: *if this defect were fixed, would this t
 If you cannot answer yes, you have not isolated the defect. This is the most common way a
 plausible-looking finding turns out to be nothing.
 
-If the defect cannot be expressed as a failing command, it is **out of scope for this loop**. Drop
+If the defect cannot be expressed as a failing Vitest test, it is **out of scope for this loop**. Drop
 it and say so. That is a deliberate trade: precision over recall, because an unattended loop that
 files unverifiable findings costs more review capacity than it creates.
 
@@ -214,13 +222,35 @@ lets a later run decide whether to re-examine it, so write it for that reader.
 
 ## 7. Close the run
 
+First write a report that makes the inspection enumerable. Every inspected path must belong to the
+selected topic and exist at the audited commit. Every behavior-cell evidence reference must name an
+existing line in an inspected path. `contract_ids` are the selected topic's registered objectives.
+
+````markdown
+# Audit report
+
+```yaml
+audit_report:
+  inspected_paths:
+    - src/inputs/http-input.ts
+  contract_ids: [REL-1, REL-2]
+  behavior_cells:
+    - id: body-over-limit
+      evidence: [src/inputs/http-input.ts:120]
+    - id: body-within-limit
+      evidence: [src/inputs/http-input.ts:145]
+```
+````
+
 ```bash
-node .github/grading/audit-run.mjs finish
+node .github/grading/audit-run.mjs finish --report report.md
 ```
 
-This appends the ledger and closes the run. **Always finish**, including when you found nothing —
-otherwise the next `start` records your run as failed and the topic keeps its staleness, which
-wastes the coverage this run should have bought.
+This validates and hashes the report, appends the ledger, and closes the run. **Always finish**,
+including when you found nothing — otherwise the next `start` records your run as failed and the
+topic keeps its staleness. A zero-finding run without inspection evidence does not count as
+coverage. `file` and `finish` reject a changed `HEAD`, and `file` accepts only the exact candidate
+body hashed by `check`.
 
 ---
 
@@ -228,6 +258,24 @@ wastes the coverage this run should have bought.
 
 `file` and `finish` both accept `--dry-run`: they report what they would do and change nothing.
 Use them when validating the loop itself rather than auditing.
+
+## Calibrating an agent
+
+The audit loop produces evidence; it does not accept an agent's confidence estimate. A separate
+controller runs private labeled buggy and clean cases, verifies every observed finding through the
+same evidence gate, and signs each JSONL record with an external HMAC key. Keep both labels and key
+outside the repository and outside the agent sandbox.
+
+```bash
+node .github/grading/calibration.mjs evaluate /private/results.jsonl \
+  --key-file /private/controller.key --require-qualified
+```
+
+All records in one evaluation must name the same exact `model`, `prompt_hash`, `toolchain_hash`,
+and `topic_id`. The gate reports precision, sensitivity, specificity, abstention, and one-sided
+95% Wilson lower bounds. It exits nonzero until the minimum buggy/clean case counts and thresholds
+in `config.yml` are met. Recalibrate after changing any member of that identity tuple. The result
+applies to the fixed labeled benchmark only; do not present it as generalized repository quality.
 
 ## What a good finding looks like
 
