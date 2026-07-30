@@ -7,6 +7,18 @@
 rubric_version: 1.1.0
 mode: report-only
 
+# Model authority is earned on private, labeled cases. The calibration tool
+# reports fixed-benchmark confidence only; it never turns model self-confidence
+# into evidence. Keep the case data outside the repository so audit agents
+# cannot read the labels they are being tested against.
+calibration:
+  minimum_bug_cases: 60
+  minimum_clean_cases: 60
+  finding_precision_lcb: 0.95
+  no_finding_sensitivity_lcb: 0.80
+  clean_specificity_lcb: 0.95
+  max_abstention_rate: 0.20
+
 # Objective registry (spec §4.8), cited by IE-7. Issues cite an ID from this
 # list. Identifiers are stable and are never reused for a different guarantee,
 # because stored grade records cite them. A recorded administrative request may

@@ -6,13 +6,17 @@ import path from "node:path"
 import test from "node:test"
 import { fileURLToPath } from "node:url"
 import { AuditFailure } from "./audit.mjs"
-import { parseCandidate, verifyReproduction } from "./audit-run.mjs"
+import { parseCandidate, parseRunReport, verifyReproduction } from "./audit-run.mjs"
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const RUNNER = path.join(HERE, "audit-run.mjs")
 
 const git = (cwd, ...args) =>
-  execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
+  execFileSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim()
 
 const write = (cwd, file, content) => {
   const target = path.join(cwd, file)
@@ -33,7 +37,11 @@ const run = (cwd, ...args) => {
 
 const runExpectingFailure = (cwd, ...args) => {
   try {
-    execFileSync("node", [RUNNER, ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
+    execFileSync("node", [RUNNER, ...args], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    })
     throw new Error("expected the command to fail")
   } catch (error) {
     if (!error.stderr && !error.status) throw error
@@ -59,7 +67,14 @@ const eligibility = Array.from(
  * A conforming candidate: the proposed issue body carrying the §5.4 grading
  * record plus the audit_candidate block.
  */
-const candidate = ({ claim = "unbounded buffer", command, grade = "A", rule = "A-blocker", severity = "blocker" }) => `# Something is wrong
+const candidate = ({
+  claim = "unbounded buffer",
+  grade = "A",
+  rule = "A-blocker",
+  severity = "blocker",
+  testName = "reproduces bug",
+  failure = "expected bounded behavior",
+} = {}) => `# Something is wrong
 
 \`\`\`yaml
 audit_candidate:
@@ -67,7 +82,10 @@ audit_candidate:
   consequence_category: reliability
   normalized_claim: ${claim}
   reproduction:
-    command: ${JSON.stringify(command)}
+    runner: vitest
+    test_files: [tests/repro.test.ts]
+    test_name: ${testName}
+    failure_contains: ${failure}
 \`\`\`
 
 ## Grading record
@@ -83,6 +101,38 @@ grade_rationale: Direct evidence changes the release decision. Rule ${rule} appl
 \`\`\`
 `
 
+const writeCandidate = (cwd, options = {}) => {
+  write(
+    cwd,
+    "tests/repro.test.ts",
+    options.passes
+      ? "PASS_REPRO\n"
+      : options.collectionError
+        ? "COLLECTION_ERROR\n"
+        : "FAIL_REPRO\n",
+  )
+  return write(cwd, "candidate.md", candidate(options))
+}
+
+const report = (overrides = {}) => `# Audit report
+
+\`\`\`yaml
+audit_report:
+  inspected_paths: [src/alpha.ts]
+  contract_ids: [REL-1]
+  behavior_cells:
+    - id: alpha-value
+      evidence: [src/alpha.ts:1]
+${overrides.extra ?? ""}\`\`\`
+`
+
+const writeReport = (cwd, overrides) => write(cwd, "report.md", report(overrides))
+
+const finish = (cwd, ...args) => {
+  writeReport(cwd)
+  return run(cwd, "finish", "--report", "report.md", ...args)
+}
+
 /** A repo with a ledger branch, so the runner has something to read and push to. */
 const withProject = (callback) => {
   const root = mkdtempSync(path.join(tmpdir(), "audit-run-"))
@@ -96,8 +146,39 @@ const withProject = (callback) => {
     git(cwd, "config", "user.email", "audit-run-tests@example.invalid")
 
     write(cwd, ".github/grading/config.yml", CONFIG)
+    write(cwd, ".gitignore", "node_modules/\n")
+    write(cwd, "bun.lock", "fixture-lock\n")
     write(cwd, "src/alpha.ts", "export const alpha = 1\n")
+    write(
+      cwd,
+      "node_modules/vitest/vitest.mjs",
+      `import fs from "node:fs"
+const file = process.argv.find((arg) => arg.startsWith("tests/"))
+const source = fs.readFileSync(file, "utf8")
+const outputArg = process.argv.find((arg) => arg.startsWith("--outputFile="))
+const outputFile = outputArg.slice("--outputFile=".length)
+const passes = source.includes("PASS_REPRO")
+const collectionError = source.includes("COLLECTION_ERROR")
+const assertionResults = collectionError ? [] : [{
+  fullName: "reproduces bug",
+  title: "reproduces bug",
+  status: passes ? "passed" : "failed",
+  failureMessages: passes ? [] : ["expected bounded behavior"],
+}]
+fs.writeFileSync(outputFile, JSON.stringify({
+  success: passes,
+  numTotalTests: assertionResults.length,
+  numFailedTests: passes || collectionError ? 0 : 1,
+  numPassedTests: passes ? 1 : 0,
+  testResults: [{ status: passes ? "passed" : "failed", assertionResults }],
+}))
+if (collectionError) process.stderr.write("reproduces bug\\nexpected bounded behavior\\n")
+process.exit(passes ? 0 : 1)
+`,
+    )
+    write(cwd, "node_modules/vitest/package.json", '{"version":"fixture"}\n')
     git(cwd, "add", ".")
+    git(cwd, "add", "-f", "node_modules/vitest/vitest.mjs", "node_modules/vitest/package.json")
     git(cwd, "commit", "-q", "-m", "baseline")
     const branch = git(cwd, "rev-parse", "--abbrev-ref", "HEAD")
     git(cwd, "push", "-q", "origin", branch)
@@ -133,15 +214,28 @@ const PASSING = ["node", "-e", "process.exit(0)"]
 
 /* -------------------------------------------------------------- candidate */
 
-test("parseCandidate requires the audit_candidate block and a command array", () => {
+test("parseCandidate requires a bounded Vitest reproduction", () => {
   assert.throws(() => parseCandidate("# no yaml here"), /audit_candidate/)
   assert.throws(
     () => parseCandidate("```yaml\naudit_candidate:\n  path: a\n```"),
     /requires consequence_category/,
   )
-  const parsed = parseCandidate(candidate({ command: FAILING }))
+  const parsed = parseCandidate(candidate())
   assert.equal(parsed.path, "src/alpha.ts")
-  assert.deepEqual(parsed.reproduction.command, FAILING)
+  assert.deepEqual(parsed.reproduction.test_files, ["tests/repro.test.ts"])
+  assert.throws(
+    () => parseCandidate(candidate().replace("runner: vitest", "runner: shell")),
+    /runner must be vitest/,
+  )
+  assert.throws(
+    () => parseCandidate(candidate().replace("tests/repro.test.ts", "../escape.test.ts")),
+    /repository-relative test/,
+  )
+})
+
+test("parseRunReport requires structured inspection evidence", () => {
+  assert.equal(parseRunReport(report()).contract_ids[0], "REL-1")
+  assert.throws(() => parseRunReport("# prose only"), /audit_report/)
 })
 
 /* ------------------------------------------------------- reproduction gate */
@@ -156,19 +250,12 @@ test("verifyReproduction accepts failure and rejects success", () => {
 })
 
 test("verifyReproduction rejects a command that cannot run", () => {
-  const result = verifyReproduction({ command: ["definitely-not-a-real-binary-xyz"], cwd: HERE })
-  assert.equal(result.reproduced, false)
-  assert.match(result.reason, /could not run/)
-})
-
-test("verifyReproduction rejects a command that does not settle", () => {
   const result = verifyReproduction({
-    command: ["node", "-e", "setTimeout(() => {}, 60000)"],
+    command: ["definitely-not-a-real-binary-xyz"],
     cwd: HERE,
-    timeoutMs: 300,
   })
   assert.equal(result.reproduced, false)
-  assert.match(result.reason, /did not settle/)
+  assert.match(result.reason, /could not run/)
 })
 
 /* ------------------------------------------------------------ run lifecycle */
@@ -184,25 +271,65 @@ test("start opens a run and reports the selected topic", () =>
 
 test("check refuses to run before start", () =>
   withProject(({ cwd }) => {
-    write(cwd, "candidate.md", candidate({ command: FAILING }))
+    writeCandidate(cwd)
     assert.match(runExpectingFailure(cwd, "check", "candidate.md"), /no run is open/)
+  }))
+
+test("check rejects a candidate outside the selected topic", () =>
+  withProject(({ cwd }) => {
+    run(cwd, "start", "--seed", "1")
+    write(cwd, "tests/repro.test.ts", "FAIL_REPRO\n")
+    write(cwd, "candidate.md", candidate().replace("path: src/alpha.ts", "path: AGENTS.md"))
+    assert.match(runExpectingFailure(cwd, "check", "candidate.md"), /outside topic alpha/)
   }))
 
 test("a reproduced, well-graded candidate is verified and filable", () =>
   withProject(({ cwd }) => {
     run(cwd, "start", "--seed", "1")
-    write(cwd, "candidate.md", candidate({ command: FAILING }))
+    writeCandidate(cwd)
     const checked = run(cwd, "check", "candidate.md")
     assert.equal(checked.disposition, "filed")
     assert.equal(checked.grade, "A")
+    assert.equal(checked.reproduction.snapshot, git(cwd, "rev-parse", "HEAD"))
+    assert.equal(checked.reproduction.test_files[0].path, "tests/repro.test.ts")
+    assert.ok(checked.reproduction.test_files[0].content_base64)
+    assert.ok(checked.reproduction.toolchain.sha256)
     assert.equal(run(cwd, "file", "candidate.md", "--dry-run").filed, false)
+  }))
+
+test("a collection error cannot impersonate a failing assertion", () =>
+  withProject(({ cwd }) => {
+    run(cwd, "start", "--seed", "1")
+    writeCandidate(cwd, { collectionError: true })
+    const checked = run(cwd, "check", "candidate.md")
+    assert.equal(checked.disposition, "unproven")
+    assert.match(checked.reason, /structured Vitest report/)
+  }))
+
+test("file authorization is bound to the exact checked candidate body", () =>
+  withProject(({ cwd }) => {
+    run(cwd, "start", "--seed", "1")
+    writeCandidate(cwd)
+    run(cwd, "check", "candidate.md")
+    write(cwd, "candidate.md", candidate().replace("# Something is wrong", "# Reworded"))
+    assert.match(runExpectingFailure(cwd, "file", "candidate.md", "--dry-run"), /not passed check/)
+  }))
+
+test("file refuses after HEAD changes", () =>
+  withProject(({ cwd }) => {
+    run(cwd, "start", "--seed", "1")
+    writeCandidate(cwd)
+    run(cwd, "check", "candidate.md")
+    git(cwd, "add", "tests/repro.test.ts")
+    git(cwd, "commit", "-q", "-m", "move head")
+    assert.match(runExpectingFailure(cwd, "file", "candidate.md", "--dry-run"), /HEAD changed/)
   }))
 
 // §7.2: a candidate whose reproduction succeeds is unproven and never filed.
 test("a candidate whose reproduction succeeds is unproven and unfilable", () =>
   withProject(({ cwd }) => {
     run(cwd, "start", "--seed", "1")
-    write(cwd, "candidate.md", candidate({ command: PASSING }))
+    writeCandidate(cwd, { passes: true })
     assert.equal(run(cwd, "check", "candidate.md").disposition, "unproven")
     assert.match(runExpectingFailure(cwd, "file", "candidate.md"), /has not passed check/)
   }))
@@ -211,7 +338,11 @@ test("a candidate failing the grading gate is ineligible and unfilable", () =>
   withProject(({ cwd }) => {
     run(cwd, "start", "--seed", "1")
     // issue_grade contradicts value_rule, which checks.mjs rejects.
-    write(cwd, "candidate.md", candidate({ command: FAILING, grade: "A", rule: "B-localized-material", severity: "material" }))
+    writeCandidate(cwd, {
+      grade: "A",
+      rule: "B-localized-material",
+      severity: "material",
+    })
     const checked = run(cwd, "check", "candidate.md")
     assert.equal(checked.disposition, "ineligible")
     assert.match(runExpectingFailure(cwd, "file", "candidate.md"), /has not passed check/)
@@ -221,52 +352,66 @@ test("a candidate failing the grading gate is ineligible and unfilable", () =>
 test("file refuses a candidate that never passed check in this run", () =>
   withProject(({ cwd }) => {
     run(cwd, "start", "--seed", "1")
-    write(cwd, "candidate.md", candidate({ command: FAILING }))
+    write(cwd, "candidate.md", candidate())
     assert.match(runExpectingFailure(cwd, "file", "candidate.md"), /has not passed check/)
   }))
 
 test("finish refuses while a verified candidate is neither filed nor dropped", () =>
   withProject(({ cwd }) => {
     run(cwd, "start", "--seed", "1")
-    write(cwd, "candidate.md", candidate({ command: FAILING }))
+    writeCandidate(cwd)
     run(cwd, "check", "candidate.md")
-    assert.match(runExpectingFailure(cwd, "finish"), /neither filed nor dropped/)
+    writeReport(cwd)
+    assert.match(
+      runExpectingFailure(cwd, "finish", "--report", "report.md"),
+      /neither filed nor dropped/,
+    )
   }))
 
 // §8.2 stage two: adjudication may conclude the candidate is a known finding.
 test("drop resolves a verified candidate with a recorded reason", () =>
   withProject(({ cwd }) => {
     run(cwd, "start", "--seed", "1")
-    write(cwd, "candidate.md", candidate({ command: FAILING }))
+    writeCandidate(cwd)
     run(cwd, "check", "candidate.md")
-    run(cwd, "drop", "candidate.md", "--disposition", "duplicate", "--reason", "same root cause as #1")
+    run(
+      cwd,
+      "drop",
+      "candidate.md",
+      "--disposition",
+      "duplicate",
+      "--reason",
+      "same root cause as #1",
+    )
 
-    const finished = run(cwd, "finish")
+    const finished = finish(cwd)
     assert.equal(finished.run.outcome, "completed")
     const findings = ledgerLines(cwd, "findings.jsonl")
     assert.equal(findings.length, 1)
     assert.equal(findings[0].disposition, "duplicate")
     assert.equal(findings[0].reason, "same root cause as #1")
+    assert.equal(findings[0].reproduction.runner, "vitest")
   }))
 
 test("drop requires a reason", () =>
   withProject(({ cwd }) => {
     run(cwd, "start", "--seed", "1")
-    write(cwd, "candidate.md", candidate({ command: FAILING }))
+    writeCandidate(cwd)
     run(cwd, "check", "candidate.md")
     assert.match(runExpectingFailure(cwd, "drop", "candidate.md"), /requires --reason/)
   }))
 
-test("finish records a dry run and closes it", () =>
+test("finish records inspection evidence and closes the run", () =>
   withProject(({ cwd }) => {
     const started = run(cwd, "start", "--seed", "1")
-    const finished = run(cwd, "finish")
+    const finished = finish(cwd)
 
     assert.equal(finished.run.outcome, "completed")
     assert.equal(finished.findings, 0)
     const runs = ledgerLines(cwd, "topics.jsonl")
     assert.equal(runs.length, 1)
     assert.equal(runs[0].run_id, started.run_id)
+    assert.deepEqual(runs[0].inspection.contract_ids, ["REL-1"])
     assert.deepEqual(run(cwd, "status"), { open: false })
   }))
 
@@ -275,25 +420,25 @@ test("finish records a dry run and closes it", () =>
 test("a fingerprint already in the ledger is a duplicate without reproducing", () =>
   withProject(({ cwd }) => {
     run(cwd, "start", "--seed", "1")
-    write(cwd, "candidate.md", candidate({ command: FAILING }))
+    writeCandidate(cwd)
     run(cwd, "check", "candidate.md")
     run(cwd, "drop", "candidate.md", "--disposition", "not-current", "--reason", "already fixed")
-    run(cwd, "finish")
+    finish(cwd)
 
     run(cwd, "start", "--seed", "1")
     // A reproduction that would pass: if it ran, the candidate would be
     // 'unproven'. Getting 'duplicate' proves deduplication came first.
-    write(cwd, "candidate.md", candidate({ command: PASSING }))
+    writeCandidate(cwd, { passes: true })
     assert.equal(run(cwd, "check", "candidate.md").disposition, "duplicate")
   }))
 
 test("start reports prior fingerprints for the selected topic", () =>
   withProject(({ cwd }) => {
     run(cwd, "start", "--seed", "1")
-    write(cwd, "candidate.md", candidate({ command: FAILING }))
+    writeCandidate(cwd)
     run(cwd, "check", "candidate.md")
     run(cwd, "drop", "candidate.md", "--disposition", "unproven", "--reason", "not demonstrated")
-    run(cwd, "finish")
+    finish(cwd)
 
     const started = run(cwd, "start", "--seed", "1")
     assert.equal(started.known_fingerprints.length, 1)
@@ -321,7 +466,7 @@ test("an abandoned run leaves its topic unaudited", () =>
   withProject(({ cwd }) => {
     run(cwd, "start", "--seed", "1")
     run(cwd, "start", "--seed", "1")
-    run(cwd, "finish")
+    finish(cwd)
 
     const runs = ledgerLines(cwd, "topics.jsonl")
     assert.deepEqual(
@@ -332,7 +477,35 @@ test("an abandoned run leaves its topic unaudited", () =>
 
 test("finish refuses when no run is open", () =>
   withProject(({ cwd }) => {
-    assert.match(runExpectingFailure(cwd, "finish"), /no run is open/)
+    assert.match(runExpectingFailure(cwd, "finish", "--report", "missing.md"), /no run is open/)
+  }))
+
+test("finish refuses a missing or nonconforming inspection report", () =>
+  withProject(({ cwd }) => {
+    run(cwd, "start", "--seed", "1")
+    assert.match(runExpectingFailure(cwd, "finish"), /requires --report/)
+    write(cwd, "report.md", "# prose only\n")
+    assert.match(runExpectingFailure(cwd, "finish", "--report", "report.md"), /audit_report/)
+  }))
+
+test("finish rejects inspection evidence outside the selected topic", () =>
+  withProject(({ cwd }) => {
+    run(cwd, "start", "--seed", "1")
+    write(cwd, "report.md", report().replaceAll("src/alpha.ts", ".github/grading/config.yml"))
+    assert.match(runExpectingFailure(cwd, "finish", "--report", "report.md"), /outside topic/)
+  }))
+
+test("finish rejects behavior evidence without an existing line", () =>
+  withProject(({ cwd }) => {
+    run(cwd, "start", "--seed", "1")
+    write(cwd, "report.md", report().replace("src/alpha.ts:1", "src/alpha.ts:99"))
+    assert.match(runExpectingFailure(cwd, "finish", "--report", "report.md"), /line does not exist/)
+  }))
+
+test("start rejects tracked changes that would diverge from the recorded commit", () =>
+  withProject(({ cwd }) => {
+    write(cwd, "src/alpha.ts", "export const alpha = 2\n")
+    assert.match(runExpectingFailure(cwd, "start", "--seed", "1"), /clean tracked worktree/)
   }))
 
 test("unreadable run state is reported rather than silently discarded", () =>
@@ -352,12 +525,24 @@ test("the run state file is never tracked", () =>
 test("finish --dry-run reports entries without pushing them", () =>
   withProject(({ cwd }) => {
     run(cwd, "start", "--seed", "1")
-    const finished = run(cwd, "finish", "--dry-run")
+    const finished = finish(cwd, "--dry-run")
     assert.equal(finished.pushed, false)
     assert.equal(ledgerLines(cwd, "topics.jsonl").length, 0)
     // The run stays open, so nothing is lost by rehearsing.
     assert.equal(run(cwd, "status").topic_id, "alpha")
   }))
+
+// Keep the timeout case last: some restricted process sandboxes refuse later
+// spawns after killing a timed-out child even though Node has reaped it.
+test("verifyReproduction rejects a command that does not settle", () => {
+  const result = verifyReproduction({
+    command: ["node", "-e", "setTimeout(() => {}, 60000)"],
+    cwd: HERE,
+    timeoutMs: 300,
+  })
+  assert.equal(result.reproduced, false)
+  assert.match(result.reason, /did not settle/)
+})
 
 test("AuditFailure is what the module raises for contract violations", () => {
   assert.ok(new AuditFailure("x") instanceof Error)

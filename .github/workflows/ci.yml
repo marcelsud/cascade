@@ -22,7 +22,7 @@ jobs:
       - name: Grading tool tests
         run: node --test .github/grading/checks.test.mjs
       - name: Audit tool tests
-        run: node --test .github/grading/audit.test.mjs .github/grading/audit-run.test.mjs
+        run: node --test .github/grading/audit.test.mjs .github/grading/audit-run.test.mjs .github/grading/calibration.test.mjs
       - name: RT-1 type safety
         run: npm run lint
       - name: RT-1 build

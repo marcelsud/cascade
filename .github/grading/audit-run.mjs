@@ -17,6 +17,7 @@
  * gated on state recorded here, never on anything the agent asserts.
  */
 import { execFileSync, spawnSync } from "node:child_process"
+import { createHash } from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -38,9 +39,16 @@ import {
 const LEDGER_BRANCH = "grading-ledger"
 const DEFAULT_CONFIG = ".github/grading/config.yml"
 const REPRODUCTION_TIMEOUT_MS = 10 * 60 * 1000
+const MAX_REPRODUCTION_BYTES = 64 * 1024
+
+const sha256 = (value) => createHash("sha256").update(value).digest("hex")
 
 const git = (args, cwd) =>
-  execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
+  execFileSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim()
 
 /* -------------------------------------------------------------- run state */
 
@@ -49,7 +57,8 @@ const git = (args, cwd) =>
  * `git status`. This is the state §10.3 requires `file` to consult and §10.4
  * requires `start` to inspect for abandonment.
  */
-const statePath = (cwd) => path.join(git(["rev-parse", "--git-dir"], cwd), "continuous-audit-run.json")
+const statePath = (cwd) =>
+  path.join(git(["rev-parse", "--git-dir"], cwd), "continuous-audit-run.json")
 
 const readState = (cwd) => {
   const file = statePath(cwd)
@@ -94,9 +103,28 @@ export const parseCandidate = (markdown) => {
   for (const field of ["path", "consequence_category", "normalized_claim", "reproduction"]) {
     if (!candidate[field]) throw new AuditFailure(`audit_candidate requires ${field}`)
   }
-  const command = candidate.reproduction.command
-  if (!Array.isArray(command) || command.length === 0) {
-    throw new AuditFailure("audit_candidate.reproduction.command must be a non-empty array")
+  const reproduction = candidate.reproduction
+  if (reproduction.runner !== "vitest") {
+    throw new AuditFailure("audit_candidate.reproduction.runner must be vitest")
+  }
+  if (!Array.isArray(reproduction.test_files) || reproduction.test_files.length === 0) {
+    throw new AuditFailure("audit_candidate.reproduction.test_files must be a non-empty array")
+  }
+  for (const file of reproduction.test_files) {
+    const normalized = path.posix.normalize(String(file).replaceAll("\\", "/"))
+    if (
+      path.posix.isAbsolute(normalized) ||
+      normalized.startsWith("../") ||
+      !normalized.startsWith("tests/") ||
+      !/\.(?:test|spec)\.(?:[cm]?[jt]s|[jt]sx)$/.test(normalized)
+    ) {
+      throw new AuditFailure(`reproduction test file must be a repository-relative test: ${file}`)
+    }
+  }
+  for (const field of ["test_name", "failure_contains"]) {
+    if (typeof reproduction[field] !== "string" || reproduction[field].trim() === "") {
+      throw new AuditFailure(`audit_candidate.reproduction.${field} must be a non-empty string`)
+    }
   }
   return candidate
 }
@@ -104,9 +132,8 @@ export const parseCandidate = (markdown) => {
 /* ------------------------------------------------------- reproduction gate */
 
 /**
- * §7.2: this tool runs the reproduction itself and requires it to FAIL at the
- * audited commit. An agent transcript is a claim about a reproduction, not the
- * reproduction. A command that succeeds demonstrates working software.
+ * Low-level process runner. Audit candidates never supply this command; the
+ * trusted wrapper below constructs the repository-native Vitest invocation.
  */
 export const verifyReproduction = ({ command, cwd, timeoutMs = REPRODUCTION_TIMEOUT_MS }) => {
   const [file, ...args] = command
@@ -118,18 +145,258 @@ export const verifyReproduction = ({ command, cwd, timeoutMs = REPRODUCTION_TIME
   })
 
   if (result.error?.code === "ETIMEDOUT" || result.signal) {
-    return { reproduced: false, reason: `reproduction did not settle within ${timeoutMs}ms` }
+    return {
+      reproduced: false,
+      reason: `reproduction did not settle within ${timeoutMs}ms`,
+    }
   }
   if (result.error) {
-    return { reproduced: false, reason: `reproduction could not run: ${result.error.message}` }
+    return {
+      reproduced: false,
+      reason: `reproduction could not run: ${result.error.message}`,
+    }
   }
   if (result.status === 0) {
-    return { reproduced: false, reason: "reproduction succeeded at the audited commit" }
+    return {
+      reproduced: false,
+      reason: "reproduction succeeded at the audited commit",
+    }
   }
   return {
     reproduced: true,
     status: result.status,
     output: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim().slice(-4000),
+  }
+}
+
+const withReproductionSnapshot = ({ cwd, commit, testFiles }, callback) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cascade-audit-proof-"))
+  const snapshot = path.join(root, "repo")
+  let worktreeAdded = false
+  try {
+    git(["worktree", "add", "--quiet", "--detach", snapshot, commit], cwd)
+    worktreeAdded = true
+    const modules = path.join(snapshot, "node_modules")
+    if (!fs.existsSync(modules)) {
+      const install = spawnSync("bun", ["install", "--frozen-lockfile", "--ignore-scripts"], {
+        cwd: snapshot,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      })
+      if (install.status !== 0 || install.error) {
+        throw new AuditFailure(
+          `could not create frozen reproduction toolchain: ${install.error?.message ?? install.stderr}`,
+        )
+      }
+    }
+
+    let totalBytes = 0
+    const copied = testFiles.map((file) => {
+      const source = path.join(cwd, file)
+      if (!fs.existsSync(source) || !fs.statSync(source).isFile()) {
+        throw new AuditFailure(`reproduction test file does not exist: ${file}`)
+      }
+      const target = path.join(snapshot, file)
+      fs.mkdirSync(path.dirname(target), { recursive: true })
+      fs.copyFileSync(source, target)
+      const content = fs.readFileSync(source)
+      totalBytes += content.length
+      if (totalBytes > MAX_REPRODUCTION_BYTES) {
+        throw new AuditFailure(`reproduction tests exceed ${MAX_REPRODUCTION_BYTES} bytes`)
+      }
+      return {
+        path: file,
+        sha256: sha256(content),
+        content_base64: content.toString("base64"),
+      }
+    })
+
+    return callback({ root, snapshot, copied })
+  } finally {
+    try {
+      if (worktreeAdded) git(["worktree", "remove", "--force", snapshot], cwd)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+}
+
+export const verifyCandidateReproduction = ({ candidate, cwd, commit, timeoutMs }) => {
+  const reproduction = candidate.reproduction
+  const testFiles = [...new Set(reproduction.test_files.map((file) => path.posix.normalize(file)))]
+
+  return withReproductionSnapshot({ cwd, commit, testFiles }, ({ root, snapshot, copied }) => {
+    const reportFile = path.join(root, "vitest-result.json")
+    const runner = path.join(snapshot, "node_modules", "vitest", "vitest.mjs")
+    const command = [
+      process.execPath,
+      runner,
+      "run",
+      ...testFiles,
+      "--reporter=json",
+      `--outputFile=${reportFile}`,
+    ]
+    const result = verifyReproduction({ command, cwd: snapshot, timeoutMs })
+    if (!result.reproduced) return result
+
+    let report
+    try {
+      report = JSON.parse(fs.readFileSync(reportFile, "utf8"))
+    } catch {
+      return {
+        reproduced: false,
+        reason: "reproduction produced no valid structured Vitest report",
+      }
+    }
+    const assertions = (report.testResults ?? []).flatMap((entry) => entry.assertionResults ?? [])
+    const assertion = assertions.find(
+      (entry) =>
+        entry.status === "failed" &&
+        (entry.fullName === reproduction.test_name || entry.title === reproduction.test_name),
+    )
+    if (!assertion) {
+      return {
+        reproduced: false,
+        reason: "structured Vitest report does not contain the declared failing test",
+      }
+    }
+    const failureOutput = (assertion.failureMessages ?? []).join("\n").trim().slice(-4000)
+    if (!failureOutput.includes(reproduction.failure_contains)) {
+      return {
+        reproduced: false,
+        reason: "declared failure is absent from the failing assertion",
+      }
+    }
+
+    const packageFile = path.join(snapshot, "node_modules", "vitest", "package.json")
+    const lockFile = path.join(snapshot, "bun.lock")
+    const toolchain = {
+      node_version: process.version,
+      vitest_version: JSON.parse(fs.readFileSync(packageFile, "utf8")).version,
+      vitest_runner_sha256: sha256(fs.readFileSync(runner)),
+      bun_lock_sha256: sha256(fs.readFileSync(lockFile)),
+    }
+    toolchain.sha256 = sha256(JSON.stringify(toolchain))
+
+    const replayCommand = [
+      "node",
+      "node_modules/vitest/vitest.mjs",
+      "run",
+      ...testFiles,
+      "--reporter=json",
+    ]
+    return {
+      ...result,
+      proof: {
+        runner: "vitest",
+        snapshot: commit,
+        command: replayCommand,
+        test_name: reproduction.test_name,
+        failure_contains: reproduction.failure_contains,
+        test_files: copied,
+        assertion_failure: failureOutput,
+        output_sha256: sha256(failureOutput),
+        toolchain,
+        vitest_summary: {
+          total: report.numTotalTests,
+          failed: report.numFailedTests,
+          passed: report.numPassedTests,
+        },
+      },
+    }
+  })
+}
+
+export const parseRunReport = (markdown) => {
+  for (const match of markdown.matchAll(/```ya?ml\n([\s\S]*?)```/g)) {
+    const parsed = parseYaml(match[1])
+    if (parsed?.audit_report) return parsed.audit_report
+  }
+  throw new AuditFailure("run report lacks an `audit_report:` yaml block")
+}
+
+const topicContainsPath = (topic, file) =>
+  topic.paths.some((raw) => {
+    const declared = String(raw).replaceAll("\\", "/")
+    const normalized = path.posix.normalize(declared)
+    return declared.endsWith("/") ? file.startsWith(normalized) : file === normalized
+  })
+
+const validateCandidateScope = ({ candidate, state, cwd }) => {
+  const file = path.posix.normalize(String(candidate.path).replaceAll("\\", "/"))
+  if (
+    path.posix.isAbsolute(file) ||
+    file.startsWith("../") ||
+    !topicContainsPath(state.topic, file)
+  ) {
+    throw new AuditFailure(`candidate path is outside topic ${state.topic_id}: ${file}`)
+  }
+  try {
+    git(["cat-file", "-e", `${state.commit_audited}:${file}`], cwd)
+  } catch {
+    throw new AuditFailure(`candidate path does not exist at ${state.commit_audited}: ${file}`)
+  }
+  candidate.path = file
+}
+
+const validateRunReport = ({ markdown, state, cwd }) => {
+  const report = parseRunReport(markdown)
+  for (const field of ["inspected_paths", "contract_ids", "behavior_cells"]) {
+    if (!Array.isArray(report[field]) || report[field].length === 0) {
+      throw new AuditFailure(`audit_report.${field} must be a non-empty array`)
+    }
+  }
+
+  const inspected = report.inspected_paths.map((raw) => path.posix.normalize(String(raw)))
+  for (const file of inspected) {
+    if (
+      path.posix.isAbsolute(file) ||
+      file.startsWith("../") ||
+      !topicContainsPath(state.topic, file)
+    ) {
+      throw new AuditFailure(`audit report path is outside topic ${state.topic_id}: ${file}`)
+    }
+    try {
+      git(["cat-file", "-e", `${state.commit_audited}:${file}`], cwd)
+    } catch {
+      throw new AuditFailure(`audit report path does not exist at ${state.commit_audited}: ${file}`)
+    }
+  }
+
+  for (const contract of report.contract_ids) {
+    if (!state.topic.objectives.includes(contract)) {
+      throw new AuditFailure(
+        `audit report contract is outside topic ${state.topic_id}: ${contract}`,
+      )
+    }
+  }
+  for (const cell of report.behavior_cells) {
+    if (!cell?.id || !Array.isArray(cell.evidence) || cell.evidence.length === 0) {
+      throw new AuditFailure("each audit_report.behavior_cells entry requires id and evidence")
+    }
+    for (const evidence of cell.evidence) {
+      const match = String(evidence).match(/^(.+):(\d+)(?::\d+)?$/)
+      if (!match) {
+        throw new AuditFailure(`behavior cell evidence requires an existing line: ${evidence}`)
+      }
+      const [, file, lineText] = match
+      if (!inspected.includes(file)) {
+        throw new AuditFailure(`behavior cell evidence is not an inspected path: ${evidence}`)
+      }
+      const line = Number(lineText)
+      const committedSource = git(["show", `${state.commit_audited}:${file}`], cwd)
+      const lineCount = committedSource === "" ? 0 : committedSource.split("\n").length
+      if (!Number.isSafeInteger(line) || line < 1 || line > lineCount) {
+        throw new AuditFailure(`behavior cell evidence line does not exist: ${evidence}`)
+      }
+    }
+  }
+
+  return {
+    report_sha256: sha256(markdown),
+    inspected_paths: [...new Set(inspected)].sort(),
+    contract_ids: [...new Set(report.contract_ids)].sort(),
+    behavior_cells: report.behavior_cells,
   }
 }
 
@@ -209,6 +476,13 @@ const cmdStart = ({ cwd, configFile, seedArg, topicId }) => {
     recovered = abandoned.run_id
   }
 
+  const trackedChanges = git(["status", "--porcelain", "--untracked-files=no"], cwd)
+  if (trackedChanges) {
+    throw new AuditFailure(
+      "start requires a clean tracked worktree so the audited commit is authoritative",
+    )
+  }
+
   const { topics, objectives } = loadTopics(configFile)
   const eligible = selectableTopics({ topics, objectives })
   if (eligible.length === 0) throw new AuditFailure("no topic cites a registered objective")
@@ -247,6 +521,7 @@ const cmdStart = ({ cwd, configFile, seedArg, topicId }) => {
     commit_audited: commit,
     seed,
     named_topic: Boolean(topicId),
+    topic: selected,
     checked: [],
   }
   writeState(cwd, state)
@@ -272,8 +547,14 @@ const cmdStart = ({ cwd, configFile, seedArg, topicId }) => {
 
 const cmdCheck = async ({ cwd, candidateFile }) => {
   const state = requireState(cwd)
+  if (git(["rev-parse", "HEAD"], cwd) !== state.commit_audited) {
+    throw new AuditFailure(
+      "HEAD changed after start; finish or abandon this run before auditing another commit",
+    )
+  }
   const markdown = fs.readFileSync(candidateFile, "utf8")
   const candidate = parseCandidate(markdown)
+  validateCandidateScope({ candidate, state, cwd })
 
   const print = await fingerprint({
     path: candidate.path,
@@ -289,6 +570,7 @@ const cmdCheck = async ({ cwd, candidateFile }) => {
     path: candidate.path,
     consequence_category: candidate.consequence_category,
     normalized_claim: candidate.normalized_claim,
+    candidate_sha256: sha256(markdown),
   }
 
   try {
@@ -303,7 +585,11 @@ const cmdCheck = async ({ cwd, candidateFile }) => {
   // the most expensive stage.
   const exact = findings.find((entry) => entry.fingerprint === print)
   if (exact) {
-    const result = { ...base, disposition: "duplicate", reason: `matches ${print.slice(0, 12)}` }
+    const result = {
+      ...base,
+      disposition: "duplicate",
+      reason: `matches ${print.slice(0, 12)}`,
+    }
     state.checked.push({ ...result, verified: false })
     writeState(cwd, state)
     return result
@@ -313,12 +599,21 @@ const cmdCheck = async ({ cwd, candidateFile }) => {
   // adjudication before filing. Reported, not auto-rejected.
   const related = findings.filter(
     (entry) =>
-      entry.path === candidate.path && entry.consequence_category === candidate.consequence_category,
+      entry.path === candidate.path &&
+      entry.consequence_category === candidate.consequence_category,
   )
 
-  const reproduction = verifyReproduction({ command: candidate.reproduction.command, cwd })
+  const reproduction = verifyCandidateReproduction({
+    candidate,
+    cwd,
+    commit: state.commit_audited,
+  })
   if (!reproduction.reproduced) {
-    const result = { ...base, disposition: "unproven", reason: reproduction.reason }
+    const result = {
+      ...base,
+      disposition: "unproven",
+      reason: reproduction.reason,
+    }
     state.checked.push({ ...result, verified: false })
     writeState(cwd, state)
     return result
@@ -328,7 +623,12 @@ const cmdCheck = async ({ cwd, candidateFile }) => {
   try {
     grade = validateIssueRecord(markdown).grade
   } catch (error) {
-    const result = { ...base, disposition: "ineligible", reason: error.message }
+    const result = {
+      ...base,
+      disposition: "ineligible",
+      reason: error.message,
+      reproduction: reproduction.proof,
+    }
     state.checked.push({ ...result, verified: false })
     writeState(cwd, state)
     return result
@@ -338,8 +638,7 @@ const cmdCheck = async ({ cwd, candidateFile }) => {
     ...base,
     disposition: "filed",
     grade,
-    reproduction_status: reproduction.status,
-    reproduction_output: reproduction.output,
+    reproduction: reproduction.proof,
     needs_adjudication: related.map((entry) => entry.fingerprint),
   }
   state.checked.push({ ...result, verified: true })
@@ -349,6 +648,9 @@ const cmdCheck = async ({ cwd, candidateFile }) => {
 
 const cmdFile = async ({ cwd, candidateFile, dryRun }) => {
   const state = requireState(cwd)
+  if (git(["rev-parse", "HEAD"], cwd) !== state.commit_audited) {
+    throw new AuditFailure("HEAD changed after check; this run can no longer file candidates")
+  }
   const markdown = fs.readFileSync(candidateFile, "utf8")
   const candidate = parseCandidate(markdown)
   const print = await fingerprint({
@@ -360,7 +662,11 @@ const cmdFile = async ({ cwd, candidateFile, dryRun }) => {
   // §10.3: refuse anything that did not pass `check` within THIS run, decided
   // from state this tool wrote. An agent that skipped verification is
   // indistinguishable from one that did, unless the gate reads its own record.
-  const checked = state.checked.find((entry) => entry.fingerprint === print && entry.verified)
+  const candidateSha256 = sha256(markdown)
+  const checked = state.checked.find(
+    (entry) =>
+      entry.fingerprint === print && entry.candidate_sha256 === candidateSha256 && entry.verified,
+  )
   if (!checked) {
     throw new AuditFailure(
       `candidate ${print.slice(0, 12)} has not passed check in run ${state.run_id}; run check first`,
@@ -412,13 +718,24 @@ const cmdDrop = async ({ cwd, candidateFile, disposition, reason }) => {
   return { dropped: print, disposition, reason }
 }
 
-const cmdFinish = ({ cwd, dryRun }) => {
+const cmdFinish = ({ cwd, reportFile, dryRun }) => {
   const state = requireState(cwd)
+  if (git(["rev-parse", "HEAD"], cwd) !== state.commit_audited) {
+    throw new AuditFailure("HEAD changed after check; this run can no longer finish")
+  }
+  if (!reportFile) throw new AuditFailure("finish requires --report <markdown-file>")
+  const inspection = validateRunReport({
+    markdown: fs.readFileSync(reportFile, "utf8"),
+    state,
+    cwd,
+  })
 
   // A verified candidate must be resolved before the run closes: filed, or
   // dropped with a reason. Inventing a disposition here would put an unexamined
   // conclusion in the ledger, and §8.3 keys re-eligibility on that conclusion.
-  const unresolved = state.checked.filter((entry) => entry.verified && !entry.issue && !entry.dropped)
+  const unresolved = state.checked.filter(
+    (entry) => entry.verified && !entry.issue && !entry.dropped,
+  )
   if (unresolved.length > 0) {
     throw new AuditFailure(
       `${unresolved.length} verified candidate(s) neither filed nor dropped: ` +
@@ -436,9 +753,15 @@ const cmdFinish = ({ cwd, dryRun }) => {
       path: entry.path,
       consequence_category: entry.consequence_category,
       normalized_claim: entry.normalized_claim,
-      disposition: entry.issue ? "filed" : entry.dropped?.disposition ?? entry.disposition,
+      candidate_sha256: entry.candidate_sha256,
+      disposition: entry.issue ? "filed" : (entry.dropped?.disposition ?? entry.disposition),
       ...(entry.issue ? { issue: entry.issue } : {}),
-      ...(entry.dropped ? { reason: entry.dropped.reason } : entry.reason ? { reason: entry.reason } : {}),
+      ...(entry.reproduction ? { reproduction: entry.reproduction } : {}),
+      ...(entry.dropped
+        ? { reason: entry.dropped.reason }
+        : entry.reason
+          ? { reason: entry.reason }
+          : {}),
     }),
   )
 
@@ -456,6 +779,7 @@ const cmdFinish = ({ cwd, dryRun }) => {
     candidates: findingEntries.length,
     filed: dispositions.filed ?? 0,
     dispositions,
+    inspection,
   })
 
   const { pushed } = appendLedger({ cwd, runEntry, findingEntries, dryRun })
@@ -507,7 +831,7 @@ const runCli = async () => {
     return
   }
   if (command === "finish") {
-    emit(cmdFinish({ cwd, dryRun }))
+    emit(cmdFinish({ cwd, reportFile: option(args, "--report"), dryRun }))
     return
   }
   if (command === "status") {
@@ -515,7 +839,9 @@ const runCli = async () => {
     return
   }
 
-  throw new AuditFailure("usage: audit-run.mjs <start|check|file|drop|finish|status> [--topic <id>] [--seed <n>] [--dry-run]")
+  throw new AuditFailure(
+    "usage: audit-run.mjs <start|check|file|drop|finish|status> [--topic <id>] [--seed <n>] [--report <file>] [--dry-run]",
+  )
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)

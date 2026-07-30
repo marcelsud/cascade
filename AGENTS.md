@@ -211,7 +211,7 @@ node .github/grading/audit-run.mjs start --topic <id>   # on-demand run of a nam
 node .github/grading/audit-run.mjs check c.md     # dedup, verify reproduction, grade
 node .github/grading/audit-run.mjs file  c.md     # create the issue   (--dry-run to rehearse)
 node .github/grading/audit-run.mjs drop  c.md --disposition duplicate --reason "..."
-node .github/grading/audit-run.mjs finish         # append the ledger, close the run
+node .github/grading/audit-run.mjs finish --report report.md # append the ledger, close the run
 node .github/grading/audit-run.mjs status         # is a run open?
 ```
 
@@ -228,18 +228,28 @@ audit_candidate:
   consequence_category: reliability
   normalized_claim: request bodies buffered without a byte limit
   reproduction:
-    command: ["npx", "vitest", "run", "tests/unit/inputs/http-input.test.ts"]
+    runner: vitest
+    test_files: [tests/unit/inputs/http-input.test.ts]
+    test_name: rejects request bodies over the configured limit
+    failure_contains: expected status 413
 ```
 
-**The reproduction command must FAIL at the audited commit.** The tool runs it
-itself and does not read your account of having run it. A command that succeeds
-demonstrates working software, so the candidate is recorded `unproven` and
-cannot be filed. The eventual fix is what turns it green.
+The tool ignores agent-selected shell commands. It creates a disposable
+worktree at the audited commit, installs its toolchain from `bun.lock` with
+scripts disabled, copies only the declared test files, and invokes Vitest
+itself. A structured Vitest result must contain the named failing assertion and
+declared failure text; a generic nonzero exit or printed text does not count.
+The proof stores the tests, hashes, assertion output, runner/lockfile identity,
+and replay command.
 
 `file` refuses any candidate that did not pass `check` in the current run, and
 decides that from the tool's own state rather than anything you assert. Resolve
 every verified candidate — `file` it or `drop` it with a reason — or `finish`
-refuses to close the run.
+refuses to close the run. `finish` also requires a structured report containing
+the topic contracts, inspected paths, and behavior cells; the report is
+validated to existing lines at the audited commit and its hash is stored in the
+run ledger. `file` binds approval to that exact candidate body and both `file`
+and `finish` reject a changed `HEAD`.
 
 For selection alone, without opening a run:
 
@@ -264,10 +274,29 @@ Three rules the loop depends on:
 
 - A run that finds nothing is a **successful** run. Treating an empty result as
   failure is what creates pressure to fabricate findings.
-- A candidate is **not filed without a reproduction** that distinguishes the
-  defect from correct behavior. A reasoned argument is not a reproduction.
+- A candidate is **not filed without a reproduction** whose named Vitest
+  assertion fails with the declared output at the audited commit. A reasoned
+  argument or arbitrary nonzero command is not a reproduction.
+- A completed run carries hashed inspection evidence. Starting from a dirty
+  tracked worktree or finishing from prose alone fails closed.
 - An agent that produces no conforming artifact is a **failed run**, never a dry
   run. Recording it as dry marks the topic audited and opens a coverage hole.
+
+### Agent calibration
+
+Audit yield is not confidence. A model/prompt/toolchain/topic tuple earns
+authority only from private, controller-signed labeled results:
+
+```bash
+node .github/grading/calibration.mjs evaluate /private/results.jsonl \
+  --key-file /private/controller.key --require-qualified
+```
+
+The signing key and labeled cases stay outside the repository and outside the
+agent's sandbox. The command reports precision, sensitivity, specificity,
+abstention rate, and one-sided 95% Wilson lower bounds. It exits nonzero until
+the thresholds in `.github/grading/config.yml` are met. The result describes
+only the fixed benchmark; it is not a generalized code-quality claim.
 
 ### GitHub Issue Delivery (five-step workflow)
 
