@@ -222,5 +222,12 @@ describe("Dedupe Key Extraction", () => {
       const msg = createMessage({ nested: { when: new Date(0) } });
       expect(extractKey("nested", msg)).toBeUndefined();
     });
+
+    it("returns undefined for array hosts with custom toJSON", () => {
+      const tags: unknown[] = ["kept"];
+      (tags as { toJSON?: () => string }).toJSON = () => "x";
+      const msg = createMessage({ tags });
+      expect(extractKey("tags", msg)).toBeUndefined();
+    });
   });
 });

@@ -131,6 +131,11 @@ const isJsonSafeKeyValue = (value: unknown, seen: WeakSet<object>): boolean => {
   if (seen.has(value)) {
     return false;
   }
+  // JSON.stringify invokes toJSON before visiting children — reject any host
+  // (including arrays) that customizes serialization.
+  if ("toJSON" in value && typeof value.toJSON === "function") {
+    return false;
+  }
   if (Array.isArray(value)) {
     seen.add(value);
     for (const item of value) {
@@ -141,9 +146,6 @@ const isJsonSafeKeyValue = (value: unknown, seen: WeakSet<object>): boolean => {
     return true;
   }
   if (!isPlainObject(value)) {
-    return false;
-  }
-  if ("toJSON" in value && typeof value.toJSON === "function") {
     return false;
   }
   seen.add(value);
