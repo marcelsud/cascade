@@ -5,9 +5,6 @@ on:
     branches: [main]
   pull_request:
 
-permissions:
-  contents: read
-
 jobs:
   ratchets:
     runs-on: ubuntu-latest
@@ -40,16 +37,9 @@ jobs:
       - name: RT-6 duplicate-rule signal (report-only)
         run: node .github/grading/checks.mjs duplicates --base "$BASE_SHA" --config .github/grading/config.yml
         continue-on-error: true
-      - name: Generate coverage
+      - name: RT-4 coverage floor (report-only)
         run: |
           set -o pipefail
           npm run test:coverage 2>&1 | tee /tmp/cascade-coverage.txt
-      - name: RT-4 coverage floor (report-only)
-        run: node .github/grading/checks.mjs coverage --report /tmp/cascade-coverage.txt --config .github/grading/config.yml
+          node .github/grading/checks.mjs coverage --report /tmp/cascade-coverage.txt --config .github/grading/config.yml
         continue-on-error: true
-      - name: SonarQube Community Build analysis
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.SONAR_HOST_URL != ''
-        uses: SonarSource/sonarqube-scan-action@v7
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}

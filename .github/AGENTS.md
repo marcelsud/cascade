@@ -27,15 +27,13 @@
 - Blocking ratchets fail closed; report-only complexity, duplication, and coverage checks remain visible without blocking.
 - CI installs from the frozen Bun lockfile and runs unused-code, grading-tool, type, build, integrity, and unit checks.
 - Test-integrity changes preserve detection of focused, skipped, ignored, or collection-reducing tests.
-- Community Build analysis runs only after LCOV generation on pushes to `main`; the free build does not analyze pull-request branches.
-- The scan activates when `SONAR_HOST_URL` is configured as a repository or organization variable and reads `SONAR_TOKEN` from Actions secrets. The server must be reachable from the runner; credentials never enter the repository.
-- SonarQube quality-gate status is initially dashboard-only: analysis uploads do not wait for or fail CI on the gate result.
+- SonarQube Community Build analysis is local-only: generate `coverage/lcov.info`, then run `sonar-scanner` from the repository root against a locally configured instance.
 
 ## Work Guidance
 
 - Update executable checks and their Node test coverage together.
 - Keep workflow commands synchronized with package scripts and grading configuration.
-- Keep `sonar-project.properties`, Vitest coverage scopes, and the main-only scan step synchronized.
+- Keep `sonar-project.properties` and Vitest coverage scopes synchronized.
 
 ## Verification
 
