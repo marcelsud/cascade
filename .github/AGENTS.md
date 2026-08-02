@@ -27,11 +27,15 @@
 - Blocking ratchets fail closed; report-only complexity, duplication, and coverage checks remain visible without blocking.
 - CI installs from the frozen Bun lockfile and runs unused-code, grading-tool, type, build, integrity, and unit checks.
 - Test-integrity changes preserve detection of focused, skipped, ignored, or collection-reducing tests.
+- Community Build analysis runs only after LCOV generation on pushes to `main`; the free build does not analyze pull-request branches.
+- The scan activates when `SONAR_HOST_URL` is configured as a repository or organization variable and reads `SONAR_TOKEN` from Actions secrets. The server must be reachable from the runner; credentials never enter the repository.
+- SonarQube quality-gate status is initially dashboard-only: analysis uploads do not wait for or fail CI on the gate result.
 
 ## Work Guidance
 
 - Update executable checks and their Node test coverage together.
 - Keep workflow commands synchronized with package scripts and grading configuration.
+- Keep `sonar-project.properties`, Vitest coverage scopes, and the main-only scan step synchronized.
 
 ## Verification
 
@@ -42,6 +46,8 @@
 - Run the affected `node .github/grading/checks.mjs <command>` invocation.
 - `node .github/grading/audit.mjs coverage` to inspect topic staleness and churn; `select [--seed <n>]` to pick or replay a run's topic.
 - Review the CI workflow for least privilege and deterministic inputs.
+- `npm run test:coverage` must create `coverage/lcov.info`.
+- Run `sonar-scanner` from the repository root against a configured Community Build instance.
 
 ## Child DOX Index
 
