@@ -246,12 +246,9 @@ export const createSqsOutput = (
           if (messageCount > 0) {
             yield* emitOutputMetrics(metrics.getOutputMetrics());
           }
-          yield* Effect.tryPromise({
-            try: async () => {
-              await client.destroy();
-            },
-            catch: () => undefined,
-          }).pipe(Effect.catchAll(() => Effect.void));
+          yield* Effect.sync(() => {
+            client.destroy();
+          });
         }),
     };
   }
@@ -481,12 +478,9 @@ export const createSqsOutput = (
 
   const cleanup = Effect.gen(function* () {
     yield* emitOutputMetrics(metrics.getOutputMetrics());
-    yield* Effect.tryPromise({
-      try: async () => {
-        await client.destroy();
-      },
-      catch: () => undefined,
-    }).pipe(Effect.catchAll(() => Effect.void));
+    yield* Effect.sync(() => {
+      client.destroy();
+    });
   });
 
   return {

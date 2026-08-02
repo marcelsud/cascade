@@ -499,7 +499,9 @@ describe("RedisStreamsInput", () => {
       expect(Option.isSome(message)).toBe(true);
 
       const consumerName = mockClient.xreadgroup.mock.calls[0]?.[2];
-      expect(consumerName).toMatch(/^consumer-[a-z0-9]+$/);
+      expect(consumerName).toMatch(
+        /^consumer-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      );
       expect(mockClient.xreadgroup).toHaveBeenCalledWith(
         "GROUP",
         groupName,
