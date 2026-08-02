@@ -25,10 +25,10 @@ export const MAX_ADDITIONAL_FATAL_SAMPLES = 8;
 /**
  * Sentinel for "no fatal cause recorded yet". Distinct from `undefined`, which
  * is a valid Effect failure value and must be retainable as a real diagnostic.
+ * Slots that use this sentinel are typed `unknown` and compared with
+ * `=== NO_FATAL_CAUSE`.
  */
 export const NO_FATAL_CAUSE: unique symbol = Symbol("cascade.noFatalCause");
-/** Slot holding either {@link NO_FATAL_CAUSE} or a recorded fatal diagnostic. */
-export type FatalCauseSlot = unknown;
 
 export interface ErrorCollector {
   retained: unknown[];
@@ -40,7 +40,7 @@ export interface ErrorCollector {
    * First distinct fatal observed this run (fixed slot). May equal
    * {@link NO_FATAL_CAUSE} when none has been seen.
    */
-  firstFatal: FatalCauseSlot;
+  firstFatal: unknown;
   /**
    * Additional distinct fatal samples beyond first/current, capped.
    * Does not include the first fatal or the live current-cause slot held by

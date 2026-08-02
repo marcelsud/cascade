@@ -207,31 +207,29 @@ output:
   });
 
   describe("content format (default)", () => {
-    it("writes string content raw, not JSON-encoded", async () => {
+    it.each([
+      {
+        name: "writes string content raw, not JSON-encoded",
+        content: "hello",
+        expected: ["hello\n"],
+      },
+      {
+        name: "writes object content as JSON",
+        content: { id: 1, ok: true },
+        expected: [JSON.stringify({ id: 1, ok: true }) + "\n"],
+      },
+      {
+        name: "defaults to content format when format is omitted",
+        content: "plain",
+        expected: ["plain\n"],
+      },
+    ] as const)("$name", async ({ content, expected }) => {
       const { stream, chunks } = createMockStream();
       const output = createStdoutOutput({ stream });
 
-      await Effect.runPromise(output.send(createMessage("hello")));
+      await Effect.runPromise(output.send(createMessage(content)));
 
-      expect(chunks).toEqual(["hello\n"]);
-    });
-
-    it("writes object content as JSON", async () => {
-      const { stream, chunks } = createMockStream();
-      const output = createStdoutOutput({ stream });
-
-      await Effect.runPromise(output.send(createMessage({ id: 1, ok: true })));
-
-      expect(chunks).toEqual([JSON.stringify({ id: 1, ok: true }) + "\n"]);
-    });
-
-    it("defaults to content format when format is omitted", async () => {
-      const { stream, chunks } = createMockStream();
-      const output = createStdoutOutput({ stream });
-
-      await Effect.runPromise(output.send(createMessage("plain")));
-
-      expect(chunks).toEqual(["plain\n"]);
+      expect(chunks).toEqual([...expected]);
     });
 
     it("preserves raw multiline strings exactly, adding only the trailing delimiter", async () => {

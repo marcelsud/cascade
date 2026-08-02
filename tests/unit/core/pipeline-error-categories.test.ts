@@ -726,7 +726,7 @@ describe("pipeline error categories", () => {
       const stillPinned = weakDropped.filter(
         (ref) => ref.deref() !== undefined,
       );
-      expect(stillPinned.length).toBe(0);
+      expect(stillPinned).toHaveLength(0);
     }
   });
 
@@ -999,8 +999,7 @@ describe("pipeline error categories", () => {
     expect(
       closeResult.errors?.some(
         (error) =>
-          error instanceof CategorizedTestError &&
-          error.message === "poison",
+          error instanceof CategorizedTestError && error.message === "poison",
       ),
     ).toBe(true);
     expect(closeResult.errors?.some((error) => error === undefined)).toBe(true);
@@ -1047,7 +1046,7 @@ describe("pipeline error categories", () => {
     expect(errors[0]).toBe(closeError);
     // Retained historical samples are present (not discarded by failedResult).
     const historical = errors.filter((error) => error !== closeError);
-    expect(historical.length).toBe(MAX_RETAINED_HISTORICAL_ERRORS);
+    expect(historical).toHaveLength(MAX_RETAINED_HISTORICAL_ERRORS);
     expect(
       historical.every(
         (error) =>
@@ -1055,7 +1054,7 @@ describe("pipeline error categories", () => {
       ),
     ).toBe(true);
     // Total = primary + retained (close not already in retained).
-    expect(errors.length).toBe(1 + MAX_RETAINED_HISTORICAL_ERRORS);
+    expect(errors).toHaveLength(1 + MAX_RETAINED_HISTORICAL_ERRORS);
   });
 
   it("does not count a current overflow fatal as omitted", () => {

@@ -28,6 +28,7 @@
 - CI installs from the frozen Bun lockfile and runs unused-code, grading-tool, type, build, integrity, and unit checks.
 - Test-integrity changes preserve detection of focused, skipped, ignored, or collection-reducing tests.
 - SonarQube Community Build analysis is local-only: generate `coverage/lcov.info`, then run `sonar-scanner` from the repository root against a locally configured instance.
+- `typescript:S2004` (nested functions) is ignored project-wide in `sonar-project.properties`. Effect `gen`/stream/finalizer nesting is idiomatic here; do not “fix” nesting solely to silence Sonar, and do not remove the ignore without a deliberate readability refactor.
 
 ## Work Guidance
 

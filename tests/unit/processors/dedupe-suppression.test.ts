@@ -223,7 +223,7 @@ describe("Dedupe Suppression, First-Seen Pass-Through, and Expiry", () => {
       expect(r._tag).toBe("Right");
       if (r._tag === "Right") {
         expect(Array.isArray(r.right)).toBe(true);
-        expect((r.right as Message[]).length).toBe(0);
+        expect(r.right as Message[]).toHaveLength(0);
       }
     });
   });
@@ -372,8 +372,8 @@ describe("Dedupe Suppression, First-Seen Pass-Through, and Expiry", () => {
       const suppressed = results.filter(
         (r) => Array.isArray(r) && (r as Message[]).length === 0,
       );
-      expect(passed.length).toBe(4);
-      expect(suppressed.length).toBe(3);
+      expect(passed).toHaveLength(4);
+      expect(suppressed).toHaveLength(3);
 
       const metrics = await Effect.runPromise(processor.getMetrics());
       expect(metrics.dedupeMisses).toBe(4);

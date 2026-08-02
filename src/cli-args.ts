@@ -1,7 +1,5 @@
-type CliCommand = string;
-
 export interface ParsedCliArgs {
-  readonly command: CliCommand | undefined;
+  readonly command: string | undefined;
   readonly configPath: string | undefined;
   readonly debug: boolean;
   readonly registryPath: string | undefined;
