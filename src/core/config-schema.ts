@@ -19,7 +19,7 @@ const validateExactlyOneComponent = (
   const configuredComponents = Object.entries(config)
     .filter(([, value]) => value !== undefined)
     .map(([key]) => key)
-    .sort();
+    .sort((a, b) => a.localeCompare(b));
 
   if (configuredComponents.length === 1) return true;
 
@@ -56,7 +56,6 @@ const redisYamlConnectionFields = {
   max_retries_per_request: S.optional(S.Number),
   enable_offline_queue: S.optional(S.Boolean),
 } as const;
-
 
 /** Optional password/db after resource-specific fields. */
 const redisYamlAuthFields = {

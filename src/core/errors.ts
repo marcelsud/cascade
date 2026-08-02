@@ -46,14 +46,12 @@ export abstract class ComponentError extends Error {
    * Get appropriate log level for this error
    */
   get logLevel(): "debug" | "info" | "error" {
-    switch (this.category) {
-      case "intermittent":
-        return "error"; // Network errors are serious
-      case "logical":
-        return "debug"; // Bad data is expected, debug level
-      case "fatal":
-        return "error"; // Fatal errors are critical
-    }
+    const levels = {
+      intermittent: "error", // Network errors are serious
+      logical: "debug", // Bad data is expected, debug level
+      fatal: "error", // Fatal errors are critical
+    } as const satisfies Record<ErrorCategory, "debug" | "info" | "error">;
+    return levels[this.category];
   }
 }
 

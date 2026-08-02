@@ -1,6 +1,7 @@
 /**
  * Redis Streams Input - Consumes messages from Redis Streams
  */
+import { randomUUID } from "node:crypto";
 import { Effect, Stream, Ref } from "effect";
 import * as Schema from "effect/Schema";
 import type { Input, Message } from "../core/types.js";
@@ -310,8 +311,7 @@ export const createRedisStreamsInput = (
    * Consumer Group XREADGROUP mode
    */
   const consumerGroup = config.consumerGroup!;
-  const consumerName =
-    config.consumerName || "consumer-" + Math.random().toString(36).slice(2);
+  const consumerName = config.consumerName || `consumer-${randomUUID()}`;
   const metrics = new MetricsAccumulator("redis-streams-input");
   let messageCount = 0;
 
@@ -328,9 +328,21 @@ export const createRedisStreamsInput = (
           "MKSTREAM",
         );
         return true;
-      } catch (error: any) {
-        // Group already exists - that's okay
-        if (error.message && error.message.includes("BUSYGROUP")) {
+      } catch (error: unknown) {
+        // Group already exists - that's okay. ioredis may surface either an
+        // Error or a plain object with a message field.
+        let message: string | undefined;
+        if (error instanceof Error) {
+          message = error.message;
+        } else if (
+          typeof error === "object" &&
+          error !== null &&
+          "message" in error &&
+          typeof error.message === "string"
+        ) {
+          message = error.message;
+        }
+        if (message?.includes("BUSYGROUP")) {
           return true;
         }
         throw error;

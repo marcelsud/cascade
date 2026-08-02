@@ -184,6 +184,89 @@ export const createFileInput = (
     }
   };
 
+  const resetReadState = (): void => {
+    currentPosition = 0;
+    bufferedText = "";
+    decoder = new StringDecoder(encoding);
+  };
+
+  /**
+   * Drain bytes up to snapshotEof on one open handle. Returns lines that must
+   * be offered only after the handle is closed (final chunk at EOF), so a
+   * blocked overflow:block offer cannot pin the descriptor.
+   */
+  const drainHandleToSnapshot = async (
+    handle: fsp.FileHandle,
+    snapshotEof: number,
+  ): Promise<readonly string[] | null> => {
+    let pending: readonly string[] | null = null;
+
+    while (!closed && currentPosition < snapshotEof) {
+      // Re-stat the same descriptor before every chunk read that follows an
+      // await (beforeRead above, or emitLineMessages below). Never extend
+      // snapshotEof. If the file shrank, stop before decoding replacement
+      // bytes from the old offset — the next poll restarts at byte 0.
+      const liveSize = (await handle.stat()).size;
+      if (liveSize < snapshotEof) {
+        resetReadState();
+        return null;
+      }
+
+      const chunk = await readRange(
+        handle,
+        currentPosition,
+        Math.min(snapshotEof - currentPosition, MAX_READ_CHUNK_BYTES),
+      );
+      if (chunk.length === 0) {
+        break;
+      }
+
+      currentPosition += chunk.length;
+      const [lines, remainder] = splitCompleteLines(
+        bufferedText + decoder.write(chunk),
+      );
+      bufferedText = remainder;
+
+      if (currentPosition >= snapshotEof) {
+        // Close before offering the final chunk so a blocked overflow:block
+        // offer does not pin the descriptor.
+        pending = lines;
+        break;
+      }
+
+      if (lines.length > 0) {
+        await emitLineMessages(lines);
+      }
+    }
+
+    return pending;
+  };
+
+  const handlePollError = async (error: unknown): Promise<boolean> => {
+    if (closed) {
+      return false;
+    }
+
+    metrics.recordError();
+    await Effect.runPromise(
+      Effect.logError(
+        `File input error for ${config.path}: ${error instanceof Error ? error.message : String(error)}`,
+      ),
+    ).catch(() => undefined);
+
+    if (!follow) {
+      terminalError = new FileInputError(
+        `File input failed to read ${config.path}: ${error instanceof Error ? error.message : String(error)}`,
+        "fatal",
+        error,
+      );
+      await finishOneShot();
+      return false;
+    }
+
+    return true;
+  };
+
   const pollFile = async (): Promise<boolean> => {
     try {
       // Open and stat once per poll. Snapshot that descriptor's EOF and drain
@@ -197,9 +280,7 @@ export const createFileInput = (
 
         if (nextIdentity !== currentIdentity || stats.size < currentPosition) {
           currentIdentity = nextIdentity;
-          currentPosition = 0;
-          bufferedText = "";
-          decoder = new StringDecoder(encoding);
+          resetReadState();
         }
 
         // Immutable ceiling for this poll. Growth is observed on the next
@@ -208,49 +289,7 @@ export const createFileInput = (
 
         if (snapshotEof > currentPosition) {
           await dependencies.beforeRead?.();
-
-          while (!closed && currentPosition < snapshotEof) {
-            // Re-stat the same descriptor before every chunk read that follows
-            // an await (beforeRead above, or emitLineMessages below). Never
-            // extend snapshotEof. If the file shrank, stop before decoding
-            // replacement bytes from the old offset — the next poll restarts
-            // at byte 0.
-            const liveSize = (await handle.stat()).size;
-            if (liveSize < snapshotEof) {
-              currentPosition = 0;
-              bufferedText = "";
-              decoder = new StringDecoder(encoding);
-              pending = null;
-              break;
-            }
-
-            const chunk = await readRange(
-              handle,
-              currentPosition,
-              Math.min(snapshotEof - currentPosition, MAX_READ_CHUNK_BYTES),
-            );
-            if (chunk.length === 0) {
-              break;
-            }
-
-            currentPosition += chunk.length;
-            const [lines, remainder] = splitCompleteLines(
-              bufferedText + decoder.write(chunk),
-            );
-            bufferedText = remainder;
-
-            const atSnapshotEof = currentPosition >= snapshotEof;
-            if (atSnapshotEof) {
-              // Close before offering the final chunk so a blocked
-              // overflow:block offer does not pin the descriptor.
-              pending = lines;
-              break;
-            }
-
-            if (lines.length > 0) {
-              await emitLineMessages(lines);
-            }
-          }
+          pending = await drainHandleToSnapshot(handle, snapshotEof);
         }
       } finally {
         await handle.close();
@@ -272,28 +311,7 @@ export const createFileInput = (
 
       return true;
     } catch (error) {
-      if (closed) {
-        return false;
-      }
-
-      metrics.recordError();
-      await Effect.runPromise(
-        Effect.logError(
-          `File input error for ${config.path}: ${error instanceof Error ? error.message : String(error)}`,
-        ),
-      ).catch(() => undefined);
-
-      if (!follow) {
-        terminalError = new FileInputError(
-          `File input failed to read ${config.path}: ${error instanceof Error ? error.message : String(error)}`,
-          "fatal",
-          error,
-        );
-        await finishOneShot();
-        return false;
-      }
-
-      return true;
+      return handlePollError(error);
     }
   };
 
