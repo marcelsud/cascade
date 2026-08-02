@@ -1,5 +1,5 @@
-import { configDefaults, defineConfig } from "vitest/config"
-import path from "node:path"
+import { configDefaults, defineConfig } from "vitest/config";
+import path from "node:path";
 
 export default defineConfig({
   test: {
@@ -9,7 +9,7 @@ export default defineConfig({
     exclude: [...configDefaults.exclude, "tests/e2e/**"],
     coverage: {
       provider: "v8",
-      reporter: ["text", "json", "html"],
+      reporter: ["text", "json", "html", "lcov"],
       include: ["src/**/*.ts"],
       exclude: ["src/**/*.test.ts", "src/cli.ts"],
     },
@@ -21,4 +21,4 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
-})
+});

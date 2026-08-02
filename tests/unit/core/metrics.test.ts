@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { Effect } from "effect";
+import { Effect, Logger } from "effect";
 import {
   MetricsAccumulator,
   emitInputMetrics,
@@ -8,6 +8,20 @@ import {
   type InputMetrics,
   type OutputMetrics,
 } from "../../../src/core/metrics.js";
+
+const captureLogs = async (
+  effect: Effect.Effect<void, never, never>,
+): Promise<readonly unknown[]> => {
+  const messages: unknown[] = [];
+  const logger = Logger.make<unknown, void>(({ message }) => {
+    messages.push(message);
+  });
+
+  await Effect.runPromise(
+    effect.pipe(Effect.provide(Logger.replace(Logger.defaultLogger, logger))),
+  );
+  return messages;
+};
 
 describe("Metrics Collection", () => {
   describe("MetricsAccumulator", () => {
@@ -174,8 +188,23 @@ describe("Metrics Collection", () => {
         totalDuration: 1000,
       };
 
-      // Should not throw
-      await Effect.runPromise(emitInputMetrics(metrics));
+      const messages = await captureLogs(emitInputMetrics(metrics));
+
+      expect(messages).toEqual([
+        [
+          "Component metrics",
+          {
+            component: "test-input",
+            type: "input",
+            messagesProcessed: 127,
+            messagesDropped: 4,
+            errorsEncountered: 3,
+            averageDuration: 145,
+            totalDuration: 1000,
+            timestamp: metrics.timestamp,
+          },
+        ],
+      ]);
     });
   });
 
@@ -191,8 +220,23 @@ describe("Metrics Collection", () => {
         totalDuration: 1250,
       };
 
-      // Should not throw
-      await Effect.runPromise(emitOutputMetrics(metrics));
+      const messages = await captureLogs(emitOutputMetrics(metrics));
+
+      expect(messages).toEqual([
+        [
+          "Component metrics",
+          {
+            component: "test-output",
+            type: "output",
+            messagesSent: 250,
+            batchesSent: 25,
+            sendErrors: 2,
+            averageDuration: 50,
+            totalDuration: 1250,
+            timestamp: metrics.timestamp,
+          },
+        ],
+      ]);
     });
   });
 
