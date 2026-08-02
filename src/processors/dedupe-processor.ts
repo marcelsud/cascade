@@ -107,11 +107,12 @@ const isPlainObject = (value: object): boolean => {
  * `toJSON` before the replacer, so nested Date/Map/custom hosts would
  * otherwise collapse into strings/objects and collide with distinct keys.
  */
-const isJsonSafeKeyValue = (value: unknown, seen: WeakSet<object>): boolean => {
-  if (value === null) {
-    return true;
-  }
-  if (typeof value === "string" || typeof value === "boolean") {
+const isJsonSafePrimitive = (value: unknown): boolean | undefined => {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
     return true;
   }
   if (typeof value === "number") {
@@ -125,7 +126,41 @@ const isJsonSafeKeyValue = (value: unknown, seen: WeakSet<object>): boolean => {
   ) {
     return false;
   }
-  if (typeof value !== "object") {
+  return undefined;
+};
+
+const walkJsonSafeArray = (
+  value: readonly unknown[],
+  seen: WeakSet<object>,
+): boolean => {
+  seen.add(value);
+  for (const item of value) {
+    if (!isJsonSafeKeyValue(item, seen)) {
+      return false;
+    }
+  }
+  return true;
+};
+
+const walkJsonSafePlainObject = (
+  value: object,
+  seen: WeakSet<object>,
+): boolean => {
+  seen.add(value);
+  for (const nested of Object.values(value as Record<string, unknown>)) {
+    if (!isJsonSafeKeyValue(nested, seen)) {
+      return false;
+    }
+  }
+  return true;
+};
+
+const isJsonSafeKeyValue = (value: unknown, seen: WeakSet<object>): boolean => {
+  const primitive = isJsonSafePrimitive(value);
+  if (primitive !== undefined) {
+    return primitive;
+  }
+  if (typeof value !== "object" || value === null) {
     return false;
   }
   if (seen.has(value)) {
@@ -137,24 +172,12 @@ const isJsonSafeKeyValue = (value: unknown, seen: WeakSet<object>): boolean => {
     return false;
   }
   if (Array.isArray(value)) {
-    seen.add(value);
-    for (const item of value) {
-      if (!isJsonSafeKeyValue(item, seen)) {
-        return false;
-      }
-    }
-    return true;
+    return walkJsonSafeArray(value, seen);
   }
   if (!isPlainObject(value)) {
     return false;
   }
-  seen.add(value);
-  for (const nested of Object.values(value as Record<string, unknown>)) {
-    if (!isJsonSafeKeyValue(nested, seen)) {
-      return false;
-    }
-  }
-  return true;
+  return walkJsonSafePlainObject(value, seen);
 };
 
 const stringifyKeyValue = (value: unknown): string | undefined => {

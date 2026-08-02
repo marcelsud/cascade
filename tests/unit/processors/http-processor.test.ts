@@ -435,6 +435,68 @@ describe("HttpProcessor", () => {
     });
   });
 
+  describe("Structured body templates with braces", () => {
+    const startEchoServer = async (): Promise<{
+      server: Server;
+      baseUrl: string;
+      lastBody: () => string;
+    }> => {
+      let lastBody = "";
+      const server = createServer((req, res) => {
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk) => chunks.push(chunk));
+        req.on("end", () => {
+          lastBody = Buffer.concat(chunks).toString("utf8");
+          res.statusCode = 200;
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ ok: true }));
+        });
+      });
+
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", () => resolve());
+      });
+
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Failed to bind local HTTP test server");
+      }
+
+      return {
+        server,
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        lastBody: () => lastBody,
+      };
+    };
+
+    it("evaluates JSONata object literals inside {{ }} body templates", async () => {
+      const { server, baseUrl, lastBody } = await startEchoServer();
+
+      try {
+        const processor = createHttpProcessor({
+          url: `${baseUrl}/echo`,
+          method: "POST",
+          body: '{{ {"userId": content.id, "processed": true} }}',
+          timeout: 5000,
+          maxRetries: 0,
+        });
+
+        await Effect.runPromise(
+          processor.process(createMessage({ id: "u-7" })),
+        );
+
+        expect(JSON.parse(lastBody())).toEqual({
+          userId: "u-7",
+          processed: true,
+        });
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    });
+  });
+
   describe("Documented template context", () => {
     const startCaptureServer = async (): Promise<{
       server: Server;
@@ -581,7 +643,9 @@ describe("HttpProcessor", () => {
         const requestUrl = new URL(captured!.url, baseUrl);
         expect(requestUrl.pathname).toBe("/orders/order-99");
         expect(requestUrl.searchParams.get("userId")).toBe("user-7");
-        expect(requestUrl.searchParams.get("source")).toBe("unit-template-test");
+        expect(requestUrl.searchParams.get("source")).toBe(
+          "unit-template-test",
+        );
         expect(requestUrl.searchParams.get("messageId")).toBe(msg.id);
         expect(requestUrl.searchParams.get("correlationId")).toBe(
           "corr-abc-123",

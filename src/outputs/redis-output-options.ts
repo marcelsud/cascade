@@ -58,7 +58,7 @@ export const interpolateMessageTemplate = (
   template: string,
   msg: Message,
 ): string => {
-  return template.replace(/\{\{([^}]+)\}\}/g, (_, path) => {
+  return template.replace(/\{\{([^{}]+)\}\}/g, (_, path) => {
     const parts = path.trim().split(".");
     // Optional chaining on unknown values matches the pre-extraction semantics.
     let value: unknown = msg;

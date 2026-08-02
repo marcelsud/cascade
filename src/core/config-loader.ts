@@ -42,7 +42,7 @@ export class ConfigValidationError {
   constructor(readonly message: string) {}
 }
 
-const ENV_VAR_EXPRESSION = /^([A-Za-z_][A-Za-z0-9_]*)(:-(.*))?$/;
+const ENV_VAR_EXPRESSION = /^([A-Za-z_]\w*)(:-(.*))?$/;
 
 const resolveEnvExpression = (expression: string): string => {
   if (expression.includes("${")) {

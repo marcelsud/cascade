@@ -343,10 +343,9 @@ const buildInputInternal = (
 /**
  * Build processor from configuration (Bento style)
  */
-const buildProcessor = (
+const buildSimpleProcessor = (
   config: ProcessorConfig,
-  registry?: ComponentRegistry,
-): Effect.Effect<Processor<any>, BuildError> => {
+): Effect.Effect<Processor<any>, BuildError> | undefined => {
   if (config.metadata) {
     return Effect.succeed(
       createMetadataProcessor({
@@ -414,6 +413,56 @@ const buildProcessor = (
     );
   }
 
+  if (config.dedupe) {
+    if (!config.dedupe.key) {
+      return Effect.fail(
+        new BuildError(
+          "Dedupe processor requires a non-empty 'key' field specifying the deduplication attribute (e.g. 'messageId' or 'metadata.correlationId')",
+        ),
+      );
+    }
+    return Effect.succeed(
+      createDedupeProcessor({
+        key: config.dedupe.key,
+        windowMs: config.dedupe.window_ms,
+        maxKeys: config.dedupe.max_keys,
+      }),
+    );
+  }
+
+  if (config.javascript) {
+    return Effect.succeed(
+      createJavaScriptProcessor({
+        code: config.javascript.code,
+        timeout_ms: config.javascript.timeout_ms,
+        memory_limit_bytes: config.javascript.memory_limit_bytes,
+      }),
+    );
+  }
+
+  const assertConfig = config.assert;
+  if (assertConfig) {
+    return Effect.try({
+      try: () => createAssertProcessor(assertConfig),
+      catch: (error) =>
+        new BuildError(
+          `Invalid assert processor configuration: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+    });
+  }
+
+  return undefined;
+};
+
+const buildProcessor = (
+  config: ProcessorConfig,
+  registry?: ComponentRegistry,
+): Effect.Effect<Processor<any>, BuildError> => {
+  const simple = buildSimpleProcessor(config);
+  if (simple) {
+    return simple;
+  }
+
   if (config.branch) {
     const branchConfig = config.branch;
     return Effect.gen(function* () {
@@ -449,45 +498,6 @@ const buildProcessor = (
       );
       return createSwitchProcessor({ cases });
     }) as Effect.Effect<Processor<any>, BuildError>;
-  }
-
-  if (config.dedupe) {
-    if (!config.dedupe.key) {
-      return Effect.fail(
-        new BuildError(
-          "Dedupe processor requires a non-empty 'key' field specifying the deduplication attribute (e.g. 'messageId' or 'metadata.correlationId')",
-        ),
-      );
-    }
-    return Effect.succeed(
-      createDedupeProcessor({
-        key: config.dedupe.key,
-        windowMs: config.dedupe.window_ms,
-        maxKeys: config.dedupe.max_keys,
-      }),
-    );
-  }
-
-  if (config.javascript) {
-    return Effect.succeed(
-      createJavaScriptProcessor({
-        code: config.javascript.code,
-        timeout_ms: config.javascript.timeout_ms,
-        memory_limit_bytes: config.javascript.memory_limit_bytes,
-      }),
-    );
-  }
-
-  // Testing utility: assert processor
-  const assertConfig = config.assert;
-  if (assertConfig) {
-    return Effect.try({
-      try: () => createAssertProcessor(assertConfig),
-      catch: (error) =>
-        new BuildError(
-          `Invalid assert processor configuration: ${error instanceof Error ? error.message : String(error)}`,
-        ),
-    });
   }
 
   const registeredProcessor = buildRegisteredComponent(

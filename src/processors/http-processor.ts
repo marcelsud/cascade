@@ -116,8 +116,10 @@ const buildMessageContext = (msg: Message): MessageContext => ({
 });
 
 /**
- * Evaluate JSONata template with message context
- * Templates use {{ }} syntax: "https://api.com/users/{{ content.userId }}"
+ * Evaluate JSONata template with message context.
+ * Templates use {{ }} syntax: "https://api.com/users/{{ content.userId }}".
+ * Expressions may contain `{`/`}` (object literals); only the next `}}`
+ * terminator ends a placeholder — scanned linearly, no regex backtracking.
  */
 const evaluateTemplate = (
   template: string,
@@ -127,12 +129,25 @@ const evaluateTemplate = (
   Effect.gen(function* () {
     const evaluatedTemplate = yield* Effect.tryPromise({
       try: async () => {
-        let result = template;
-        const regex = /\{\{(.+?)\}\}/g;
-        const matches = [...template.matchAll(regex)];
+        let result = "";
+        let cursor = 0;
 
-        for (const match of matches) {
-          const expr = match[1].trim();
+        while (cursor < template.length) {
+          const start = template.indexOf("{{", cursor);
+          if (start === -1) {
+            result += template.slice(cursor);
+            break;
+          }
+
+          result += template.slice(cursor, start);
+          const end = template.indexOf("}}", start + 2);
+          if (end === -1) {
+            // Unclosed placeholder — keep the remainder literally.
+            result += template.slice(start);
+            break;
+          }
+
+          const expr = template.slice(start + 2, end).trim();
           const expression = jsonata(expr);
           const value = await expression.evaluate(context, context);
           const rendered =
@@ -141,7 +156,8 @@ const evaluateTemplate = (
             typeof value === "object"
               ? JSON.stringify(value)
               : String(value);
-          result = result.replace(match[0], () => rendered);
+          result += rendered;
+          cursor = end + 2;
         }
 
         return result;

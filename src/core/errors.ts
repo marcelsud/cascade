@@ -75,6 +75,31 @@ export function createCategorizedError<T extends ComponentError>(
 /**
  * Detect error category from cause
  */
+const messageFromObjectCause = (cause: object): string => {
+  try {
+    if ("message" in cause && typeof cause.message === "string") {
+      return cause.message;
+    }
+  } catch {
+    // Throwing message getters must not mask category detection.
+  }
+  try {
+    const serialized = JSON.stringify(cause);
+    // JSON.stringify(undefined) / {toJSON:()=>undefined} yields undefined,
+    // which is not a string — fall back instead of throwing later.
+    if (typeof serialized === "string") {
+      return serialized;
+    }
+  } catch {
+    // fall through
+  }
+  try {
+    return Object.prototype.toString.call(cause);
+  } catch {
+    return "[unreadable]";
+  }
+};
+
 const messageFromCause = (cause: unknown): string => {
   try {
     if (cause instanceof Error) {
@@ -84,28 +109,7 @@ const messageFromCause = (cause: unknown): string => {
       return cause;
     }
     if (cause && typeof cause === "object") {
-      try {
-        if ("message" in cause && typeof cause.message === "string") {
-          return cause.message;
-        }
-      } catch {
-        // Throwing message getters must not mask category detection.
-      }
-      try {
-        const serialized = JSON.stringify(cause);
-        // JSON.stringify(undefined) / {toJSON:()=>undefined} yields undefined,
-        // which is not a string — fall back instead of throwing later.
-        if (typeof serialized === "string") {
-          return serialized;
-        }
-      } catch {
-        // fall through
-      }
-      try {
-        return Object.prototype.toString.call(cause);
-      } catch {
-        return "[unreadable]";
-      }
+      return messageFromObjectCause(cause);
     }
     return String(cause);
   } catch {

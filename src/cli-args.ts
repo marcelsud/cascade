@@ -1,4 +1,4 @@
-type CliCommand = "run" | "validate" | "test" | string;
+type CliCommand = string;
 
 export interface ParsedCliArgs {
   readonly command: CliCommand | undefined;
