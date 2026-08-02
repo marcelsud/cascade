@@ -102,30 +102,57 @@ const isPlainObject = (value: object): boolean => {
   return proto === Object.prototype || proto === null;
 };
 
-const assertJsonSafeKeyValue = (_key: string, value: unknown): unknown => {
+/**
+ * Walk the raw value graph before JSON.stringify. JSON.stringify runs
+ * `toJSON` before the replacer, so nested Date/Map/custom hosts would
+ * otherwise collapse into strings/objects and collide with distinct keys.
+ */
+const isJsonSafeKeyValue = (value: unknown, seen: WeakSet<object>): boolean => {
+  if (value === null) {
+    return true;
+  }
+  if (typeof value === "string" || typeof value === "boolean") {
+    return true;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
   if (
     value === undefined ||
     typeof value === "function" ||
-    typeof value === "symbol"
+    typeof value === "symbol" ||
+    typeof value === "bigint"
   ) {
-    throw new Error("unsupported key value");
+    return false;
   }
-  if (typeof value === "bigint") {
-    throw new Error("unsupported key value");
+  if (typeof value !== "object") {
+    return false;
   }
-  if (typeof value === "number" && !Number.isFinite(value)) {
-    throw new Error("unsupported key value");
+  if (seen.has(value)) {
+    return false;
   }
-  if (value !== null && typeof value === "object") {
-    if (Array.isArray(value)) {
-      return value;
+  if (Array.isArray(value)) {
+    seen.add(value);
+    for (const item of value) {
+      if (!isJsonSafeKeyValue(item, seen)) {
+        return false;
+      }
     }
-    if (!isPlainObject(value)) {
-      // Map/Set/Date/class instances collapse under JSON.stringify defaults.
-      throw new Error("unsupported key value");
+    return true;
+  }
+  if (!isPlainObject(value)) {
+    return false;
+  }
+  if ("toJSON" in value && typeof value.toJSON === "function") {
+    return false;
+  }
+  seen.add(value);
+  for (const nested of Object.values(value as Record<string, unknown>)) {
+    if (!isJsonSafeKeyValue(nested, seen)) {
+      return false;
     }
   }
-  return value;
+  return true;
 };
 
 const stringifyKeyValue = (value: unknown): string | undefined => {
@@ -139,13 +166,12 @@ const stringifyKeyValue = (value: unknown): string | undefined => {
     return String(value);
   }
   if (value !== null && typeof value === "object") {
-    // Only plain objects/arrays get stable JSON keys. Non-plain hosts and
-    // unsupported nested leaves fail extraction instead of colliding.
-    if (!Array.isArray(value) && !isPlainObject(value)) {
+    // Only plain objects/arrays without toJSON hosts get stable JSON keys.
+    if (!isJsonSafeKeyValue(value, new WeakSet())) {
       return undefined;
     }
     try {
-      const serialized = JSON.stringify(value, assertJsonSafeKeyValue);
+      const serialized = JSON.stringify(value);
       return typeof serialized === "string" ? serialized : undefined;
     } catch {
       return undefined;

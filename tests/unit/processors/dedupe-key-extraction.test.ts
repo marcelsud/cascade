@@ -217,5 +217,10 @@ describe("Dedupe Key Extraction", () => {
       const msg = createMessage({ tags: [undefined, "a"] as unknown[] });
       expect(extractKey("tags", msg)).toBeUndefined();
     });
+
+    it("returns undefined for nested Date values that would toJSON-collide", () => {
+      const msg = createMessage({ nested: { when: new Date(0) } });
+      expect(extractKey("nested", msg)).toBeUndefined();
+    });
   });
 });
