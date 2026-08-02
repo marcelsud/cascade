@@ -123,7 +123,9 @@ const reportPipelineResult = (result: {
   };
   readonly errors?: readonly unknown[];
   readonly errorsOmitted?: number;
-  readonly metrics?: Parameters<typeof printPipelineMetrics>[0]["metrics"];
+  readonly metrics?: NonNullable<
+    Parameters<typeof printPipelineMetrics>[0]["metrics"]
+  >;
 }) =>
   Effect.gen(function* () {
     if (result.success) {
@@ -298,11 +300,9 @@ const program = main.pipe(
 // Force process exit after the pipeline finishes. Component transports
 // (Redis, HTTP servers, SQS clients) can leave handles open that would
 // otherwise keep Node alive after a graceful drain summary is written.
-Effect.runPromise(program as Effect.Effect<void>).then(
-  () => {
-    process.exit(0);
-  },
-  () => {
-    process.exit(1);
-  },
-);
+try {
+  await Effect.runPromise(program as Effect.Effect<void>);
+  process.exit(0);
+} catch {
+  process.exit(1);
+}

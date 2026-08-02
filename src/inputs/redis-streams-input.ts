@@ -142,7 +142,7 @@ const convertRedisEntry = (
       (msg as any).correlationId = parsed.correlationId;
     }
     if (parsed.timestamp) {
-      (msg as any).timestamp = parseInt(parsed.timestamp);
+      (msg as any).timestamp = Number.parseInt(parsed.timestamp);
     }
 
     return msg;
@@ -330,18 +330,15 @@ export const createRedisStreamsInput = (
         return true;
       } catch (error: unknown) {
         // Group already exists - that's okay. ioredis may surface either an
-        // Error or a plain object with a message field.
-        let message: string | undefined;
-        if (error instanceof Error) {
-          message = error.message;
-        } else if (
+        // Error or a plain object with a message field; both expose string
+        // `.message`, so one narrow covers them.
+        const message =
           typeof error === "object" &&
           error !== null &&
           "message" in error &&
           typeof error.message === "string"
-        ) {
-          message = error.message;
-        }
+            ? error.message
+            : undefined;
         if (message?.includes("BUSYGROUP")) {
           return true;
         }

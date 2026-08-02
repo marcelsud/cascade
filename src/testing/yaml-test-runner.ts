@@ -47,6 +47,29 @@ export interface TestRunResult {
   readonly duration: number;
 }
 
+const formatObjectError = (error: object): string | undefined => {
+  let message: string | undefined;
+  let tag: string | undefined;
+  if ("message" in error && typeof error.message === "string") {
+    message = error.message;
+  }
+  if ("_tag" in error && typeof error._tag === "string") {
+    tag = error._tag;
+  }
+  if (message !== undefined) {
+    return tag !== undefined ? `${tag}: ${message}` : message;
+  }
+  return tag;
+};
+
+const stringifyUnknown = (error: unknown): string => {
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+};
+
 const formatUnknownError = (error: unknown): string => {
   if (error instanceof Error) {
     return error.message;
@@ -55,28 +78,9 @@ const formatUnknownError = (error: unknown): string => {
     return error;
   }
   if (error && typeof error === "object") {
-    const message =
-      "message" in error && typeof error.message === "string"
-        ? error.message
-        : undefined;
-    const tag =
-      "_tag" in error && typeof error._tag === "string"
-        ? error._tag
-        : undefined;
-
-    if (message !== undefined) {
-      return tag !== undefined ? `${tag}: ${message}` : message;
-    }
-    if (tag !== undefined) {
-      return tag;
-    }
+    return formatObjectError(error) ?? stringifyUnknown(error);
   }
-
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
+  return stringifyUnknown(error);
 };
 
 const getErrorType = (error: unknown): string | undefined => {
@@ -519,44 +523,45 @@ export const runYamlTests = (pattern: string) =>
 /**
  * Format test results for display
  */
-export const formatTestResults = (result: TestRunResult): string => {
-  const lines: string[] = [];
+const formatSingleTestLines = (test: TestResult): string[] => {
+  const status = test.passed ? "  ✓" : "  ✗";
+  const lines = [`${status} ${test.testName} (${test.duration}ms)`];
+  if (test.error) {
+    lines.push(`     Error: ${test.error}`);
+  }
+  if (test.assertionResults) {
+    for (const assertion of test.assertionResults) {
+      lines.push(`     ${assertion.message}`);
+    }
+  }
+  return lines;
+};
 
+const formatFileResultLines = (file: TestFileResult): string[] => {
+  const status = file.passed ? "✓" : "✗";
+  const lines = [`${status} ${file.fileName} (${file.duration}ms)`];
+  for (const test of file.tests) {
+    lines.push(...formatSingleTestLines(test));
+  }
   lines.push("");
-  lines.push("=".repeat(70));
-  lines.push("YAML Test Results");
-  lines.push("=".repeat(70));
-  lines.push("");
+  return lines;
+};
+
+export const formatTestResults = (result: TestRunResult): string => {
+  const divider = "=".repeat(70);
+  const lines: string[] = ["", divider, "YAML Test Results", divider, ""];
 
   for (const file of result.files) {
-    const fileStatus = file.passed ? "✓" : "✗";
-    lines.push(`${fileStatus} ${file.fileName} (${file.duration}ms)`);
-
-    for (const test of file.tests) {
-      const testStatus = test.passed ? "  ✓" : "  ✗";
-      lines.push(`${testStatus} ${test.testName} (${test.duration}ms)`);
-
-      if (test.error) {
-        lines.push(`     Error: ${test.error}`);
-      }
-
-      if (test.assertionResults) {
-        for (const assertion of test.assertionResults) {
-          lines.push(`     ${assertion.message}`);
-        }
-      }
-    }
-
-    lines.push("");
+    lines.push(...formatFileResultLines(file));
   }
 
-  lines.push("=".repeat(70));
   lines.push(
+    divider,
     `Tests: ${result.passedTests} passed, ${result.failedTests} failed, ${result.totalTests} total`,
+    `Time:  ${result.duration}ms`,
+    divider,
+    "",
   );
-  lines.push(`Time:  ${result.duration}ms`);
-  lines.push("=".repeat(70));
-  lines.push("");
 
   return lines.join("\n");
 };

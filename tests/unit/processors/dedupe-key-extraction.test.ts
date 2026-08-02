@@ -192,13 +192,42 @@ describe("Dedupe Key Extraction", () => {
     it("should handle payload field that is an object (stringify)", () => {
       const msg = createMessage({ nested: { a: 1 } });
       const result = extractKey("nested", msg);
-      expect(result).toBe("[object Object]");
+      expect(result).toBe('{"a":1}');
     });
 
     it("should handle payload field that is an array (stringify)", () => {
       const msg = createMessage({ tags: ["a", "b"] });
       const result = extractKey("tags", msg);
-      expect(result).toBe("a,b");
+      expect(result).toBe('["a","b"]');
+    });
+
+    it("returns undefined for non-serializable object keys", () => {
+      const circular: Record<string, unknown> = {};
+      circular.self = circular;
+      const msg = createMessage({ nested: circular });
+      expect(extractKey("nested", msg)).toBeUndefined();
+    });
+
+    it("returns undefined for Map keys that would collapse under JSON", () => {
+      const msg = createMessage({ nested: new Map([["a", 1]]) });
+      expect(extractKey("nested", msg)).toBeUndefined();
+    });
+
+    it("returns undefined for arrays containing undefined holes", () => {
+      const msg = createMessage({ tags: [undefined, "a"] as unknown[] });
+      expect(extractKey("tags", msg)).toBeUndefined();
+    });
+
+    it("returns undefined for nested Date values that would toJSON-collide", () => {
+      const msg = createMessage({ nested: { when: new Date(0) } });
+      expect(extractKey("nested", msg)).toBeUndefined();
+    });
+
+    it("returns undefined for array hosts with custom toJSON", () => {
+      const tags: unknown[] = ["kept"];
+      (tags as { toJSON?: () => string }).toJSON = () => "x";
+      const msg = createMessage({ tags });
+      expect(extractKey("tags", msg)).toBeUndefined();
     });
   });
 });

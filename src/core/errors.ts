@@ -75,10 +75,48 @@ export function createCategorizedError<T extends ComponentError>(
 /**
  * Detect error category from cause
  */
+const messageFromCause = (cause: unknown): string => {
+  try {
+    if (cause instanceof Error) {
+      return cause.message;
+    }
+    if (typeof cause === "string") {
+      return cause;
+    }
+    if (cause && typeof cause === "object") {
+      try {
+        if ("message" in cause && typeof cause.message === "string") {
+          return cause.message;
+        }
+      } catch {
+        // Throwing message getters must not mask category detection.
+      }
+      try {
+        const serialized = JSON.stringify(cause);
+        // JSON.stringify(undefined) / {toJSON:()=>undefined} yields undefined,
+        // which is not a string — fall back instead of throwing later.
+        if (typeof serialized === "string") {
+          return serialized;
+        }
+      } catch {
+        // fall through
+      }
+      try {
+        return Object.prototype.toString.call(cause);
+      } catch {
+        return "[unreadable]";
+      }
+    }
+    return String(cause);
+  } catch {
+    return "[unreadable]";
+  }
+};
+
 export function detectCategory(cause: unknown): ErrorCategory {
   if (!cause) return "intermittent";
 
-  const errorMessage = cause instanceof Error ? cause.message : String(cause);
+  const errorMessage = messageFromCause(cause);
   const lowerMessage = errorMessage.toLowerCase();
 
   // Network/connectivity errors (intermittent)

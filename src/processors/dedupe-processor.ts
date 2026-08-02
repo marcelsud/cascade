@@ -97,6 +97,91 @@ const resolveDotPath = (
  *
  * Returns the stringified key value, or undefined if the path resolves to undefined/null.
  */
+const isPlainObject = (value: object): boolean => {
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+};
+
+/**
+ * Walk the raw value graph before JSON.stringify. JSON.stringify runs
+ * `toJSON` before the replacer, so nested Date/Map/custom hosts would
+ * otherwise collapse into strings/objects and collide with distinct keys.
+ */
+const isJsonSafeKeyValue = (value: unknown, seen: WeakSet<object>): boolean => {
+  if (value === null) {
+    return true;
+  }
+  if (typeof value === "string" || typeof value === "boolean") {
+    return true;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+  if (
+    value === undefined ||
+    typeof value === "function" ||
+    typeof value === "symbol" ||
+    typeof value === "bigint"
+  ) {
+    return false;
+  }
+  if (typeof value !== "object") {
+    return false;
+  }
+  if (seen.has(value)) {
+    return false;
+  }
+  // JSON.stringify invokes toJSON before visiting children — reject any host
+  // (including arrays) that customizes serialization.
+  if ("toJSON" in value && typeof value.toJSON === "function") {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    seen.add(value);
+    for (const item of value) {
+      if (!isJsonSafeKeyValue(item, seen)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (!isPlainObject(value)) {
+    return false;
+  }
+  seen.add(value);
+  for (const nested of Object.values(value as Record<string, unknown>)) {
+    if (!isJsonSafeKeyValue(nested, seen)) {
+      return false;
+    }
+  }
+  return true;
+};
+
+const stringifyKeyValue = (value: unknown): string | undefined => {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? String(value) : undefined;
+  }
+  if (typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  if (value !== null && typeof value === "object") {
+    // Only plain objects/arrays without toJSON hosts get stable JSON keys.
+    if (!isJsonSafeKeyValue(value, new WeakSet())) {
+      return undefined;
+    }
+    try {
+      const serialized = JSON.stringify(value);
+      return typeof serialized === "string" ? serialized : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+};
+
 export const extractKey = (
   keyPath: string,
   msg: Message,
@@ -105,13 +190,17 @@ export const extractKey = (
     const metaPath = keyPath.slice("metadata.".length);
     if (metaPath.length === 0) return undefined;
     const value = resolveDotPath(msg.metadata, metaPath);
-    return value !== undefined && value !== null ? String(value) : undefined;
+    return value !== undefined && value !== null
+      ? stringifyKeyValue(value)
+      : undefined;
   }
 
   const content = msg.content;
   if (content && typeof content === "object" && !Array.isArray(content)) {
     const value = resolveDotPath(content as Record<string, unknown>, keyPath);
-    return value !== undefined && value !== null ? String(value) : undefined;
+    return value !== undefined && value !== null
+      ? stringifyKeyValue(value)
+      : undefined;
   }
 
   return undefined;
