@@ -207,5 +207,15 @@ describe("Dedupe Key Extraction", () => {
       const msg = createMessage({ nested: circular });
       expect(extractKey("nested", msg)).toBeUndefined();
     });
+
+    it("returns undefined for Map keys that would collapse under JSON", () => {
+      const msg = createMessage({ nested: new Map([["a", 1]]) });
+      expect(extractKey("nested", msg)).toBeUndefined();
+    });
+
+    it("returns undefined for arrays containing undefined holes", () => {
+      const msg = createMessage({ tags: [undefined, "a"] as unknown[] });
+      expect(extractKey("tags", msg)).toBeUndefined();
+    });
   });
 });

@@ -133,6 +133,15 @@ describe("Error Categorization", () => {
         };
         expect(detectCategory(cause)).toBe("intermittent");
       });
+
+      it("does not throw when message getter throws", () => {
+        const cause = {
+          get message(): string {
+            throw new Error("getter exploded");
+          },
+        };
+        expect(detectCategory(cause)).toBe("intermittent");
+      });
     });
   });
 

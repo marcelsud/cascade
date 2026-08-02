@@ -97,30 +97,61 @@ const resolveDotPath = (
  *
  * Returns the stringified key value, or undefined if the path resolves to undefined/null.
  */
+const isPlainObject = (value: object): boolean => {
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+};
+
+const assertJsonSafeKeyValue = (_key: string, value: unknown): unknown => {
+  if (
+    value === undefined ||
+    typeof value === "function" ||
+    typeof value === "symbol"
+  ) {
+    throw new Error("unsupported key value");
+  }
+  if (typeof value === "bigint") {
+    throw new Error("unsupported key value");
+  }
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    throw new Error("unsupported key value");
+  }
+  if (value !== null && typeof value === "object") {
+    if (Array.isArray(value)) {
+      return value;
+    }
+    if (!isPlainObject(value)) {
+      // Map/Set/Date/class instances collapse under JSON.stringify defaults.
+      throw new Error("unsupported key value");
+    }
+  }
+  return value;
+};
+
 const stringifyKeyValue = (value: unknown): string | undefined => {
   if (typeof value === "string") {
     return value;
   }
-  if (
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint"
-  ) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? String(value) : undefined;
+  }
+  if (typeof value === "boolean" || typeof value === "bigint") {
     return String(value);
   }
-  if (typeof value === "object") {
-    // Objects/arrays must not collapse to "[object Object]" — that would make
-    // distinct structured keys collide under the same dedupe identity.
-    // Non-serializable values (cycles, bigint leaves) fail extraction instead
-    // of throwing outside the typed DedupeKeyExtractionError channel.
+  if (value !== null && typeof value === "object") {
+    // Only plain objects/arrays get stable JSON keys. Non-plain hosts and
+    // unsupported nested leaves fail extraction instead of colliding.
+    if (!Array.isArray(value) && !isPlainObject(value)) {
+      return undefined;
+    }
     try {
-      const serialized = JSON.stringify(value);
+      const serialized = JSON.stringify(value, assertJsonSafeKeyValue);
       return typeof serialized === "string" ? serialized : undefined;
     } catch {
       return undefined;
     }
   }
-  return String(value);
+  return undefined;
 };
 
 export const extractKey = (
