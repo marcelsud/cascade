@@ -94,7 +94,7 @@ describe("Dedupe processor component metrics emission", () => {
     const snapshots = dedupeComponentMetrics(logs);
 
     // AC-1 / AC-3 / AC-6: exactly one bounded snapshot, not one per message.
-    expect(snapshots.length).toBe(1);
+    expect(snapshots).toHaveLength(1);
 
     const snapshot = snapshots[0];
 

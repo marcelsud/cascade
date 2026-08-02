@@ -15,96 +15,46 @@ import { RedisOutputError } from "../../../src/outputs/redis-streams-output.js";
 describe("Error Categorization", () => {
   describe("detectCategory()", () => {
     describe("intermittent category", () => {
-      it("should detect network errors as intermittent", () => {
-        const error = new Error("network timeout occurred");
-        expect(detectCategory(error)).toBe("intermittent");
+      it.each([
+        ["network timeout occurred", "network errors"],
+        ["connect ECONNREFUSED 127.0.0.1:6379", "ECONNREFUSED"],
+        ["ETIMEDOUT while connecting", "ETIMEDOUT"],
+        ["socket hang up", "socket errors"],
+        ["connection refused by server", "connection errors"],
+        ["getaddrinfo ENOTFOUND redis.example.com", "ENOTFOUND"],
+        ["some unknown error", "unknown errors default"],
+      ] as const)("classifies %s as intermittent (%s)", (message) => {
+        expect(detectCategory(new Error(message))).toBe("intermittent");
       });
 
-      it("should detect ECONNREFUSED as intermittent", () => {
-        const error = new Error("connect ECONNREFUSED 127.0.0.1:6379");
-        expect(detectCategory(error)).toBe("intermittent");
-      });
-
-      it("should detect ETIMEDOUT as intermittent", () => {
-        const error = new Error("ETIMEDOUT while connecting");
-        expect(detectCategory(error)).toBe("intermittent");
-      });
-
-      it("should detect socket errors as intermittent", () => {
-        const error = new Error("socket hang up");
-        expect(detectCategory(error)).toBe("intermittent");
-      });
-
-      it("should detect connection errors as intermittent", () => {
-        const error = new Error("connection refused by server");
-        expect(detectCategory(error)).toBe("intermittent");
-      });
-
-      it("should detect ENOTFOUND as intermittent", () => {
-        const error = new Error("getaddrinfo ENOTFOUND redis.example.com");
-        expect(detectCategory(error)).toBe("intermittent");
-      });
-
-      it("should default to intermittent for unknown errors", () => {
-        const error = new Error("some unknown error");
-        expect(detectCategory(error)).toBe("intermittent");
-      });
-
-      it("should handle undefined cause as intermittent", () => {
-        expect(detectCategory(undefined)).toBe("intermittent");
-      });
-
-      it("should handle null cause as intermittent", () => {
-        expect(detectCategory(null)).toBe("intermittent");
-      });
+      it.each([undefined, null] as const)(
+        "classifies %s cause as intermittent",
+        (cause) => {
+          expect(detectCategory(cause)).toBe("intermittent");
+        },
+      );
     });
 
     describe("logical category", () => {
-      it("should detect parse errors as logical", () => {
-        const error = new Error("Failed to parse JSON");
-        expect(detectCategory(error)).toBe("logical");
-      });
-
-      it("should detect invalid JSON errors as logical", () => {
-        const error = new Error("invalid json in message body");
-        expect(detectCategory(error)).toBe("logical");
-      });
-
-      it("should detect validation errors as logical", () => {
-        const error = new Error("validation failed for field 'age'");
-        expect(detectCategory(error)).toBe("logical");
-      });
-
-      it("should detect schema errors as logical", () => {
-        const error = new Error("schema mismatch detected");
-        expect(detectCategory(error)).toBe("logical");
-      });
-
-      it("should detect unexpected token errors as logical", () => {
-        const error = new Error("Unexpected token } in JSON at position 42");
-        expect(detectCategory(error)).toBe("logical");
+      it.each([
+        ["Failed to parse JSON", "parse errors"],
+        ["invalid json in message body", "invalid JSON"],
+        ["validation failed for field 'age'", "validation errors"],
+        ["schema mismatch detected", "schema errors"],
+        ["Unexpected token } in JSON at position 42", "unexpected token"],
+      ] as const)("classifies %s as logical (%s)", (message) => {
+        expect(detectCategory(new Error(message))).toBe("logical");
       });
     });
 
     describe("fatal category", () => {
-      it("should detect required field errors as fatal", () => {
-        const error = new Error("required field 'queueUrl' is missing");
-        expect(detectCategory(error)).toBe("fatal");
-      });
-
-      it("should detect missing config errors as fatal", () => {
-        const error = new Error("missing configuration for queue");
-        expect(detectCategory(error)).toBe("fatal");
-      });
-
-      it("should detect not configured errors as fatal", () => {
-        const error = new Error("service not configured properly");
-        expect(detectCategory(error)).toBe("fatal");
-      });
-
-      it("should detect unauthorized errors as fatal", () => {
-        const error = new Error("unauthorized access to resource");
-        expect(detectCategory(error)).toBe("fatal");
+      it.each([
+        ["required field 'queueUrl' is missing", "required field"],
+        ["missing configuration for queue", "missing config"],
+        ["service not configured properly", "not configured"],
+        ["unauthorized access to resource", "unauthorized"],
+      ] as const)("classifies %s as fatal (%s)", (message) => {
+        expect(detectCategory(new Error(message))).toBe("fatal");
       });
     });
 

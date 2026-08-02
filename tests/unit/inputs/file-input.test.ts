@@ -599,14 +599,14 @@ describe("FileInput", () => {
       const largeAllocsAtBlock = recorded.filter(
         (size) => size > 1_024 && size <= MAX_READ_CHUNK_BYTES,
       );
-      expect(largeAllocsAtBlock.length).toBe(1);
+      expect(largeAllocsAtBlock).toHaveLength(1);
       expect(Math.max(...recorded)).toBeLessThanOrEqual(MAX_READ_CHUNK_BYTES);
 
       await delay(150);
       const largeAllocsAfterWait = recorded.filter(
         (size) => size > 1_024 && size <= MAX_READ_CHUNK_BYTES,
       );
-      expect(largeAllocsAfterWait.length).toBe(1);
+      expect(largeAllocsAfterWait).toHaveLength(1);
 
       const messages = await collectChunk(
         input.stream.pipe(Stream.take(recordCount), Stream.runCollect),
@@ -1223,7 +1223,8 @@ describe("FileInput", () => {
       result.errors?.some(
         (error) =>
           error instanceof FileInputError ||
-          (error instanceof Error && error.message.includes("File input failed")),
+          (error instanceof Error &&
+            error.message.includes("File input failed")),
       ),
     ).toBe(true);
 

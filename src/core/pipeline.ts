@@ -29,10 +29,7 @@ import {
   NO_FATAL_CAUSE,
   noteFatalCause,
 } from "./error-collector.js";
-import type {
-  ErrorCollector,
-  FatalCauseSlot,
-} from "./error-collector.js";
+import type { ErrorCollector } from "./error-collector.js";
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -146,7 +143,7 @@ export const run = <E, R>(
     // Signal (void) stops intake immediately; cause may be updated later
     // (e.g. fatal DLQ send replaces the reported original fatal).
     const fatalHalt = yield* Deferred.make<void>();
-    const fatalCauseRef = yield* Ref.make<FatalCauseSlot>(NO_FATAL_CAUSE);
+    const fatalCauseRef = yield* Ref.make<unknown>(NO_FATAL_CAUSE);
     // Ensure input/output close runs at most once across fatal/normal paths.
     // Serialize concurrent force/timeout callers and replay the same Exit.
     const closedRef = yield* Ref.make(false);
@@ -432,9 +429,12 @@ export const run = <E, R>(
               }
               yield* FiberSet.run(
                 workers,
-                processMessage(message, output, wrapOuterPermit, outputPermits).pipe(
-                  Effect.ensuring(permits.release(1)),
-                ),
+                processMessage(
+                  message,
+                  output,
+                  wrapOuterPermit,
+                  outputPermits,
+                ).pipe(Effect.ensuring(permits.release(1))),
               );
             }),
           ),
