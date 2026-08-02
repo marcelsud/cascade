@@ -128,7 +128,7 @@ const evaluateTemplate = (
     const evaluatedTemplate = yield* Effect.tryPromise({
       try: async () => {
         let result = template;
-        const regex = /\{\{(.+?)\}\}/g;
+        const regex = /\{\{([^{}]+)\}\}/g;
         const matches = [...template.matchAll(regex)];
 
         for (const match of matches) {

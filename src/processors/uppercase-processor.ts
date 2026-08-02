@@ -22,7 +22,10 @@ const setNestedValue = (obj: any, path: string, value: any): any => {
     current = current[key];
   }
 
-  current[keys[keys.length - 1]] = value;
+  const lastKey = keys.at(-1);
+  if (lastKey !== undefined) {
+    current[lastKey] = value;
+  }
   return result;
 };
 

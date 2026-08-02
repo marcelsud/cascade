@@ -27,7 +27,8 @@ export const MAX_ADDITIONAL_FATAL_SAMPLES = 8;
  * is a valid Effect failure value and must be retainable as a real diagnostic.
  */
 export const NO_FATAL_CAUSE: unique symbol = Symbol("cascade.noFatalCause");
-export type FatalCauseSlot = unknown | typeof NO_FATAL_CAUSE;
+/** Slot holding either {@link NO_FATAL_CAUSE} or a recorded fatal diagnostic. */
+export type FatalCauseSlot = unknown;
 
 export interface ErrorCollector {
   retained: unknown[];
