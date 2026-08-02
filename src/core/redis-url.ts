@@ -34,11 +34,11 @@ export const tryParseRedisUrl = (url: string): RedisConnection | undefined => {
     return undefined;
   }
 
-  const pathMatch = urlObj.pathname.match(/^\/(\d+)/);
+  const pathMatch = /^\/(\d+)/.exec(urlObj.pathname);
   return {
     host: urlObj.hostname || "localhost",
-    port: urlObj.port ? parseInt(urlObj.port, 10) : 6379,
+    port: urlObj.port ? Number.parseInt(urlObj.port, 10) : 6379,
     password: urlObj.password || undefined,
-    db: pathMatch ? parseInt(pathMatch[1], 10) : undefined,
+    db: pathMatch ? Number.parseInt(pathMatch[1], 10) : undefined,
   };
 };

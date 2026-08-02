@@ -119,6 +119,20 @@ describe("Error Categorization", () => {
         const obj = { message: "connection failed" };
         expect(detectCategory(obj)).toBe("intermittent");
       });
+
+      it("classifies plain objects from JSON-stringified message text", () => {
+        expect(detectCategory({ reason: "parse failure" })).toBe("logical");
+        expect(detectCategory({ detail: "required field missing" })).toBe(
+          "fatal",
+        );
+      });
+
+      it("does not throw when JSON.stringify returns undefined", () => {
+        const cause = {
+          toJSON: () => undefined,
+        };
+        expect(detectCategory(cause)).toBe("intermittent");
+      });
     });
   });
 

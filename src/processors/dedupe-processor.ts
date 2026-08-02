@@ -97,6 +97,32 @@ const resolveDotPath = (
  *
  * Returns the stringified key value, or undefined if the path resolves to undefined/null.
  */
+const stringifyKeyValue = (value: unknown): string | undefined => {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return String(value);
+  }
+  if (typeof value === "object") {
+    // Objects/arrays must not collapse to "[object Object]" — that would make
+    // distinct structured keys collide under the same dedupe identity.
+    // Non-serializable values (cycles, bigint leaves) fail extraction instead
+    // of throwing outside the typed DedupeKeyExtractionError channel.
+    try {
+      const serialized = JSON.stringify(value);
+      return typeof serialized === "string" ? serialized : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return String(value);
+};
+
 export const extractKey = (
   keyPath: string,
   msg: Message,
@@ -105,13 +131,17 @@ export const extractKey = (
     const metaPath = keyPath.slice("metadata.".length);
     if (metaPath.length === 0) return undefined;
     const value = resolveDotPath(msg.metadata, metaPath);
-    return value !== undefined && value !== null ? String(value) : undefined;
+    return value !== undefined && value !== null
+      ? stringifyKeyValue(value)
+      : undefined;
   }
 
   const content = msg.content;
   if (content && typeof content === "object" && !Array.isArray(content)) {
     const value = resolveDotPath(content as Record<string, unknown>, keyPath);
-    return value !== undefined && value !== null ? String(value) : undefined;
+    return value !== undefined && value !== null
+      ? stringifyKeyValue(value)
+      : undefined;
   }
 
   return undefined;

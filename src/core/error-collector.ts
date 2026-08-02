@@ -123,6 +123,29 @@ export const noteFatalCause = (
   return "overflow";
 };
 
+const isObjectIdentity = (
+  error: unknown,
+): error is object | ((...args: never[]) => unknown) =>
+  (typeof error === "object" && error !== null) || typeof error === "function";
+
+/** Push into the capped historical sample, or drop with identity tracking. */
+const retainOrDropHistorical = (
+  collector: ErrorCollector,
+  error: unknown,
+  onDrop: () => void,
+): void => {
+  if (collector.retained.length < MAX_RETAINED_HISTORICAL_ERRORS) {
+    collector.retained.push(error);
+    collector.retainedSeen.add(error);
+    return;
+  }
+
+  onDrop();
+  if (isObjectIdentity(error)) {
+    collector.droppedObjects.add(error);
+  }
+};
+
 /** Mutate collector in place: O(1) identity dedup + capped strong retention. */
 export const collectHistoricalError = (
   collector: ErrorCollector,
@@ -132,52 +155,32 @@ export const collectHistoricalError = (
     return collector;
   }
 
-  const fatal = isFatalError(error);
-  if (fatal) {
+  if (isFatalError(error)) {
     const fatalStatus = noteFatalCause(collector, error);
     if (fatalStatus === "duplicate") {
       // Same fatal identity already recorded via fatal slots.
       return collector;
     }
     collector.total += 1;
-    if (collector.retained.length < MAX_RETAINED_HISTORICAL_ERRORS) {
-      collector.retained.push(error);
-      collector.retainedSeen.add(error);
-      // Overflow fatals that still fit in the historical sample are retained
-      // there and are not counted as omitted.
-    } else {
-      // Historical sample full: track fatal-slot overflows separately. Final
-      // reported omissions are derived at assembly so a live current-fatal
-      // slot that only holds an overflow is not double-counted as missing.
+    // Overflow fatals that still fit in the historical sample are retained
+    // there and are not counted as omitted. Past the historical cap, fatal-
+    // slot overflows are tracked separately so a live current-fatal slot that
+    // only holds an overflow is not double-counted as missing at assembly.
+    retainOrDropHistorical(collector, error, () => {
       if (fatalStatus === "overflow") {
         collector.fatalOverflowOmitted += 1;
       }
-      if (
-        (typeof error === "object" && error !== null) ||
-        typeof error === "function"
-      ) {
-        collector.droppedObjects.add(error);
-      }
-    }
+    });
     return collector;
   }
 
   collector.total += 1;
-  if (collector.retained.length < MAX_RETAINED_HISTORICAL_ERRORS) {
-    collector.retained.push(error);
-    collector.retainedSeen.add(error);
-  } else {
-    // Over-cap historical nonfatal: drop the sample and count it. Objects keep
-    // identity in WeakSet for dedupe; primitives are not retained after the
-    // cap — each observation increments omitted (no stored primitive identity).
+  // Over-cap historical nonfatal: drop the sample and count it. Objects keep
+  // identity in WeakSet for dedupe; primitives are not retained after the
+  // cap — each observation increments omitted (no stored primitive identity).
+  retainOrDropHistorical(collector, error, () => {
     collector.omitted += 1;
-    if (
-      (typeof error === "object" && error !== null) ||
-      typeof error === "function"
-    ) {
-      collector.droppedObjects.add(error);
-    }
-  }
+  });
   return collector;
 };
 

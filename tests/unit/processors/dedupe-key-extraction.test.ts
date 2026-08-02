@@ -192,13 +192,20 @@ describe("Dedupe Key Extraction", () => {
     it("should handle payload field that is an object (stringify)", () => {
       const msg = createMessage({ nested: { a: 1 } });
       const result = extractKey("nested", msg);
-      expect(result).toBe("[object Object]");
+      expect(result).toBe('{"a":1}');
     });
 
     it("should handle payload field that is an array (stringify)", () => {
       const msg = createMessage({ tags: ["a", "b"] });
       const result = extractKey("tags", msg);
-      expect(result).toBe("a,b");
+      expect(result).toBe('["a","b"]');
+    });
+
+    it("returns undefined for non-serializable object keys", () => {
+      const circular: Record<string, unknown> = {};
+      circular.self = circular;
+      const msg = createMessage({ nested: circular });
+      expect(extractKey("nested", msg)).toBeUndefined();
     });
   });
 });

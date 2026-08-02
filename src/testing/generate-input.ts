@@ -4,7 +4,7 @@
  */
 import { Effect, Stream } from "effect";
 import * as Schema from "effect/Schema";
-import { randomUUID } from "node:crypto";
+import { randomInt, randomUUID } from "node:crypto";
 import type { Input } from "../core/types.js";
 import { createMessage } from "../core/types.js";
 import { MetricsAccumulator } from "../core/metrics.js";
@@ -32,10 +32,10 @@ export const GenerateInputConfigSchema = Schema.Struct({
 const replacePlaceholders = (template: unknown, index: number): unknown => {
   if (typeof template === "string") {
     return template
-      .replace(/\{\{index\}\}/g, String(index))
-      .replace(/\{\{uuid\}\}/g, randomUUID())
-      .replace(/\{\{random\}\}/g, String(Math.floor(Math.random() * 1000)))
-      .replace(/\{\{timestamp\}\}/g, String(Date.now()));
+      .replaceAll("{{index}}", String(index))
+      .replaceAll("{{uuid}}", randomUUID())
+      .replaceAll("{{random}}", String(randomInt(1000)))
+      .replaceAll("{{timestamp}}", String(Date.now()));
   }
 
   if (Array.isArray(template)) {

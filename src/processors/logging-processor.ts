@@ -9,6 +9,24 @@ export interface LoggingProcessorConfig {
   readonly includeContent?: boolean;
 }
 
+type LoggingLevel = NonNullable<LoggingProcessorConfig["level"]>;
+
+const logAtLevel = (
+  level: LoggingLevel,
+  message: string,
+): Effect.Effect<void> => {
+  switch (level) {
+    case "debug":
+      return Effect.logDebug(message);
+    case "warn":
+      return Effect.logWarning(message);
+    case "error":
+      return Effect.logError(message);
+    case "info":
+      return Effect.log(message);
+  }
+};
+
 /**
  * Create a logging processor
  * Logs messages with structured information
@@ -33,14 +51,7 @@ export const createLoggingProcessor = (
       const logMessage = `Processing message: ${JSON.stringify(logData, null, 2)}`;
 
       // Choose appropriate log level
-      const logEffect =
-        level === "debug"
-          ? Effect.logDebug(logMessage)
-          : level === "warn"
-            ? Effect.logWarning(logMessage)
-            : level === "error"
-              ? Effect.logError(logMessage)
-              : Effect.log(logMessage);
+      const logEffect = logAtLevel(level, logMessage);
 
       return Effect.gen(function* () {
         yield* logEffect;
