@@ -25,6 +25,8 @@
 - Calibration records require an HMAC from a controller key outside the repository. Authority uses configured minimum case counts and one-sided confidence lower bounds; model self-confidence is never evidence.
 - Run state lives in `.git/continuous-audit-run.json`: untracked, and an abandoned run is recorded as failed by the next `start`.
 - Blocking ratchets fail closed; report-only complexity, duplication, and coverage checks remain visible without blocking.
+- A machine-enforced ratchet declares a runnable `check`; a reviewer-decided ratchet declares `reviewer_prompt` instead and never `check`. `checks.test.mjs` asserts the split, so reviewer prose cannot occupy the field that looks executable.
+- The PR template carries problem, implementation, verification, acceptance evidence, and scope. It never restates machine ratchet results and never self-reports a grade; an omitted conditional section means none applies rather than a reported zero.
 - CI installs from the frozen Bun lockfile and runs unused-code, grading-tool, type, build, integrity, and unit checks.
 - Test-integrity changes preserve detection of focused, skipped, ignored, or collection-reducing tests.
 - SonarQube Community Build analysis is local-only: generate `coverage/lcov.info`, then run `sonar-scanner` from the repository root against a locally configured instance.

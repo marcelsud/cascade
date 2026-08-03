@@ -104,6 +104,13 @@ topics:
 
 # RT-3 is intentionally unused in rubric 1.1.0. Behavioral proof is a reviewer
 # duty under SG-5, not a machine ratchet.
+#
+# Field invariant, asserted by checks.test.mjs:
+#   enforcement: ci-blocking | report-only -> `check` holds a runnable command
+#   enforcement: reviewer                  -> `reviewer_prompt` holds prose
+# A `check` value is always something a machine runs. Reviewer judgement lives
+# under its own key, so an English sentence can never occupy the field that
+# looks executable.
 ratchets:
   RT-1:
     check: "npm run lint && npm run build"
@@ -135,11 +142,15 @@ ratchets:
     check: "node .github/grading/checks.mjs duplicates --base $BASE_SHA --config .github/grading/config.yml"
     enforcement: report-only
     minimum_tokens: 60
+  # RT-7 and RT-8 keep their spec §10.2 identifiers, but their pass conditions
+  # are judgements no tool settles: whether a justification is adequate, and
+  # whether documentation matches an implemented contract. They are declared as
+  # reviewer duties rather than dressed up as machine checks.
   RT-7:
-    check: "New runtime dependency requires capability/ownership/security justification in the PR body"
+    reviewer_prompt: "New runtime dependency requires capability/ownership/security justification in the PR body"
     enforcement: reviewer
   RT-8:
-    check: "Public config/API changes require schema, docs, and behavioral tests"
+    reviewer_prompt: "Public config/API changes require schema, docs, and behavioral tests"
     enforcement: reviewer
 
 baseline:

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import test from "node:test"
@@ -14,6 +14,7 @@ import {
   validateIssueRecord,
 } from "./checks.mjs"
 import { fileURLToPath } from "node:url"
+import { parse as parseYaml } from "yaml"
 
 const git = (cwd, ...args) =>
   execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
@@ -1176,4 +1177,52 @@ test("RT-6 ignores non-source files under src", () => {
     commit(cwd, "add unrelated rule")
     assert.deepEqual(checkDuplicates({ base, minimumTokens: 60, cwd }), { findings: [] })
   })
+})
+
+const RATCHET_ENFORCEMENTS = new Set(["ci-blocking", "report-only", "reviewer"])
+
+// A machine-decided ratchet's `check` must be a command a shell runs. Prose in
+// that field is indistinguishable from an executable check to every reader and
+// tool, which is how a reviewer duty starts being mistaken for a gate.
+const RUNNABLE_CHECK_HEADS = new Set(["npm", "npx", "node", "bun", "bunx"])
+
+test("ratchet registry keeps reviewer prose out of executable check fields", () => {
+  const config = parseYaml(
+    readFileSync(path.join(repoRoot, ".github/grading/config.yml"), "utf8"),
+  )
+  const ratchets = Object.entries(config.ratchets ?? {})
+  assert.ok(ratchets.length > 0, "grading config declares no ratchets")
+
+  for (const [id, ratchet] of ratchets) {
+    assert.ok(
+      RATCHET_ENFORCEMENTS.has(ratchet.enforcement),
+      `${id} declares unknown enforcement ${JSON.stringify(ratchet.enforcement)}`,
+    )
+
+    if (ratchet.enforcement === "reviewer") {
+      assert.equal(
+        ratchet.check,
+        undefined,
+        `${id} is reviewer-decided and must not declare check`,
+      )
+      assert.equal(
+        typeof ratchet.reviewer_prompt,
+        "string",
+        `${id} is reviewer-decided and must declare reviewer_prompt`,
+      )
+      continue
+    }
+
+    assert.equal(
+      ratchet.reviewer_prompt,
+      undefined,
+      `${id} is machine-decided and must not declare reviewer_prompt`,
+    )
+    assert.equal(typeof ratchet.check, "string", `${id} must declare check`)
+    const head = ratchet.check.trim().split(/\s+/)[0]
+    assert.ok(
+      RUNNABLE_CHECK_HEADS.has(head),
+      `${id} check must start with a runnable command, got ${JSON.stringify(head)}`,
+    )
+  }
 })
