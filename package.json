@@ -31,7 +31,10 @@
     "docker:ps": "docker-compose ps",
     "lint": "tsc --noEmit",
     "lint:unused": "knip",
-    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\""
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "sonar": "bash scripts/sonar-precommit.sh",
+    "sonar:coverage": "SONAR_WITH_COVERAGE=1 bash scripts/sonar-precommit.sh",
+    "hooks:install": "bash scripts/githooks/install.sh"
   },
   "author": "Marcelo Santos (@marcelsud)",
   "license": "MIT",

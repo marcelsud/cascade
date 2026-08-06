@@ -29,6 +29,7 @@
 - Test-integrity changes preserve detection of focused, skipped, ignored, or collection-reducing tests.
 - SonarQube Community Build analysis is local-only: generate `coverage/lcov.info`, then run `sonar-scanner` from the repository root against a locally configured instance.
 - `typescript:S2004` (nested functions) is ignored project-wide in `sonar-project.properties`. Effect `gen`/stream/finalizer nesting is idiomatic here; do not “fix” nesting solely to silence Sonar, and do not remove the ignore without a deliberate readability refactor.
+- Local pre-commit Sonar gate: `scripts/sonar-precommit.sh`, installed into the shared bare-repo hooks via `npm run hooks:install`. Requires SonarQube UP on `SONAR_HOST_URL` (default `http://127.0.0.1:9000`) and `SONAR_TOKEN` (or `~/sonar-experiment/token.txt`). Bypass: `SKIP_SONAR=1` or `git commit --no-verify`. Optional: `SONAR_WITH_COVERAGE=1`, `SONAR_PRECOMMIT_STRICT_SRC=1`.
 
 ## Work Guidance
 
