@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Cascade pre-commit: local SonarQube gate.
+# Installed into the bare repo hooks dir so every worktree shares it.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+GATE="$ROOT/scripts/sonar-precommit.sh"
+
+if [[ ! -f "$GATE" ]]; then
+  # Worktree not yet on a revision that carries the gate script.
+  echo "sonar-precommit: scripts/sonar-precommit.sh missing in this worktree — skip" >&2
+  exit 0
+fi
+
+exec bash "$GATE"
