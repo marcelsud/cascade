@@ -147,9 +147,21 @@ Best for:
 Characteristics:
 - Uses XREADGROUP command
 - Message ownership per consumer
-- Automatic message acknowledgment
+- Message acknowledgment only after successful downstream delivery
 - Consumer group management
-- Failed message handling
+- Recovery of pending messages owned by the configured consumer
+
+On startup, the input reads entries already pending for its own consumer
+before waiting for new entries. It advances through that pending range once,
+so a message that fails again is left pending without being emitted repeatedly
+in the same recovery sweep. Restarting with the same `consumer_name` retries
+that work; successful downstream handling performs `XACK`.
+
+Use a stable `consumer_name` when you need this restart recovery. An
+automatically generated name identifies a new consumer on each input
+creation. Pending entries owned by other consumers are not reclaimed; this
+input does not perform `XAUTOCLAIM`. Entries whose payload was deleted from
+Redis are skipped rather than emitted as empty messages.
 
 ## Message Metadata
 

@@ -16,6 +16,7 @@
 - Queue size and `block`, `drop_new`, or `drop_old` behavior stay bounded and reflected in metrics.
 - HTTP request bodies are bounded by a configured byte limit enforced before buffering; oversized requests are rejected without becoming messages.
 - Acquisition and release remain cancellation-safe; close never leaks source handles.
+- Redis Streams consumer groups first sweep the configured consumer's pending entries with a monotonic cursor, then read new entries. Replayed messages retain deferred acknowledgement; recovering another consumer's entries is outside this path.
 - HTTP input factory is Effect-returning: it fails with a typed fatal `HttpInputError` if bind is rejected, releases any queue/server resources on that path, and emits the listening log only after a confirmed bind.
 - Failures retain the project's fatal, intermittent, and logical categories.
 - File one-shot (`follow: false`): clean EOF completes the stream successfully after drain; a terminal open/stat/read failure drains accepted records first, then fails the stream with `FileInputError` (counted once in input metrics). Follow mode retains retry/rotation and does not use that terminal path.

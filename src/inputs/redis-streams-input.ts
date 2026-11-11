@@ -312,6 +312,9 @@ export const createRedisStreamsInput = (
    */
   const consumerGroup = config.consumerGroup!;
   const consumerName = config.consumerName || `consumer-${randomUUID()}`;
+  // A new input first drains this consumer's existing PEL. Advance the cursor
+  // even before ACK so a failed delivery is emitted only once per sweep.
+  let pendingCursor: string | undefined = "0";
   const metrics = new MetricsAccumulator("redis-streams-input");
   let messageCount = 0;
 
@@ -389,10 +392,10 @@ export const createRedisStreamsInput = (
             "COUNT",
             count,
             "BLOCK",
-            blockMs,
+            blockMs, // Redis ignores BLOCK when reading a pending-entry ID.
             "STREAMS",
             config.stream,
-            ">", // Only new messages
+            pendingCursor ?? ">",
           ),
         catch: (error) =>
           new RedisStreamsInputError(
@@ -403,15 +406,31 @@ export const createRedisStreamsInput = (
       }),
     );
 
-    // No new messages
     if (!results || results.length === 0) {
+      pendingCursor = undefined;
       return [];
     }
 
-    // Convert entries; ACK is deferred until pipeline delivery succeeds.
-    const [streamName, entries] = results[0] as [string, [string, string[]][]];
+    const [streamName, entries] = results[0] as [
+      string,
+      [string, string[] | null][],
+    ];
+    if (pendingCursor !== undefined) {
+      if (entries.length === 0) {
+        pendingCursor = undefined;
+        return [];
+      }
+      pendingCursor = entries[entries.length - 1][0];
+    }
+
+    // Deleted pending entries retain their IDs but have no payload. Advance
+    // past them without creating a synthetic message or acknowledging data
+    // that was never delivered. Live entries retain deferred pipeline ACK.
+    const liveEntries = entries.filter(
+      (entry): entry is [string, string[]] => entry[1] !== null,
+    );
     const messages = yield* Effect.forEach(
-      entries as [string, string[]][],
+      liveEntries,
       (entry) =>
         Effect.gen(function* () {
           const [entryId] = entry;

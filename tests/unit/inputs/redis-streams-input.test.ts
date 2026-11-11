@@ -339,9 +339,9 @@ describe("RedisStreamsInput", () => {
       });
 
       const mockClient = factoryOwnedClient();
-      mockClient.xreadgroup.mockResolvedValueOnce(
-        xreadPayload(streamName, "1-0"),
-      );
+      mockClient.xreadgroup
+        .mockResolvedValueOnce([[streamName, []]])
+        .mockResolvedValueOnce(xreadPayload(streamName, "1-0"));
 
       const message = await Effect.runPromise(Stream.runHead(input.stream));
       expect(Option.isSome(message)).toBe(true);
@@ -491,9 +491,9 @@ describe("RedisStreamsInput", () => {
       });
 
       const mockClient = factoryOwnedClient();
-      mockClient.xreadgroup.mockResolvedValueOnce(
-        xreadPayload(streamName, "1-0"),
-      );
+      mockClient.xreadgroup
+        .mockResolvedValueOnce([[streamName, []]])
+        .mockResolvedValueOnce(xreadPayload(streamName, "1-0"));
 
       const message = await Effect.runPromise(Stream.runHead(input.stream));
       expect(Option.isSome(message)).toBe(true);
