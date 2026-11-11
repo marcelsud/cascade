@@ -77,6 +77,9 @@ Default section order:
 
 ## User Preferences
 
+- Use Codex for implementation and Antigravity Argon through `agy` for
+  independent review. Apply the five-step delivery workflow below.
+
 When the user requests a durable behavior change, record it here or in the relevant child AGENTS.md.
 
 ## Child DOX Index
@@ -301,166 +304,153 @@ only the fixed benchmark; it is not a generalized code-quality claim.
 ### GitHub Issue Delivery (five-step workflow)
 
 For graded Cascade GitHub issues, the default done state is **end-to-end
-delivery** unless the user explicitly limits scope. Do not stop after local
-implementation or local verification alone.
+delivery** unless the user explicitly limits scope. A local implementation is
+not complete until the delivery evidence below is recorded.
 
-Issue grading and ship-gate linkage live in `.github/grading/config.yml` and the
-repo grading methodology. Apply the existing severity gate and two-round
-convergence rules from `/home/marcelsud/.claude/CLAUDE.md` (Blocker / Material /
-Cosmetic; hard cap 2 rounds per artifact). **Do not redefine severity here** —
-reference and apply that canonical guidance.
+Issue grading and ship-gate linkage remain in `.github/grading/config.yml`
+and the repository grading methodology. Apply the existing severity gate and
+two-round convergence rules from `/home/marcelsud/.claude/CLAUDE.md`
+(Blocker / Material / Cosmetic; hard cap two rounds per artifact). Keep
+grading thresholds, ratchets, and unrelated policy changes out of issue PRs.
 
-Steps 1–3 are the main thread's own work. The only delegated steps are the two
-reviews.
+#### Available roles and verified CLI
 
-| Step | Runs on |
-|------|---------|
-| 1 Plan | main thread |
-| 2 Present the plan | main thread |
-| 3 Implement | main thread |
-| 4 Ship-gate review → delivery | review: `openai-codex/gpt-5.6-sol:high` (read-only) → commit / push / PR: main thread |
-| 5 Independent pair review | `openai-codex/gpt-5.6-sol:high` **and** the second seat selected in step 5 |
+- **Codex** is the main thread: it selects issues, plans, presents the plan,
+  implements, verifies, resolves findings, commits, pushes, and opens PRs.
+- **Antigravity Argon** is the independent, read-only reviewer. Use `agy`
+  with the selector `gemini-4-argon-high`, verified by `agy models`.
+- No Grok, Claude, OMP, or obsolete Codex model selector is required for this
+  workflow. Codex may implement; its own review is not independent approval.
+- One Argon reviewer provides the independent assessment. Repeating a model
+  or starting a second session does not constitute two independent reviewers.
+- Record the requested selector, CLI version, conversation ID, result status,
+  and reviewed revision/tree. Report only identity supported by the harness.
+- If Argon is unavailable, authentication fails, or the review times out or
+  produces no verifiable verdict, stop delivery and report the exact blocker.
+  Do not silently substitute a model, disable permissions, or infer approval
+  from process startup, silence, or an exit code alone.
 
-If a required selector is unavailable, **stop and report the blocker**. Never
-silently substitute another model. Report what each delegated seat resolved to
-in the completion proof.
+The WSL installation exposes the following commands. Recheck local help and
+model availability before use; do not invent aliases or model flags:
 
-Shared lint, format, and project-wide checks run **once centrally** in the main
-thread after implementation (or after a fix round). Review subagents run
-focused verification only.
+```bash
+agy --help
+agy --version
+agy models
+prompt_file=/absolute/path/to/review-prompt.txt
+agy --model gemini-4-argon-high --mode plan --sandbox \
+  --output-format json --print-timeout=300s --print "$(cat "$prompt_file")"
+```
+
+The prompt must restrict the reviewer to reads and focused verification,
+with no source edits, commits, pushes, issue mutations, or review publication.
+Capture its output and confirm the worktree was not changed by the reviewer.
+The main thread performs every mutation and publishes the review evidence.
+
+Headless tool requests can require permissions the CLI cannot prompt for.
+For a tool-free review, supply the complete relevant repository artifacts and
+test evidence in the prompt and explicitly prohibit all tool calls. If the
+reviewer needs missing context, Codex supplies the exact repository excerpts
+in a follow-up. A denied tool call with an empty response is not a verdict.
+Never use `--dangerously-skip-permissions` to obtain a review. Private local
+instruction files are verified locally; do not include their contents in an
+external review without the user's specific authorization.
+
+| Step | Owner |
+|------|-------|
+| 1 Plan | Codex main thread |
+| 2 Present the plan | Codex main thread |
+| 3 Implement and verify | Codex main thread |
+| 4 Independent ship-gate, then delivery | Argon reviews; Codex resolves findings, commits, pushes, and opens the PR |
+| 5 Publish review and verify delivered revision | Codex records Argon's verdict, checks, and any required follow-up on the PR |
+
+Shared lint, format, and project-wide checks run **once centrally** after
+implementation or a fix round. The reviewer runs focused verification only.
 
 #### Step 1 — Plan (main thread, never delegated)
 
-1. Read the issue, `AGENTS.md`, canonical Claude instructions, relevant prior
-   decisions, and affected code paths.
-2. Reproduce the bug or establish pre-change behavior when the issue is
-   behavioral.
-3. Map every acceptance criterion to an implementation step and a verification
-   step.
-4. Reuse existing architecture and testing conventions; do not invent a
-   parallel pattern.
-
-Planning buys no parallelism — nothing runs until the plan exists — and it
-fixes the scope every later step is graded against. Delegating it and then
-grading the result is self-review.
+1. Read the issue, applicable `AGENTS.md` chain, canonical severity guidance,
+   relevant prior decisions, and affected code paths.
+2. Reproduce behavioral bugs or establish pre-change behavior.
+3. Map every acceptance criterion to implementation and verification steps.
+4. Reuse existing architecture and test conventions.
 
 #### Step 2 — Present the plan (main thread)
 
-State the plan before editing code: scope and non-scope, the files to touch,
-each acceptance criterion mapped to its implementation and verification step,
-and the reproduction that proves the bug is real.
-
-This is a visibility gate, not an approval gate: proceed unless the user
-redirects.
+Before editing, state scope and non-scope, target files, the reproduction,
+and how each acceptance criterion will be implemented and verified.
+This is a visibility gate: proceed unless the user redirects.
 
 #### Step 3 — Implement (main thread)
 
-1. Implement the source change plus the smallest behavior-focused regression
-   coverage that fails on the original bug, and prove it fails before the fix.
-2. Run focused tests and the real scenario the issue requires; type-check the
-   result.
-3. Do not expand scope. Do not leave compatibility shims, placeholders, or
-   follow-up TODOs.
-4. Run the shared lint/format/project-wide checks here, once.
+1. Make the source change and smallest behavior-focused regression coverage;
+   prove the regression fails before the fix.
+2. Run focused tests and the required real scenario; type-check the result.
+3. Preserve error paths, acknowledgement guarantees, lifecycle cleanup,
+   metrics, and public contracts. Do not expand scope or weaken assertions.
+4. Complete the DOX pass and shared lint/format/project-wide checks.
 
-#### Step 4 — Ship-gate review (`openai-codex/gpt-5.6-sol:high`), then open the PR
+#### Step 4 — Independent Argon ship-gate, then open the PR
 
-The ship-gate is the **pre-delivery** review of the completed local change. It
-is not one of the two independent reviews in step 5. The reviewer is
-**read-only**; the main thread performs every mutation.
+1. Start a fresh Argon review of the uncommitted diff before the delivery
+   commit. Include the issue and acceptance criteria, step 2 plan, absolute
+   worktree path, base revision, complete changed-file list/diff, and the
+   verification results. New files must be included in the review evidence.
+2. Ask: **"Any Blocker or Material issue? If no → APPROVED."** The reviewer
+   checks acceptance criteria, failure paths, resource/lifecycle behavior,
+   and whether regression tests fail on the original bug. Drop Cosmetic.
+3. Resolve every Blocker/Material finding and request the bounded follow-up
+   below. Require an explicit verifiable verdict before delivery.
+4. Refresh `origin/main`. If rebasing or resolving conflicts changes the
+   reviewed content, re-verify and obtain review of that content within the
+   round limit. Otherwise preserve the approved tree exactly.
+5. Codex commits on a focused branch with a Conventional Commit message,
+   pushes, and opens the PR with summary, exact verification commands, and
+   `Closes #<issue>` (or the repository's documented policy exemption).
 
-1. Dispatch the ship-gate on the uncommitted diff, before any delivery commit.
-   The prompt MUST carry the issue and its acceptance criteria, the step 2
-   plan, and the worktree's absolute path. Without them the reviewer cannot
-   grade the criteria it is being asked to grade.
-2. It applies the canonical severity gate: only **Blocker** or **Material**
-   findings require changes; drop **Cosmetic**.
-3. It checks acceptance criteria, error paths, lifecycle/resource behavior, and
-   whether the tests fail on the original bug.
-4. Ship-gate prompt: **"Any Blocker or Material issue? If no → APPROVED."**
-5. The **main thread** then resolves every Blocker/Material finding and
-   performs delivery itself: refresh `origin/main`, commit on a focused branch
-   name with a Conventional Commit message, push, and open the PR with a
-   summary, the exact verification commands, and `Closes #<issue>`.
+#### Step 5 — Publish review and verify the delivered revision
 
-A local-only implementation is **not** complete when the task is to execute a
-GitHub issue end to end.
+Publish Argon's substantive verdict and any follow-up as PR comments so
+maintainers can inspect the independent reasoning. Bind each review to the
+reviewed content and identify the delivered commit with the same tree.
 
-#### Step 5 — Independent pair review (parallel)
+If the latest pushed content differs from the approved artifact, obtain a
+follow-up from Argon before claiming approval of that revision. A fresh
+conversation does not reset the two-round limit. An unchanged delivery needs
+no duplicate review; publication and latest-commit CI verification remain
+mandatory. Any unresolved required review is a delivery blocker.
 
-Two seats, run against the same pushed PR diff and issue context. Reviewers
-MUST NOT see or rely on each other's output.
-
-Seat one is always `openai-codex/gpt-5.6-sol:high`. Seat two is chosen by the
-**model family** running the main thread — compare families, never full
-selectors: a Grok main thread runs `grok-4.5:high` while the Grok seat is
-`grok-4.5:xhigh`, so a literal string comparison would seat Grok against Grok
-and destroy the independence the seat exists to provide.
-
-| Main-thread family | Seat two |
-|---|---|
-| `xai-oauth/grok-4.5` | `anthropic/claude-opus-5:high` |
-| `anthropic/claude-opus-5` | `xai-oauth/grok-4.5:xhigh` |
-| anything else | **stop and report the blocker** |
-
-Any other main-thread model — GPT included — has no valid pairing, because
-seat one is already GPT and a GPT main thread would then review its own work.
-Stop rather than substitute.
-
-Take the main-thread family from the model the **harness reports for the
-running session**, not from configuration. `modelRoles.default` in
-`~/.omp/agent/config.yml` is only the *configured* default and `omp --model`
-overrides it, so the two disagree whenever a session was launched with an
-explicit model — reading config would then seat the main thread's own family
-against itself. Name both resolved seats in the completion proof.
-
-The second seat keeps both reviews independent of the work under review: the
-main thread wrote the plan and the implementation, so its own family cannot
-also sit in judgement of them.
-
-Publish **both** outputs as PR comments so maintainers can inspect the
-independent reasoning.
-
-**Independent PR review comment template**
+**Independent review comment template**
 
 ```markdown
-**Independent review — <reviewer label>** (`<selector>`)
+**Independent review — Antigravity Argon** (`gemini-4-argon-high`)
 
 **Verdict: APPROVED** | **Verdict: CHANGES REQUESTED**
 
 ### Evidence
-- <file/symbol or acceptance criterion → what the diff does / proves>
+- CLI version, conversation ID, and result status
+- Base revision, reviewed tree/diff, and matching delivered commit
+- Acceptance criteria and focused verification results
 
 ### Findings
-<!-- Only Blocker or Material. Omit this section entirely when APPROVED with none. -->
-- **<Blocker|Material>** `<path>:<lines>`: <impact>. <exact fix>.
+<!-- Only Blocker or Material; omit when there are none. -->
+- **<Blocker|Material>** `<path>:<line>`: <impact and exact fix>.
 ```
 
-#### Finding-resolution loop (max two rounds)
+#### Finding-resolution loop (max two rounds per artifact)
 
-1. If either independent review raises a **Blocker** or **Material** finding,
-   fix it, run focused verification, commit, and push the correction.
-2. Request **one** follow-up verification from the **same reviewer that raised
-   the finding**, and post that follow-up as a PR comment.
-3. Apply the canonical two-round cap from `/home/marcelsud/.claude/CLAUDE.md`:
-   Round 1 = substance; Round 2 = verify Round 1 fixes. No Round 3 unless a
-   genuine **Blocker** appears. Stop when only Cosmetic feedback remains.
+1. Round 1 reviews substance. Codex fixes every Blocker/Material finding and
+   runs the appropriate verification centrally.
+2. Round 2 verifies the fixes with the same Argon reviewer; publish that
+   follow-up and the exact reviewed revision. If continuity cannot be
+   restored, provide the complete prior findings and fixes without claiming
+   it is a second independent assessment.
+3. No round 3 unless a genuine Blocker appears. A remaining Material finding
+   still blocks delivery; report it rather than exceeding the cap or
+   self-approving. Stop when only Cosmetic feedback remains.
 
-**Raising-reviewer follow-up comment template**
-
-```markdown
-**<reviewer label> — follow-up review** (`<selector>`)
-
-**Verdict: APPROVED** | **Verdict: CHANGES REQUESTED**
-
-### Evidence
-- <fix commit / diff hunk → how each prior Blocker/Material finding was resolved>
-- <focused verification command and result>
-
-### Findings
-<!-- Only new or unresolved Blocker/Material. Omit when APPROVED with none. -->
-- **<Blocker|Material>** `<path>:<lines>`: <impact>. <exact fix>.
-```
+The follow-up comment uses the template above, labels itself **follow-up**,
+and maps each prior finding to its fix and verification evidence.
 
 #### Completion proof
 
@@ -469,13 +459,14 @@ Before reporting done, verify and link all of the following:
 - [ ] PR URL, title, base/head branches, and commit IDs
 - [ ] PR is open and mergeable
 - [ ] CI/checks pass on the **latest** commit
-- [ ] Both independent review comments are present on the PR
-- [ ] Every Blocker/Material finding has a posted resolution/follow-up
+- [ ] Argon's independent review and required follow-up comments are on the PR
+- [ ] Approval covers the latest delivered content
+- [ ] Every Blocker/Material finding has a recorded resolution
 - [ ] Local branch is fully pushed; working tree is clean
-- [ ] Temporary test infrastructure / services started for verification are stopped
+- [ ] Temporary services started for verification are stopped
 
-Report which model each delegated seat resolved to; do not claim upstream model
-identity beyond what the harness records.
+Publishing a release or merging the PR requires the user's applicable
+authorization; completion of this workflow alone does not grant it.
 
 ## Component Guides
 
