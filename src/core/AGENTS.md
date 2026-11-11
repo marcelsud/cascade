@@ -21,6 +21,7 @@
 - Backpressure permits cover primary send attempts, not retry delay or DLQ routing.
 - A fatal primary-output DLQ copy is bounded by the run's effective shutdown timeout, then the original failure reaches normal accounting and fatal halt; nonfatal archival semantics remain unchanged.
 - Pipeline diagnostic samples remain bounded; exact totals come from stats and omission counters.
+- Redis release bounds a ready client's QUIT to one second, force-disconnects on rejection or expiry, preserves the close error, and clears its deadline timer. Non-ready clients disconnect immediately.
 
 ## Work Guidance
 

@@ -29,6 +29,12 @@ input consumption stop, so `requestForce` is safe to call without a preceding
 message from a destructive-pull input; this is the intentional force-shutdown
 tradeoff.
 
+Redis clients attempt graceful `QUIT` for up to one second. If `QUIT` rejects
+or does not settle within that bound, Cascade force-disconnects the client
+and reports the close error through the existing cleanup path. Clients that
+are not ready disconnect immediately. This prevents a failed graceful close
+from leaving the connection open indefinitely.
+
 A `finish-current` input (Redis list, Redis streams, and SQS) finishes the pull
 already in progress before intake stops, so keep its blocking read timeout (for
 example a Redis-list `timeout`, Redis-streams `blockMs`, or SQS
