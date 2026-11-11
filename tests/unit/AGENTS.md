@@ -14,6 +14,7 @@
 - Vitest uses Node, global APIs, ten-second test/hook timeouts, and excludes `tests/e2e`.
 - Mock only the external boundary needed to expose behavior; use real shared helpers and Effect execution paths.
 - Lifecycle tests prove cleanup and failure propagation, not only happy-path values.
+- `cli-binary.test.ts` requires Bun to compile once into a temporary directory, then proves the executable runs with no Node/Bun in its PATH or external WASM payload. Its build hook has a bounded 60-second timeout and cleans its temporary files.
 - Keep regression cases adjacent to the corresponding source domain.
 
 ## Work Guidance

@@ -16,6 +16,7 @@
 - Branch preserves the original and stores processed results in metadata; switch preserves configured routing order and case semantics.
 - Branch copies content with `structuredClone` (preserves `undefined`, `bigint`, `Date`, `Map`/`Set`, circular graphs); uncloneable values fail as typed `BranchProcessorError`, not defects.
 - Expression, HTTP, and sandbox failures remain typed and do not escape as unhandled defects.
+- JavaScript uses an embedded release-sync QuickJS WASM variant with lazy shared module initialization; standalone executables require no WASM sidecar or download. Runtime/context limits and per-message cleanup remain unchanged.
 - Validation rejects empty or ineffective configurations at build time.
 
 ## Work Guidance
