@@ -20,7 +20,7 @@ import type {
 } from "./types.js";
 import { runProcessorChain } from "./processor-chain.js";
 import { isFatalError } from "./errors.js";
-import { createDLQMessage } from "./dlq.js";
+import { createDLQMessage, FatalDLQCopyTimeout } from "./dlq.js";
 import {
   assembleErrorSample,
   collectHistoricalError,
@@ -504,7 +504,11 @@ export const run = <E, R>(
       }),
     );
 
-    const executionFiber = yield* Effect.forkDaemon(execution);
+    const executionFiber = yield* Effect.forkDaemon(
+      execution.pipe(
+        Effect.provideService(FatalDLQCopyTimeout, shutdownTimeoutMs),
+      ),
+    );
     const awaitExecution = Fiber.await(executionFiber).pipe(
       Effect.flatMap((exit) =>
         Exit.matchEffect(exit, {

@@ -19,6 +19,7 @@
 - `pipeline.output` is the sole lifecycle owner for wrapped primary and DLQ outputs; observation handles are never closed separately.
 - Destructive inputs use `shutdownMode: "finish-current"`; other inputs default to interruptible intake.
 - Backpressure permits cover primary send attempts, not retry delay or DLQ routing.
+- A fatal primary-output DLQ copy is bounded by the run's effective shutdown timeout, then the original failure reaches normal accounting and fatal halt; nonfatal archival semantics remain unchanged.
 - Pipeline diagnostic samples remain bounded; exact totals come from stats and omission counters.
 
 ## Work Guidance
