@@ -2,7 +2,11 @@
  * JavaScript Processor - Sandboxed JS execution via QuickJS (WASM)
  */
 import { Effect } from "effect";
-import { getQuickJS } from "quickjs-emscripten";
+import RELEASE_SYNC from "@jitl/quickjs-singlefile-cjs-release-sync";
+import {
+  memoizePromiseFactory,
+  newQuickJSWASMModuleFromVariant,
+} from "quickjs-emscripten-core";
 import type { Processor, Message } from "../core/types.js";
 
 export interface JavaScriptProcessorConfig {
@@ -21,6 +25,12 @@ export class JavaScriptProcessorError {
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_MEMORY_LIMIT = 128 * 1024 * 1024; // 128MB
+
+// The single-file variant embeds WASM bytes, including in compiled CLI builds.
+// Retain lazy, shared module initialization while runtimes stay per-message.
+const getQuickJS = memoizePromiseFactory(() =>
+  newQuickJSWASMModuleFromVariant(RELEASE_SYNC),
+);
 
 /**
  * Create a JavaScript processor using QuickJS WASM sandbox

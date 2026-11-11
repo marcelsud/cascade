@@ -6,6 +6,8 @@ Executes custom JavaScript code in a fully sandboxed environment powered by Quic
 
 The sandbox provides **complete isolation**: no access to the filesystem, network, Node.js APIs, or any host globals. Execution is constrained by configurable timeout and memory limits.
 
+The standalone `cascade` executable embeds the QuickJS WebAssembly payload. It requires no separate WASM file or network download to run JavaScript processors.
+
 ## Configuration
 
 ### Required Fields
