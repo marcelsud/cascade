@@ -1,7 +1,7 @@
 import { Effect, Stream } from "effect";
 import type Redis from "ioredis";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { create } from "../../src/core/pipeline.js";
+import { create, run } from "../../src/core/pipeline.js";
 import type { Output } from "../../src/core/types.js";
 import { createRedisStreamsInput } from "../../src/inputs/redis-streams-input.js";
 import { createCaptureOutput } from "../../src/testing/capture-output.js";
@@ -74,7 +74,11 @@ describe("Redis Streams consumer-group acknowledgement", () => {
     return { stream, group, entryId };
   };
 
-  const inputFor = (stream: string, group: string) => {
+  const inputFor = (
+    stream: string,
+    group: string,
+    consumerName = uniqueResourceName("consumer"),
+  ) => {
     const input = createRedisStreamsInput({
       host: redisHost,
       port: redisPort,
@@ -83,7 +87,7 @@ describe("Redis Streams consumer-group acknowledgement", () => {
       stream,
       mode: "consumer-group",
       consumerGroup: group,
-      consumerName: uniqueResourceName("consumer"),
+      consumerName,
       startId: "0",
       blockMs: 1000,
       count: 1,
@@ -133,5 +137,78 @@ describe("Redis Streams consumer-group acknowledgement", () => {
     expect(result.success).toBe(false);
     expect(result.stats.failed).toBeGreaterThanOrEqual(1);
     expect(await pendingCount(resources.redis, stream, group)).toBe(1);
+  }, 20_000);
+
+  it("replays a failed entry for the same consumer before reading fresh entries", async () => {
+    const { stream, group, entryId } = await seedStream(
+      "streams-pending-restart",
+    );
+    const consumer = uniqueResourceName("stable-consumer");
+    const failedDelivery = () =>
+      Effect.runPromise(
+        run(
+          create({
+            name: "pending-failed-delivery",
+            input: inputFor(stream, group, consumer),
+            processors: [],
+            output: {
+              name: "failed-output",
+              send: () => Effect.fail(new Error("downstream failed")),
+            },
+          }),
+        ).pipe(Effect.timeout("3 seconds")),
+      );
+    const first = await failedDelivery();
+    expect(first.stats.failed).toBe(1);
+    expect(await pendingCount(resources.redis, stream, group)).toBe(1);
+
+    const freshId = await resources.redis.xadd(
+      stream,
+      "*",
+      "content",
+      JSON.stringify({ id: "fresh-entry" }),
+    );
+    expect(freshId).not.toBeNull();
+    const second = await failedDelivery();
+    expect(second.stats.failed).toBe(1);
+    expect(await pendingCount(resources.redis, stream, group)).toBe(1);
+
+    const recovered = await Effect.runPromise(createCaptureOutput());
+    const result = await Effect.runPromise(
+      run(
+        create({
+          name: "pending-successful-replay",
+          input: inputFor(stream, group, consumer),
+          processors: [],
+          output: recovered,
+        }),
+      ).pipe(Effect.timeout("3 seconds")),
+    );
+    expect(result.success).toBe(true);
+    expect(
+      (await Effect.runPromise(recovered.getMessages())).map(
+        (message) => message.metadata.externalId,
+      ),
+    ).toEqual([entryId]);
+    expect(await pendingCount(resources.redis, stream, group)).toBe(0);
+
+    const fresh = await Effect.runPromise(createCaptureOutput());
+    const freshResult = await Effect.runPromise(
+      run(
+        create({
+          name: "pending-followed-by-new-entry",
+          input: inputFor(stream, group, consumer),
+          processors: [],
+          output: fresh,
+        }),
+      ).pipe(Effect.timeout("3 seconds")),
+    );
+    expect(freshResult.success).toBe(true);
+    expect(
+      (await Effect.runPromise(fresh.getMessages())).map(
+        (message) => message.metadata.externalId,
+      ),
+    ).toEqual([freshId]);
+    expect(await pendingCount(resources.redis, stream, group)).toBe(0);
   }, 20_000);
 });
