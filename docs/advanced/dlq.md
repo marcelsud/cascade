@@ -33,6 +33,17 @@ Retry eligibility follows the error category:
 
 Errors without an explicit category use Cascade's existing category detection.
 
+A DLQ copy after a fatal primary-output error is best effort. `run` bounds
+that copy with its effective shutdown timeout (`shutdown_timeout_ms`, or the
+`shutdownTimeoutMs` run override). If the copy stalls, it is interrupted and
+the original fatal error still reaches failure accounting and pipeline halt;
+the source message is not acknowledged. The existing fatal drain and resource
+closing bounds then apply separately. A standalone `withDLQ` send uses a
+10-second fatal-copy bound.
+
+This bound does not shorten logical or exhausted-intermittent archival:
+those sends retain their existing success/failure behavior.
+
 DLQ retries wrap the primary output's complete `send` operation. Outputs with
 their own retry behavior, such as HTTP and Redis outputs, therefore retry
 internally during each DLQ-level attempt. When the final output failure is

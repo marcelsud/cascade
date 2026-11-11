@@ -2,7 +2,7 @@
  * Dead Letter Queue (DLQ) support for outputs
  * Handles category-aware retry logic and routes failed messages to the DLQ
  */
-import { Duration, Effect, Schedule } from "effect";
+import { Context, Duration, Effect, Option, Schedule } from "effect";
 import type { Output, Message } from "./types.js";
 import {
   ComponentError,
@@ -11,6 +11,13 @@ import {
   isIntermittentError,
   type ErrorCategory,
 } from "./errors.js";
+// Internal run-local budget. Standalone wrappers retain a bounded default;
+// run supplies its effective pipeline/RunOptions shutdown timeout.
+export class FatalDLQCopyTimeout extends Context.Reference<FatalDLQCopyTimeout>()(
+  "cascade/FatalDLQCopyTimeout",
+  { defaultValue: () => 10_000 },
+) {}
+
 export class DLQError extends ComponentError {
   readonly _tag = "DLQError";
 
@@ -121,7 +128,7 @@ export const withDLQ = <E>(config: DLQConfig<E>): Output<E | DLQError> => {
                 const dlqMessage = createDLQMessage(msg, error, attempts);
 
                 // Send to DLQ (without retry to avoid infinite loops)
-                yield* config.dlq.send(dlqMessage).pipe(
+                const copyToDLQ = config.dlq.send(dlqMessage).pipe(
                   Effect.catchAll((dlqError) =>
                     Effect.gen(function* () {
                       yield* Effect.logError(
@@ -137,11 +144,22 @@ export const withDLQ = <E>(config: DLQConfig<E>): Output<E | DLQError> => {
                   ),
                 );
 
-                // Logical (and exhausted intermittent) resolve after DLQ copy.
-                // Fatal may be archived but must still fail the send.
                 if (category === "fatal") {
+                  const timeoutMs = yield* FatalDLQCopyTimeout;
+                  const copied = yield* copyToDLQ.pipe(
+                    Effect.timeoutOption(Duration.millis(timeoutMs)),
+                  );
+                  if (Option.isNone(copied)) {
+                    yield* Effect.logWarning(
+                      `Fatal DLQ copy for message ${msg.id} timed out after ${timeoutMs}ms; preserving primary failure`,
+                    );
+                  }
                   return yield* Effect.fail(error as E);
                 }
+
+                // Logical and exhausted intermittent errors resolve only after
+                // archival completes; the fatal-copy bound does not apply.
+                yield* copyToDLQ;
               } else {
                 // No DLQ configured, just fail
                 return yield* Effect.fail(error as E);
