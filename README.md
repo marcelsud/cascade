@@ -6,6 +6,17 @@ Declarative streaming library inspired by Apache Camel and Benthos.
 
 Build type-safe data pipelines with YAML configuration for message processing.
 
+## Cascade v0.8.0
+
+[v0.8.0 is available](https://github.com/marcelsud/cascade/releases/tag/v0.8.0)
+with **Effect 4.1.4** and **Node.js 24+** for source-based usage and development.
+The standalone Linux x86-64 executable includes its runtime and requires neither
+Node.js nor Bun.
+
+Pipeline YAML configuration is unchanged. Library consumers and custom components
+must use Effect 4; Effect 3 values are incompatible. See the
+[Effect 4 migration guide](docs/effect-4.md) for requirements and API changes.
+
 ## Features
 
 - **Declarative YAML Configuration** - Define pipelines without code
@@ -45,10 +56,13 @@ cascade --version
 
 ### Build from Source
 
+Requires **Node.js 24+**, **TypeScript 5.9+** (installed with the project
+dependencies), and **Bun** for the frozen lockfile and standalone binary build.
+
 ```bash
 git clone https://github.com/marcelsud/cascade.git
 cd cascade
-npm install
+bun install --frozen-lockfile
 npm run build:binary
 # Binary is at dist/cascade
 ```
