@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Effect, Either, Stream } from "effect";
+import { Effect, Result, Stream } from "effect";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -325,14 +325,14 @@ describe("reliability settings reach connector factories", () => {
 
       const config = await Effect.runPromise(loadConfig(configPath));
       const result = await Effect.runPromise(
-        Effect.either(buildPipeline(config)),
+        Effect.result(buildPipeline(config)),
       );
 
-      expect(Either.isLeft(result)).toBe(true);
-      if (Either.isLeft(result)) {
-        expect(result.left).toBeInstanceOf(BuildError);
-        expect(result.left._tag).toBe("BuildError");
-        expect(result.left.message).toBe("Invalid Redis Streams input URL");
+      expect(Result.isFailure(result)).toBe(true);
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(BuildError);
+        expect(result.failure._tag).toBe("BuildError");
+        expect(result.failure.message).toBe("Invalid Redis Streams input URL");
       }
       expect(createRedisStreamsInputMock).not.toHaveBeenCalled();
     },
@@ -539,14 +539,14 @@ describe("reliability settings reach connector factories", () => {
 
       const config = await Effect.runPromise(loadConfig(configPath));
       const result = await Effect.runPromise(
-        Effect.either(buildPipeline(config)),
+        Effect.result(buildPipeline(config)),
       );
 
-      expect(Either.isLeft(result)).toBe(true);
-      if (Either.isLeft(result)) {
-        expect(result.left).toBeInstanceOf(BuildError);
-        expect(result.left._tag).toBe("BuildError");
-        expect(result.left.message).toBe("Invalid Redis Streams output URL");
+      expect(Result.isFailure(result)).toBe(true);
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(BuildError);
+        expect(result.failure._tag).toBe("BuildError");
+        expect(result.failure.message).toBe("Invalid Redis Streams output URL");
       }
       expect(createRedisStreamsOutputMock).not.toHaveBeenCalled();
     },
@@ -652,15 +652,15 @@ describe("reliability settings reach connector factories", () => {
     async ({ config, factory, expected }) => {
       const configPath = await writeTempYaml(config);
       const loaded = await Effect.runPromise(
-        Effect.either(loadConfig(configPath)),
+        Effect.result(loadConfig(configPath)),
       );
-      expect(Either.isRight(loaded)).toBe(true);
-      if (Either.isLeft(loaded)) return;
+      expect(Result.isSuccess(loaded)).toBe(true);
+      if (Result.isFailure(loaded)) return;
 
       const built = await Effect.runPromise(
-        Effect.either(buildPipeline(loaded.right)),
+        Effect.result(buildPipeline(loaded.success)),
       );
-      expect(Either.isRight(built)).toBe(true);
+      expect(Result.isSuccess(built)).toBe(true);
 
       const mock = factory();
       expect(mock).toHaveBeenCalledTimes(1);
@@ -734,13 +734,13 @@ describe("reliability settings reach connector factories", () => {
     async ({ config, factory, component }) => {
       const configPath = await writeTempYaml(config);
       const result = await Effect.runPromise(
-        Effect.either(loadConfig(configPath)),
+        Effect.result(loadConfig(configPath)),
       );
 
-      expect(Either.isLeft(result)).toBe(true);
-      if (Either.isLeft(result)) {
-        expect(result.left._tag).toBe("ConfigValidationError");
-        const message = String(result.left.message);
+      expect(Result.isFailure(result)).toBe(true);
+      if (Result.isFailure(result)) {
+        expect(result.failure._tag).toBe("ConfigValidationError");
+        const message = String(result.failure.message);
         expect(message).toMatch(new RegExp(component, "i"));
         expect(message).toMatch(/must be a valid redis:\/\/ URL/i);
       }
@@ -797,13 +797,13 @@ describe("reliability settings reach connector factories", () => {
     });
 
     const result = await Effect.runPromise(
-      Effect.either(loadConfig(configPath)),
+      Effect.result(loadConfig(configPath)),
     );
 
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) {
-      expect(result.left._tag).toBe("ConfigValidationError");
-      expect(String(result.left.message)).toMatch(
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe("ConfigValidationError");
+      expect(String(result.failure.message)).toMatch(
         /totally_unknown_top_level|excess|Unexpected/i,
       );
     }

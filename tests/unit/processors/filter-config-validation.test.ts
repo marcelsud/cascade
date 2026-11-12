@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import * as Schema from "effect/Schema";
 import {
   PipelineConfigSchema,
@@ -19,7 +19,7 @@ const baseConfig = {
 
 const decode = (config: unknown) =>
   Effect.runSync(
-    Effect.either(Schema.decodeUnknown(PipelineConfigSchema)(config)),
+    Effect.result(Schema.decodeUnknownEffect(PipelineConfigSchema)(config)),
   );
 
 describe("Filter processor configuration", () => {
@@ -29,7 +29,7 @@ describe("Filter processor configuration", () => {
       pipeline: { processors: [{ filter: { check: 'status = "active"' } }] },
     });
 
-    expect(Either.isRight(result)).toBe(true);
+    expect(Result.isSuccess(result)).toBe(true);
   });
 
   it("rejects missing, empty, and blank checks", () => {
@@ -39,7 +39,7 @@ describe("Filter processor configuration", () => {
         pipeline: { processors: [{ filter }] },
       });
 
-      expect(Either.isLeft(result)).toBe(true);
+      expect(Result.isFailure(result)).toBe(true);
     }
   });
 
@@ -56,9 +56,9 @@ describe("Filter processor configuration", () => {
       },
     });
 
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) {
-      expect(String(result.left)).toContain(
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
+      expect(String(result.failure)).toContain(
         "Processor must configure exactly one component; found: filter, log",
       );
     }
@@ -69,9 +69,9 @@ describe("Filter processor configuration", () => {
       ...baseConfig,
       pipeline: { processors: [{ filter: { check: "true" } }] },
     });
-    if (Either.isLeft(decoded)) throw decoded.left;
+    if (Result.isFailure(decoded)) throw decoded.failure;
 
-    const pipeline = await Effect.runPromise(buildPipeline(decoded.right));
+    const pipeline = await Effect.runPromise(buildPipeline(decoded.success));
 
     expect(pipeline.processors).toHaveLength(1);
     expect(pipeline.processors[0].name).toBe("filter-processor");
@@ -84,13 +84,15 @@ describe("Filter processor configuration", () => {
     } as PipelineConfig;
 
     const result = await Effect.runPromise(
-      Effect.either(buildPipeline(config)),
+      Effect.result(buildPipeline(config)),
     );
 
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) {
-      expect(result.left._tag).toBe("BuildError");
-      expect(result.left.message).toContain("Failed to compile filter check");
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe("BuildError");
+      expect(result.failure.message).toContain(
+        "Failed to compile filter check",
+      );
     }
   });
 });

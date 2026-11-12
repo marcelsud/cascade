@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -51,7 +51,9 @@ afterEach(async () => {
   originalEnv.clear();
 
   await Promise.all(
-    tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    tempDirs
+      .splice(0)
+      .map((dir) => fs.rm(dir, { recursive: true, force: true })),
   );
 });
 
@@ -157,19 +159,21 @@ output:
       Authorization: "Bearer \${MISSING_TOKEN}"
 `);
 
-    const result = await Effect.runPromise(Effect.either(loadConfig(configPath)));
+    const result = await Effect.runPromise(
+      Effect.result(loadConfig(configPath)),
+    );
 
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) {
-      expect(result.left).toBeInstanceOf(ConfigValidationError);
-      expect(result.left._tag).toBe("ConfigValidationError");
-      expect(result.left.message).toContain(
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
+      expect(result.failure).toBeInstanceOf(ConfigValidationError);
+      expect(result.failure._tag).toBe("ConfigValidationError");
+      expect(result.failure.message).toContain(
         "Environment variable interpolation failed",
       );
-      expect(result.left.message).toContain(
+      expect(result.failure.message).toContain(
         "Missing required environment variable: MISSING_TOKEN",
       );
-      expect(result.left.message).not.toMatch(/Bearer\s+\S+/);
+      expect(result.failure.message).not.toMatch(/Bearer\s+\S+/);
     }
   });
 });

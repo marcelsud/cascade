@@ -1,3 +1,4 @@
+import { Result } from "effect";
 /**
  * YAML Test Runner
  *
@@ -96,12 +97,12 @@ const getErrorType = (error: unknown): string | undefined => {
 };
 
 const errorFromCause = (cause: Cause.Cause<unknown>): unknown => {
-  const failure = Cause.failureOption(cause);
+  const failure = Cause.findErrorOption(cause);
   if (Option.isSome(failure)) {
     return failure.value;
   }
 
-  const defect = Cause.dieOption(cause);
+  const defect = Result.getSuccess(Cause.findDefect(cause));
   if (Option.isSome(defect)) {
     return defect.value;
   }

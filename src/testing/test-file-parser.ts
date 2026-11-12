@@ -65,46 +65,42 @@ interface ExpectError {
 /**
  * Schema for assertion types
  */
-const AssertionSchema: Schema.Schema<Assertion> = Schema.Union(
-  // Message count assertions
+const AssertionSchema: Schema.Codec<Assertion> = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("message_count"),
     expected: Schema.Number,
     target: Schema.optional(
-      Schema.Union(Schema.Literal("output"), Schema.Literal("dlq")),
+      Schema.Union([Schema.Literal("output"), Schema.Literal("dlq")]),
     ),
   }),
   Schema.Struct({
     type: Schema.Literal("message_count_less_than"),
     expected: Schema.Number,
     target: Schema.optional(
-      Schema.Union(Schema.Literal("output"), Schema.Literal("dlq")),
+      Schema.Union([Schema.Literal("output"), Schema.Literal("dlq")]),
     ),
   }),
   Schema.Struct({
     type: Schema.Literal("message_count_greater_than"),
     expected: Schema.Number,
     target: Schema.optional(
-      Schema.Union(Schema.Literal("output"), Schema.Literal("dlq")),
+      Schema.Union([Schema.Literal("output"), Schema.Literal("dlq")]),
     ),
   }),
-
-  // Field assertions
   Schema.Struct({
     type: Schema.Literal("field_value"),
     message: Schema.Number,
     path: Schema.String,
     expected: Schema.Unknown.pipe(
-      Schema.filter(
-        (value): value is unknown => value !== undefined,
-        {
-          message: () =>
+      Schema.check(
+        Schema.makeFilter((value): value is unknown => value !== undefined, {
+          message:
             "field_value assertion requires an expected value (no expected value was supplied)",
-        },
+        }),
       ),
     ),
     target: Schema.optional(
-      Schema.Union(Schema.Literal("output"), Schema.Literal("dlq")),
+      Schema.Union([Schema.Literal("output"), Schema.Literal("dlq")]),
     ),
   }),
   Schema.Struct({
@@ -112,41 +108,37 @@ const AssertionSchema: Schema.Schema<Assertion> = Schema.Union(
     message: Schema.Number,
     path: Schema.String,
     target: Schema.optional(
-      Schema.Union(Schema.Literal("output"), Schema.Literal("dlq")),
+      Schema.Union([Schema.Literal("output"), Schema.Literal("dlq")]),
     ),
   }),
-
-  // Condition assertions
   Schema.Struct({
     type: Schema.Literal("all_match"),
     condition: Schema.String,
     target: Schema.optional(
-      Schema.Union(Schema.Literal("output"), Schema.Literal("dlq")),
+      Schema.Union([Schema.Literal("output"), Schema.Literal("dlq")]),
     ),
   }),
   Schema.Struct({
     type: Schema.Literal("some_match"),
     condition: Schema.String,
     target: Schema.optional(
-      Schema.Union(Schema.Literal("output"), Schema.Literal("dlq")),
+      Schema.Union([Schema.Literal("output"), Schema.Literal("dlq")]),
     ),
   }),
   Schema.Struct({
     type: Schema.Literal("none_match"),
     condition: Schema.String,
     target: Schema.optional(
-      Schema.Union(Schema.Literal("output"), Schema.Literal("dlq")),
+      Schema.Union([Schema.Literal("output"), Schema.Literal("dlq")]),
     ),
   }),
-
-  // Pipeline status assertions
   Schema.Struct({
     type: Schema.Literal("pipeline_success"),
   }),
   Schema.Struct({
     type: Schema.Literal("pipeline_failed"),
   }),
-);
+]);
 
 /**
  * Schema for test file structure
@@ -157,29 +149,30 @@ const TestFileSchema = Schema.Struct({
     Schema.Struct({
       name: Schema.String,
       pipeline: Schema.Struct({
-        input: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+        input: Schema.Record(Schema.String, Schema.Unknown),
         processors: Schema.optional(
-          Schema.Array(
-            Schema.Record({ key: Schema.String, value: Schema.Unknown }),
-          ),
+          Schema.Array(Schema.Record(Schema.String, Schema.Unknown)),
         ),
-        output: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+        output: Schema.Record(Schema.String, Schema.Unknown),
         dlq: Schema.optional(
           Schema.Struct({
-            output: Schema.Record({
-              key: Schema.String,
-              value: Schema.Unknown,
-            }),
+            output: Schema.Record(Schema.String, Schema.Unknown),
             // Match core dlq.max_retries: non-negative integer.
-            maxRetries: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
+            maxRetries: Schema.optional(
+              Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
+            ),
             // Match core dlq.retry_interval_ms: positive integer.
-            retryDelay: Schema.optional(Schema.Int.pipe(Schema.positive())),
+            retryDelay: Schema.optional(
+              Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0))),
+            ),
           }),
         ),
         backpressure: Schema.optional(
           Schema.Struct({
             // Match core max_concurrent_*: positive integer.
-            concurrency: Schema.optional(Schema.Int.pipe(Schema.positive())),
+            concurrency: Schema.optional(
+              Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0))),
+            ),
           }),
         ),
       }),
@@ -189,18 +182,20 @@ const TestFileSchema = Schema.Struct({
           type: Schema.optional(Schema.String),
           messageContains: Schema.optional(Schema.String),
         }).pipe(
-          Schema.filter((value) => {
-            const hasType =
-              typeof value.type === "string" && value.type.trim().length > 0;
-            const hasMessage =
-              typeof value.messageContains === "string" &&
-              value.messageContains.trim().length > 0;
-            return (
-              hasType ||
-              hasMessage ||
-              "expectError requires a non-empty type and/or messageContains discriminator"
-            );
-          }),
+          Schema.check(
+            Schema.makeFilter((value) => {
+              const hasType =
+                typeof value.type === "string" && value.type.trim().length > 0;
+              const hasMessage =
+                typeof value.messageContains === "string" &&
+                value.messageContains.trim().length > 0;
+              return (
+                hasType ||
+                hasMessage ||
+                "expectError requires a non-empty type and/or messageContains discriminator"
+              );
+            }),
+          ),
         ),
       ),
     }),
@@ -249,7 +244,9 @@ export const parseTestFile = (
     });
 
     // Validate structure
-    const decoded = yield* Schema.decodeUnknown(TestFileSchema)(parsed).pipe(
+    const decoded = yield* Schema.decodeUnknownEffect(TestFileSchema)(
+      parsed,
+    ).pipe(
       Effect.mapError(
         (error) =>
           new TestFileParseError(

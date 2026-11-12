@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Chunk, Effect, Option, Stream } from "effect";
+import { Effect, Option, Stream } from "effect";
 import { createRedisStreamsInput } from "../../../src/inputs/redis-streams-input.js";
 import { run } from "../../../src/core/pipeline.js";
 import { createCaptureOutput } from "../../../src/testing/capture-output.js";
@@ -80,7 +80,7 @@ const collect = async (size: number, count = 1) => {
       Option.isSome(result),
       `pending entries must be replayed; cursors=${JSON.stringify(state.cursors)}`,
     ).toBe(true);
-    return Option.isSome(result) ? Chunk.toReadonlyArray(result.value) : [];
+    return Option.isSome(result) ? Array.from(result.value) : [];
   } finally {
     await Effect.runPromise(input.close!());
   }

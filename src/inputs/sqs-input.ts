@@ -1,7 +1,8 @@
+import { stopBeforeNextPull } from "../core/intake-control.js";
 /**
  * SQS Input - Consumes messages from AWS SQS (works with LocalStack)
  */
-import { Chunk, Effect, Stream, Schedule } from "effect";
+import { Effect, Stream, Schedule } from "effect";
 import * as Schema from "effect/Schema";
 import {
   SQSClient,
@@ -49,12 +50,18 @@ export interface SqsInputConfig {
  */
 export const SqsInputConfigSchema = Schema.Struct({
   queueUrl: NonEmptyString,
-  region: Schema.optional(Schema.Union(AwsRegion, NonEmptyString)),
-  endpoint: Schema.optional(Schema.Union(UrlString, NonEmptyString)),
-  waitTimeSeconds: Schema.optional(Schema.Int.pipe(Schema.between(0, 20))),
+  region: Schema.optional(Schema.Union([AwsRegion, NonEmptyString])),
+  endpoint: Schema.optional(Schema.Union([UrlString, NonEmptyString])),
+  waitTimeSeconds: Schema.optional(
+    Schema.Int.pipe(
+      Schema.check(Schema.isBetween({ minimum: 0, maximum: 20 })),
+    ),
+  ),
   maxMessages: Schema.optional(SqsMaxMessages),
   maxAttempts: Schema.optional(RetryCount),
-  requestTimeout: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
+  requestTimeout: Schema.optional(
+    Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
+  ),
   connectionTimeout: Schema.optional(TimeoutMs),
 });
 
@@ -87,7 +94,7 @@ export const createSqsInput = (
   // Validate configuration synchronously at creation time
   Effect.runSync(
     validate(SqsInputConfigSchema, config, "SQS Input configuration").pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.fail(new SqsInputError(error.message, error.category, error)),
       ),
     ),
@@ -221,17 +228,14 @@ export const createSqsInput = (
   const pollBatch = Effect.gen(function* () {
     yield* Effect.logInfo("Polling SQS for messages...");
 
-    const [sqsMessages, pollDuration] =
-      yield* measureDuration(pollMessages());
+    const [sqsMessages, pollDuration] = yield* measureDuration(pollMessages());
 
     if (sqsMessages.length === 0) {
       yield* Effect.logDebug("No messages received, continuing to poll...");
       return [];
     }
 
-    yield* Effect.logDebug(
-      `Received ${sqsMessages.length} messages from SQS`,
-    );
+    yield* Effect.logDebug(`Received ${sqsMessages.length} messages from SQS`);
 
     // Convert messages. Deletion is deferred to the pipeline acknowledgement
     // after all downstream processing and output delivery succeeds.
@@ -256,7 +260,7 @@ export const createSqsInput = (
 
     return messages;
   }).pipe(
-    Effect.catchAll((error: SqsInputError) =>
+    Effect.catch((error: SqsInputError) =>
       Effect.gen(function* () {
         metrics.recordError();
         yield* Effect.logError(`SQS stream error: ${error}`);
@@ -269,11 +273,9 @@ export const createSqsInput = (
     ),
   );
 
-  // repeatEffectChunk emits an empty chunk on empty polls so finish-current
-  // haltWhenDeferred can observe the pull boundary and not start another receive.
-  const stream = Stream.repeatEffectChunk(
-    pollBatch.pipe(Effect.map(Chunk.fromIterable)),
-  );
+  // Effect 4 streams skip empty iterables. Check stop before each receive so
+  // an empty in-flight poll can finish without starting another destructive pull.
+  const stream = Stream.fromIterableEffectRepeat(stopBeforeNextPull(pollBatch));
 
   return {
     name: "sqs-input",

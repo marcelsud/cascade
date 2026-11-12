@@ -1,3 +1,4 @@
+import { Result } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 import { Cause, Effect, Exit, Option } from "effect";
 import { spawn } from "node:child_process";
@@ -72,10 +73,12 @@ const expectBuildFailure = async (
 
   expect(Exit.isFailure(exit)).toBe(true);
   if (Exit.isFailure(exit)) {
-    expect(Option.isSome(Cause.failureOption(exit.cause))).toBe(true);
-    expect(Option.isNone(Cause.dieOption(exit.cause))).toBe(true);
+    expect(Option.isSome(Cause.findErrorOption(exit.cause))).toBe(true);
+    expect(Option.isNone(Result.getSuccess(Cause.findDefect(exit.cause)))).toBe(
+      true,
+    );
 
-    const failure = Option.getOrThrow(Cause.failureOption(exit.cause));
+    const failure = Option.getOrThrow(Cause.findErrorOption(exit.cause));
     expect(failure).toBeInstanceOf(BuildError);
     expect(failure.message).toContain(messageSubstring);
   }
@@ -210,14 +213,18 @@ describe("pipeline-builder input construction errors", () => {
 
       expect(Exit.isFailure(exit)).toBe(true);
       if (Exit.isFailure(exit)) {
-        expect(Option.isSome(Cause.failureOption(exit.cause))).toBe(true);
-        expect(Option.isNone(Cause.dieOption(exit.cause))).toBe(true);
+        expect(Option.isSome(Cause.findErrorOption(exit.cause))).toBe(true);
+        expect(
+          Option.isNone(Result.getSuccess(Cause.findDefect(exit.cause))),
+        ).toBe(true);
 
-        const failure = Option.getOrThrow(Cause.failureOption(exit.cause));
+        const failure = Option.getOrThrow(Cause.findErrorOption(exit.cause));
         expect(failure).toBeInstanceOf(BuildError);
         expect(failure.message).toContain("127.0.0.1");
         expect(failure.message).toContain(String(port));
-        expect(failure.message.toLowerCase()).toMatch(/eaddrinuse|in use|failed to bind/);
+        expect(failure.message.toLowerCase()).toMatch(
+          /eaddrinuse|in use|failed to bind/,
+        );
       }
     } finally {
       await new Promise<void>((resolve, reject) => {
@@ -248,12 +255,16 @@ describe("pipeline-builder input construction errors", () => {
 
     expect(Exit.isFailure(exit)).toBe(true);
     if (Exit.isFailure(exit)) {
-      expect(Option.isSome(Cause.failureOption(exit.cause))).toBe(true);
-      expect(Option.isNone(Cause.dieOption(exit.cause))).toBe(true);
+      expect(Option.isSome(Cause.findErrorOption(exit.cause))).toBe(true);
+      expect(
+        Option.isNone(Result.getSuccess(Cause.findDefect(exit.cause))),
+      ).toBe(true);
 
-      const failure = Option.getOrThrow(Cause.failureOption(exit.cause));
+      const failure = Option.getOrThrow(Cause.findErrorOption(exit.cause));
       expect(failure).toBeInstanceOf(BuildError);
-      expect(failure.message).toContain("Invalid assert processor configuration");
+      expect(failure.message).toContain(
+        "Invalid assert processor configuration",
+      );
       expect(failure.message).toContain("Assert Processor");
     }
 

@@ -66,7 +66,7 @@ export const createRedisPubSubOutput = (
       config,
       "Redis Pub/Sub Output configuration",
     ).pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.fail(
           new RedisPubSubOutputError(error.message, error.category, error),
         ),

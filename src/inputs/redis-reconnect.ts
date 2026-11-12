@@ -22,17 +22,17 @@ export const withReconnect = <A, E, R>(
   Effect.gen(function* () {
     let attempt = 0;
     while (true) {
-      const result = yield* Effect.either(operation);
-      if (result._tag === "Right") return result.right;
-      if (!isIntermittentError(result.left)) {
-        return yield* Effect.fail(result.left);
+      const result = yield* Effect.result(operation);
+      if (result._tag === "Success") return result.success;
+      if (!isIntermittentError(result.failure)) {
+        return yield* Effect.fail(result.failure);
       }
 
       if (
         policy.maxReconnectAttempts !== undefined &&
         attempt >= policy.maxReconnectAttempts
       ) {
-        return yield* Effect.fail(result.left);
+        return yield* Effect.fail(result.failure);
       }
 
       attempt += 1;
@@ -41,7 +41,7 @@ export const withReconnect = <A, E, R>(
         policy.reconnectBackoffMs ?? 1_000,
         policy.maxBackoffMs,
       );
-      if (onRetry) yield* onRetry(result.left, attempt, delayMs);
+      if (onRetry) yield* onRetry(result.failure, attempt, delayMs);
       yield* Effect.sleep(`${delayMs} millis`);
     }
   });

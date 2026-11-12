@@ -12,7 +12,7 @@ export interface ComponentBuildContext {
 
 export interface ComponentDefinition<Config, Component> {
   readonly name: string;
-  readonly schema: Schema.Schema<Config, unknown, never>;
+  readonly schema: Schema.Codec<Config, unknown>;
   readonly build: (
     config: Config,
     context: ComponentBuildContext,
@@ -70,7 +70,9 @@ export class ComponentRegistry {
     return this.outputs.get(name);
   }
 
-  getSchemas(kind: ComponentKind): Readonly<Record<string, Schema.Schema.Any>> {
+  getSchemas(
+    kind: ComponentKind,
+  ): Readonly<Record<string, Schema.Codec<unknown, unknown>>> {
     const definitions = this.getDefinitions(kind);
     return Object.fromEntries(
       [...definitions].map(([name, definition]) => [name, definition.schema]),

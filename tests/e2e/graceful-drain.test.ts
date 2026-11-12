@@ -52,7 +52,7 @@ describe("graceful drain", () => {
       name: "slow-capture-output",
       send: (message) =>
         Effect.sleep(`${delayMs} millis`).pipe(
-          Effect.zipRight(output.send(message)),
+          Effect.andThen(output.send(message)),
         ),
       close: output.close,
       getMetrics: output.getMetrics,

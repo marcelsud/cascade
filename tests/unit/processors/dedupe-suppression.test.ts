@@ -25,7 +25,7 @@ vi.mock("effect", async (importOriginal) => {
       }
       return actual.Effect.gen(function* () {
         const value = yield* actual.Ref.get(ref);
-        yield* actual.Effect.yieldNow();
+        yield* actual.Effect.yieldNow;
         return value;
       });
     },
@@ -53,7 +53,7 @@ const makeMsg = (
 const runProcess = (
   processor: ReturnType<typeof createDedupeProcessor>,
   msg: Message,
-) => Effect.runPromise(Effect.either(processor.process(msg)));
+) => Effect.runPromise(Effect.result(processor.process(msg)));
 
 describe("Dedupe Suppression, First-Seen Pass-Through, and Expiry", () => {
   afterEach(() => {
@@ -67,9 +67,9 @@ describe("Dedupe Suppression, First-Seen Pass-Through, and Expiry", () => {
 
       const result = await runProcess(processor, msg);
 
-      expect(result._tag).toBe("Right");
-      if (result._tag === "Right") {
-        expect(result.right).toBe(msg);
+      expect(result._tag).toBe("Success");
+      if (result._tag === "Success") {
+        expect(result.success).toBe(msg);
       }
     });
 
@@ -83,12 +83,12 @@ describe("Dedupe Suppression, First-Seen Pass-Through, and Expiry", () => {
       const r2 = await runProcess(processor, msg2);
       const r3 = await runProcess(processor, msg3);
 
-      expect(r1._tag).toBe("Right");
-      expect(r2._tag).toBe("Right");
-      expect(r3._tag).toBe("Right");
-      if (r1._tag === "Right") expect(r1.right).toBe(msg1);
-      if (r2._tag === "Right") expect(r2.right).toBe(msg2);
-      if (r3._tag === "Right") expect(r3.right).toBe(msg3);
+      expect(r1._tag).toBe("Success");
+      expect(r2._tag).toBe("Success");
+      expect(r3._tag).toBe("Success");
+      if (r1._tag === "Success") expect(r1.success).toBe(msg1);
+      if (r2._tag === "Success") expect(r2.success).toBe(msg2);
+      if (r3._tag === "Success") expect(r3.success).toBe(msg3);
     });
 
     it("should record first-seen miss in metrics", async () => {
@@ -113,12 +113,12 @@ describe("Dedupe Suppression, First-Seen Pass-Through, and Expiry", () => {
       const r1 = await runProcess(processor, msg1);
       const r2 = await runProcess(processor, msg2);
 
-      expect(r1._tag).toBe("Right");
-      if (r1._tag === "Right") expect(r1.right).toBe(msg1);
+      expect(r1._tag).toBe("Success");
+      if (r1._tag === "Success") expect(r1.success).toBe(msg1);
 
-      expect(r2._tag).toBe("Right");
-      if (r2._tag === "Right") {
-        expect(r2.right).toEqual([]);
+      expect(r2._tag).toBe("Success");
+      if (r2._tag === "Success") {
+        expect(r2.success).toEqual([]);
       }
     });
 
@@ -134,12 +134,12 @@ describe("Dedupe Suppression, First-Seen Pass-Through, and Expiry", () => {
       const r2 = await runProcess(processor, dup2);
       const r3 = await runProcess(processor, dup3);
 
-      expect(r0._tag).toBe("Right");
-      if (r0._tag === "Right") expect(r0.right).toBe(first);
+      expect(r0._tag).toBe("Success");
+      if (r0._tag === "Success") expect(r0.success).toBe(first);
 
       for (const r of [r1, r2, r3]) {
-        expect(r._tag).toBe("Right");
-        if (r._tag === "Right") expect(r.right).toEqual([]);
+        expect(r._tag).toBe("Success");
+        if (r._tag === "Success") expect(r.success).toEqual([]);
       }
     });
 
@@ -156,16 +156,16 @@ describe("Dedupe Suppression, First-Seen Pass-Through, and Expiry", () => {
       const rb2 = await runProcess(processor, b2);
 
       // First-seen for both keys pass through
-      expect(ra1._tag).toBe("Right");
-      if (ra1._tag === "Right") expect(ra1.right).toBe(a1);
-      expect(rb1._tag).toBe("Right");
-      if (rb1._tag === "Right") expect(rb1.right).toBe(b1);
+      expect(ra1._tag).toBe("Success");
+      if (ra1._tag === "Success") expect(ra1.success).toBe(a1);
+      expect(rb1._tag).toBe("Success");
+      if (rb1._tag === "Success") expect(rb1.success).toBe(b1);
 
       // Duplicates suppressed
-      expect(ra2._tag).toBe("Right");
-      if (ra2._tag === "Right") expect(ra2.right).toEqual([]);
-      expect(rb2._tag).toBe("Right");
-      if (rb2._tag === "Right") expect(rb2.right).toEqual([]);
+      expect(ra2._tag).toBe("Success");
+      if (ra2._tag === "Success") expect(ra2.success).toEqual([]);
+      expect(rb2._tag).toBe("Success");
+      if (rb2._tag === "Success") expect(rb2.success).toEqual([]);
     });
 
     it("should track dedupe hit metrics", async () => {
@@ -190,11 +190,11 @@ describe("Dedupe Suppression, First-Seen Pass-Through, and Expiry", () => {
       const r1 = await runProcess(processor, msg1);
       const r2 = await runProcess(processor, msg2);
 
-      expect(r1._tag).toBe("Right");
-      if (r1._tag === "Right") expect(r1.right).toBe(msg1);
+      expect(r1._tag).toBe("Success");
+      if (r1._tag === "Success") expect(r1.success).toBe(msg1);
 
-      expect(r2._tag).toBe("Right");
-      if (r2._tag === "Right") expect(r2.right).toEqual([]);
+      expect(r2._tag).toBe("Success");
+      if (r2._tag === "Success") expect(r2.success).toEqual([]);
     });
 
     it("should suppress duplicate using nested payload key", async () => {
@@ -205,11 +205,11 @@ describe("Dedupe Suppression, First-Seen Pass-Through, and Expiry", () => {
       const r1 = await runProcess(processor, msg1);
       const r2 = await runProcess(processor, msg2);
 
-      expect(r1._tag).toBe("Right");
-      if (r1._tag === "Right") expect(r1.right).toBe(msg1);
+      expect(r1._tag).toBe("Success");
+      if (r1._tag === "Success") expect(r1.success).toBe(msg1);
 
-      expect(r2._tag).toBe("Right");
-      if (r2._tag === "Right") expect(r2.right).toEqual([]);
+      expect(r2._tag).toBe("Success");
+      if (r2._tag === "Success") expect(r2.success).toEqual([]);
     });
 
     it("should return empty array (not undefined/null) for suppressed messages", async () => {
@@ -220,10 +220,10 @@ describe("Dedupe Suppression, First-Seen Pass-Through, and Expiry", () => {
       await runProcess(processor, msg1);
       const r = await runProcess(processor, msg2);
 
-      expect(r._tag).toBe("Right");
-      if (r._tag === "Right") {
-        expect(Array.isArray(r.right)).toBe(true);
-        expect(r.right as Message[]).toHaveLength(0);
+      expect(r._tag).toBe("Success");
+      if (r._tag === "Success") {
+        expect(Array.isArray(r.success)).toBe(true);
+        expect(r.success as Message[]).toHaveLength(0);
       }
     });
   });
@@ -240,16 +240,16 @@ describe("Dedupe Suppression, First-Seen Pass-Through, and Expiry", () => {
 
       // First message passes through
       const r1 = await runProcess(processor, msg1);
-      expect(r1._tag).toBe("Right");
-      if (r1._tag === "Right") expect(r1.right).toBe(msg1);
+      expect(r1._tag).toBe("Success");
+      if (r1._tag === "Success") expect(r1.success).toBe(msg1);
 
       // Wait for the window to expire
       await new Promise((resolve) => setTimeout(resolve, 80));
 
       // Same key should pass through again after expiry
       const r2 = await runProcess(processor, msg2);
-      expect(r2._tag).toBe("Right");
-      if (r2._tag === "Right") expect(r2.right).toBe(msg2);
+      expect(r2._tag).toBe("Success");
+      if (r2._tag === "Success") expect(r2.success).toBe(msg2);
     });
 
     it("should still suppress duplicates within the window before expiry", async () => {
@@ -264,11 +264,11 @@ describe("Dedupe Suppression, First-Seen Pass-Through, and Expiry", () => {
       // Immediately process duplicate (well within window)
       const r2 = await runProcess(processor, msg2);
 
-      expect(r1._tag).toBe("Right");
-      if (r1._tag === "Right") expect(r1.right).toBe(msg1);
+      expect(r1._tag).toBe("Success");
+      if (r1._tag === "Success") expect(r1.success).toBe(msg1);
 
-      expect(r2._tag).toBe("Right");
-      if (r2._tag === "Right") expect(r2.right).toEqual([]);
+      expect(r2._tag).toBe("Success");
+      if (r2._tag === "Success") expect(r2.success).toEqual([]);
     });
 
     it("should track metrics correctly across expiry boundary", async () => {
@@ -317,10 +317,10 @@ describe("Dedupe Suppression, First-Seen Pass-Through, and Expiry", () => {
       const ra2 = await runProcess(processor, a2);
       const rb2 = await runProcess(processor, b2);
 
-      expect(ra2._tag).toBe("Right");
-      if (ra2._tag === "Right") expect(ra2.right).toBe(a2);
-      expect(rb2._tag).toBe("Right");
-      if (rb2._tag === "Right") expect(rb2.right).toBe(b2);
+      expect(ra2._tag).toBe("Success");
+      if (ra2._tag === "Success") expect(ra2.success).toBe(a2);
+      expect(rb2._tag).toBe("Success");
+      if (rb2._tag === "Success") expect(rb2.success).toBe(b2);
 
       metrics = await Effect.runPromise(processor.getMetrics());
       expect(metrics.activeKeys).toBe(2);
@@ -340,8 +340,8 @@ describe("Dedupe Suppression, First-Seen Pass-Through, and Expiry", () => {
       // Eviction + insertion happen in same process call
       const msg2 = makeMsg("m2", { orderId: "x" });
       const r = await runProcess(processor, msg2);
-      expect(r._tag).toBe("Right");
-      if (r._tag === "Right") expect(r.right).toBe(msg2);
+      expect(r._tag).toBe("Success");
+      if (r._tag === "Success") expect(r.success).toBe(msg2);
     });
   });
 
@@ -362,7 +362,7 @@ describe("Dedupe Suppression, First-Seen Pass-Through, and Expiry", () => {
 
       for (const msg of msgs) {
         const r = await runProcess(processor, msg);
-        if (r._tag === "Right") results.push(r.right);
+        if (r._tag === "Success") results.push(r.success);
       }
 
       // 4 unique, 3 duplicates
@@ -386,11 +386,11 @@ describe("Dedupe Suppression, First-Seen Pass-Through, and Expiry", () => {
 
       const r = await runProcess(processor, msg);
 
-      expect(r._tag).toBe("Left");
-      if (r._tag === "Left") {
-        expect(r.left).toBeInstanceOf(DedupeKeyExtractionError);
-        expect(r.left.keyPath).toBe("missing.field");
-        expect(r.left.messageId).toBe("m1");
+      expect(r._tag).toBe("Failure");
+      if (r._tag === "Failure") {
+        expect(r.failure).toBeInstanceOf(DedupeKeyExtractionError);
+        expect(r.failure.keyPath).toBe("missing.field");
+        expect(r.failure.messageId).toBe("m1");
       }
     });
 
@@ -416,11 +416,11 @@ describe("Dedupe Suppression, First-Seen Pass-Through, and Expiry", () => {
       const rGood1 = await runProcess(processor, good1);
       const rGood2 = await runProcess(processor, good2);
 
-      expect(rBad._tag).toBe("Left");
-      expect(rGood1._tag).toBe("Right");
-      if (rGood1._tag === "Right") expect(rGood1.right).toBe(good1);
-      expect(rGood2._tag).toBe("Right");
-      if (rGood2._tag === "Right") expect(rGood2.right).toEqual([]);
+      expect(rBad._tag).toBe("Failure");
+      expect(rGood1._tag).toBe("Success");
+      if (rGood1._tag === "Success") expect(rGood1.success).toBe(good1);
+      expect(rGood2._tag).toBe("Success");
+      if (rGood2._tag === "Success") expect(rGood2.success).toEqual([]);
 
       const metrics = await Effect.runPromise(processor.getMetrics());
       expect(metrics.extractionFailures).toBe(1);

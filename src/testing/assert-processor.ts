@@ -34,10 +34,12 @@ export const AssertProcessorConfigSchema = Schema.Struct({
   error: Schema.optional(Schema.String),
   logPassing: Schema.optional(Schema.Boolean),
 }).pipe(
-  Schema.filter(hasEffectiveAssertCheck, {
-    message: () =>
-      "Assert Processor requires at least one effective check: a non-blank 'condition' or at least one non-blank 'hasFields' path.",
-  }),
+  Schema.check(
+    Schema.makeFilter(hasEffectiveAssertCheck, {
+      message:
+        "Assert Processor requires at least one effective check: a non-blank 'condition' or at least one non-blank 'hasFields' path.",
+    }),
+  ),
 );
 
 export class AssertProcessorConfigError extends Error {

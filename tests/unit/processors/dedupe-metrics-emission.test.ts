@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { Effect, Logger, HashMap } from "effect";
+import { Effect, Logger, References } from "effect";
 import * as S from "effect/Schema";
 import { PipelineConfigSchema } from "../../../src/core/config-loader.js";
 import { buildPipeline } from "../../../src/core/pipeline-builder.js";
@@ -12,7 +12,7 @@ import { run } from "../../../src/core/pipeline.js";
  */
 interface CapturedLog {
   readonly message: unknown;
-  readonly annotations: HashMap.HashMap<string, unknown>;
+  readonly annotations: Readonly<Record<string, unknown>>;
 }
 
 const extractComponentMetricsFields = (
@@ -43,12 +43,8 @@ const dedupeComponentMetrics = (
       continue;
     }
     // Prefer the structured payload's component; fall back to fiber annotations.
-    const annotationComponent = HashMap.get(log.annotations, "component");
-    const component =
-      fields.component ??
-      (annotationComponent._tag === "Some"
-        ? annotationComponent.value
-        : undefined);
+    const annotationComponent = log.annotations.component;
+    const component = fields.component ?? annotationComponent;
     if (component === "dedupe-processor") {
       snapshots.push(fields);
     }
@@ -59,12 +55,15 @@ const dedupeComponentMetrics = (
 describe("Dedupe processor component metrics emission", () => {
   it("emits one coherent Component metrics snapshot via buildPipeline + run after 100 same-key messages", async () => {
     const logs: CapturedLog[] = [];
-    const logger = Logger.make<unknown, void>(({ message, annotations }) => {
-      logs.push({ message, annotations });
+    const logger = Logger.make<unknown, void>(({ message, fiber }) => {
+      logs.push({
+        message,
+        annotations: fiber.getRef(References.CurrentLogAnnotations),
+      });
     });
 
     const config = await Effect.runPromise(
-      S.decodeUnknown(PipelineConfigSchema)({
+      S.decodeUnknownEffect(PipelineConfigSchema)({
         input: {
           generate: {
             count: 100,
@@ -82,9 +81,7 @@ describe("Dedupe processor component metrics emission", () => {
     // Neither this test nor application code may call getMetrics / emitDedupeMetrics.
     const pipeline = await Effect.runPromise(buildPipeline(config));
     const result = await Effect.runPromise(
-      run(pipeline).pipe(
-        Effect.provide(Logger.replace(Logger.defaultLogger, logger)),
-      ),
+      run(pipeline).pipe(Effect.provide(Logger.layer([logger]))),
     );
 
     expect(result.success).toBe(true);

@@ -68,7 +68,7 @@ e2e/
 ## Prerequisites
 
 - Docker and Docker Compose
-- Node.js 18+
+- Node.js 24+
 - Built project (`npm run build`)
 
 ## Test Infrastructure

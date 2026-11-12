@@ -97,13 +97,15 @@ When the user requests a durable behavior change, record it here or in the relev
 
 **Cascade** is a declarative streaming library for building type-safe data pipelines using YAML configuration. It's inspired by Apache Camel and Benthos, but built with TypeScript and Effect.js for full type safety and functional programming.
 
-- **Tech Stack**: TypeScript, Effect.js, @effect/schema, @effect/platform-node
+- **Tech Stack**: TypeScript 5.9+, Effect 4.1.4, effect/Schema, @effect/platform-node 4.1.4
+- **Development runtime**: Node.js 24+; Bun installs the frozen lockfile and builds standalone binaries.
+- Keep Effect and platform packages at the same exact version. See `docs/effect-4.md` for API migration contracts.
 - **Distribution**: Standalone compiled binary (`cascade`)
 - **Usage**: CLI tool (standalone binary)
 
 ### Key Features
 - YAML-based pipeline configuration
-- Type-safe with Effect.js monads and @effect/schema validation
+- Type-safe with Effect.js monads and effect/Schema validation
 - HTTP input (webhook server) and output (API client) support
 - Streaming with backpressure control
 - Built-in Dead Letter Queue (DLQ) support
@@ -490,7 +492,7 @@ All components follow the same pattern:
 
 ```typescript
 import { Effect } from "effect"
-import { Schema } from "effect/Schema"
+import * as Schema from "effect/Schema"
 
 // 1. Define config schema
 const MyComponentConfig = Schema.Struct({
@@ -499,7 +501,7 @@ const MyComponentConfig = Schema.Struct({
 })
 
 // 2. Create component factory
-export const createMyComponent = (config: Schema.Schema.Type<typeof MyComponentConfig>) =>
+export const createMyComponent = (config: typeof MyComponentConfig.Type) =>
   Effect.gen(function* () {
     // Setup resources
     const client = yield* createClient(config.url)
@@ -542,7 +544,7 @@ const Config = Schema.Struct({
 })
 
 // Decode and validate
-const decode = Schema.decodeUnknown(Config)
+const decode = Schema.decodeUnknownEffect(Config)
 const config = yield* decode(rawData)
 ```
 

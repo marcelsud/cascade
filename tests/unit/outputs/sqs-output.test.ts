@@ -4,7 +4,7 @@ import {
   Exit,
   Fiber,
   Logger,
-  LogLevel,
+  References,
   Schedule,
   Stream,
 } from "effect";
@@ -602,8 +602,8 @@ describe("SQSOutput", () => {
       });
       return Effect.runPromise(
         effect.pipe(
-          Logger.withMinimumLogLevel(LogLevel.Info),
-          Effect.provide(Logger.replace(Logger.defaultLogger, logger)),
+          Effect.provideService(References.MinimumLogLevel, "Info"),
+          Effect.provide(Logger.layer([logger])),
         ),
       ).then(() => messages);
     };

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import * as S from "effect/Schema";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -22,14 +22,16 @@ const validOutput = { capture: {} };
 const tempDirs: string[] = [];
 
 const decode = (config: unknown) =>
-  Effect.runSync(Effect.either(S.decodeUnknown(PipelineConfigSchema)(config)));
+  Effect.runSync(
+    Effect.result(S.decodeUnknownEffect(PipelineConfigSchema)(config)),
+  );
 
 const expectValidationError = (config: unknown, message: string) => {
   const result = decode(config);
 
-  expect(Either.isLeft(result)).toBe(true);
-  if (Either.isLeft(result)) {
-    expect(String(result.left)).toContain(message);
+  expect(Result.isFailure(result)).toBe(true);
+  if (Result.isFailure(result)) {
+    expect(String(result.failure)).toContain(message);
   }
 };
 
@@ -38,7 +40,7 @@ const loadYamlConfig = async (config: unknown) => {
   tempDirs.push(dir);
   const configPath = path.join(dir, "config.yaml");
   await fs.writeFile(configPath, yaml.stringify(config), "utf8");
-  return Effect.runPromise(Effect.either(loadConfig(configPath)));
+  return Effect.runPromise(Effect.result(loadConfig(configPath)));
 };
 
 afterEach(async () => {
@@ -55,7 +57,7 @@ describe("component selection validation", () => {
       output: validOutput,
     });
 
-    expect(Either.isRight(result)).toBe(true);
+    expect(Result.isSuccess(result)).toBe(true);
   });
 
   it("rejects an input with no component", () => {
@@ -71,9 +73,9 @@ describe("component selection validation", () => {
       output: validOutput,
     });
 
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) {
-      expect(result.left.message).toContain(
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
+      expect(result.failure.message).toContain(
         "Input must configure exactly one component; found: none — check for unknown or misspelled component names",
       );
     }
@@ -92,12 +94,12 @@ describe("component selection validation", () => {
         output: validOutput,
       });
 
-      expect(Either.isLeft(result)).toBe(true);
-      if (Either.isLeft(result)) {
-        expect(result.left).toBeInstanceOf(ConfigValidationError);
-        if (result.left instanceof ConfigValidationError) {
-          expect(result.left.message).toContain("Assert Processor");
-          expect(result.left.message).toContain(
+      expect(Result.isFailure(result)).toBe(true);
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(ConfigValidationError);
+        if (result.failure instanceof ConfigValidationError) {
+          expect(result.failure.message).toContain("Assert Processor");
+          expect(result.failure.message).toContain(
             "at least one non-blank 'hasFields' path",
           );
         }

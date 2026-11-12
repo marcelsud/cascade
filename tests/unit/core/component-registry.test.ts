@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { Cause, Effect, Either, Exit, Option, Stream } from "effect";
+import { Cause, Effect, Result, Exit, Option, Stream } from "effect";
 import * as Schema from "effect/Schema";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -128,13 +128,13 @@ dlq:
         }),
     });
     const schema = createPipelineConfigSchema(registry);
-    const result = Schema.decodeUnknownEither(schema)({
+    const result = Schema.decodeUnknownResult(schema)({
       input: { generate: { count: 1, template: {} } },
       pipeline: { processors: [{ suffix: { value: 42 } }] },
       output: { capture: {} },
     });
 
-    expect(result._tag).toBe("Left");
+    expect(result._tag).toBe("Failure");
   });
 
   it("rejects duplicate registrations within a component kind", () => {
@@ -193,13 +193,13 @@ dlq:
     );
 
     const result = await Effect.runPromise(
-      Effect.either(loadConfig(configPath, registry)),
+      Effect.result(loadConfig(configPath, registry)),
     );
 
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) {
-      expect(result.left).toBeInstanceOf(ConfigValidationError);
-      expect(result.left.message).toContain(
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
+      expect(result.failure).toBeInstanceOf(ConfigValidationError);
+      expect(result.failure.message).toContain(
         "the name is reserved by a built-in component",
       );
     }
@@ -222,12 +222,12 @@ dlq:
     });
 
     const result = await Effect.runPromise(
-      Effect.either(buildPipeline(config)),
+      Effect.result(buildPipeline(config)),
     );
 
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) {
-      expect(result.left.message).toBe(
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
+      expect(result.failure.message).toBe(
         "Unknown input component 'values' — is the registry passed to buildPipeline?",
       );
     }
@@ -237,7 +237,7 @@ dlq:
     const registry = createComponentRegistry().registerProcessor({
       name: "assert_wrap",
       schema: Schema.Struct({
-        child: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+        child: Schema.Record(Schema.String, Schema.Unknown),
       }),
       build: (config) =>
         Effect.succeed(createAssertProcessor(config.child as never)),
@@ -255,10 +255,12 @@ dlq:
 
     expect(Exit.isFailure(exit)).toBe(true);
     if (Exit.isFailure(exit)) {
-      expect(Option.isSome(Cause.failureOption(exit.cause))).toBe(true);
-      expect(Option.isNone(Cause.dieOption(exit.cause))).toBe(true);
+      expect(Option.isSome(Cause.findErrorOption(exit.cause))).toBe(true);
+      expect(
+        Option.isNone(Result.getSuccess(Cause.findDefect(exit.cause))),
+      ).toBe(true);
 
-      const failure = Option.getOrThrow(Cause.failureOption(exit.cause));
+      const failure = Option.getOrThrow(Cause.findErrorOption(exit.cause));
       expect(failure).toBeInstanceOf(BuildError);
       expect(failure.message).toContain(
         "Failed to build registered component 'assert_wrap'",
@@ -274,7 +276,7 @@ dlq:
     const registry = createComponentRegistry().registerProcessor({
       name: "assert_via_context",
       schema: Schema.Struct({
-        child: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+        child: Schema.Record(Schema.String, Schema.Unknown),
       }),
       build: (config, context) =>
         context.buildProcessor({ assert: config.child }),
@@ -292,10 +294,12 @@ dlq:
 
     expect(Exit.isFailure(exit)).toBe(true);
     if (Exit.isFailure(exit)) {
-      expect(Option.isSome(Cause.failureOption(exit.cause))).toBe(true);
-      expect(Option.isNone(Cause.dieOption(exit.cause))).toBe(true);
+      expect(Option.isSome(Cause.findErrorOption(exit.cause))).toBe(true);
+      expect(
+        Option.isNone(Result.getSuccess(Cause.findDefect(exit.cause))),
+      ).toBe(true);
 
-      const failure = Option.getOrThrow(Cause.failureOption(exit.cause));
+      const failure = Option.getOrThrow(Cause.findErrorOption(exit.cause));
       expect(failure).toBeInstanceOf(BuildError);
       expect(failure.message).toContain(
         "Failed to build registered component 'assert_via_context'",

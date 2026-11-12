@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Chunk, Effect, Either, Option, Stream } from "effect";
+import { Effect, Result, Option, Stream } from "effect";
 import Redis from "ioredis";
 import {
   createRedisStreamsInput,
@@ -290,7 +290,7 @@ describe("RedisStreamsInput", () => {
       const chunk = await Effect.runPromise(
         Stream.runCollect(input.stream.pipe(Stream.take(2))),
       );
-      const messages = Chunk.toReadonlyArray(chunk);
+      const messages = Array.from(chunk);
 
       expect(messages).toHaveLength(2);
       expect(messages[0]?.content).toEqual({ n: 1 });
@@ -636,14 +636,16 @@ describe("RedisStreamsInput", () => {
       });
 
       const result = await Effect.runPromise(
-        Effect.either(Stream.runHead(input.stream)),
+        Effect.result(Stream.runHead(input.stream)),
       );
 
       expect(xread).toHaveBeenCalledTimes(1);
-      expect(Either.isLeft(result)).toBe(true);
-      if (Either.isLeft(result)) {
-        expect(result.left).toBeInstanceOf(RedisStreamsInputError);
-        expect((result.left as RedisStreamsInputError).category).toBe("fatal");
+      expect(Result.isFailure(result)).toBe(true);
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(RedisStreamsInputError);
+        expect((result.failure as RedisStreamsInputError).category).toBe(
+          "fatal",
+        );
       }
     });
 
@@ -681,15 +683,17 @@ describe("RedisStreamsInput", () => {
       });
 
       const result = await Effect.runPromise(
-        Effect.either(Stream.runHead(input.stream)),
+        Effect.result(Stream.runHead(input.stream)),
       );
 
       expect(xgroup).toHaveBeenCalledTimes(1);
       expect(xreadgroup).not.toHaveBeenCalled();
-      expect(Either.isLeft(result)).toBe(true);
-      if (Either.isLeft(result)) {
-        expect(result.left).toBeInstanceOf(RedisStreamsInputError);
-        expect((result.left as RedisStreamsInputError).category).toBe("fatal");
+      expect(Result.isFailure(result)).toBe(true);
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(RedisStreamsInputError);
+        expect((result.failure as RedisStreamsInputError).category).toBe(
+          "fatal",
+        );
       }
     });
 
@@ -727,15 +731,17 @@ describe("RedisStreamsInput", () => {
       });
 
       const result = await Effect.runPromise(
-        Effect.either(Stream.runHead(input.stream)),
+        Effect.result(Stream.runHead(input.stream)),
       );
 
       expect(xgroup).toHaveBeenCalledTimes(1);
       expect(xreadgroup).toHaveBeenCalledTimes(1);
-      expect(Either.isLeft(result)).toBe(true);
-      if (Either.isLeft(result)) {
-        expect(result.left).toBeInstanceOf(RedisStreamsInputError);
-        expect((result.left as RedisStreamsInputError).category).toBe("fatal");
+      expect(Result.isFailure(result)).toBe(true);
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(RedisStreamsInputError);
+        expect((result.failure as RedisStreamsInputError).category).toBe(
+          "fatal",
+        );
       }
     });
   });
@@ -900,7 +906,9 @@ describe("RedisStreamsInput", () => {
 });
 
 const extractMessageMetadataSection = (markdown: string): string => {
-  const match = markdown.match(/## Message Metadata\n([\s\S]*?)(?=\n## |\n*$)/);
+  const match = markdown.match(
+    /## Message Metadata\r?\n([\s\S]*?)(?=\r?\n## |\n*$)/,
+  );
   if (!match) {
     throw new Error("Message Metadata section not found");
   }

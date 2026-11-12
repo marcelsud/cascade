@@ -45,7 +45,7 @@ export class StdoutOutputError extends ComponentError {
  * Validation schema for Stdout Output configuration
  */
 export const StdoutOutputConfigSchema = Schema.Struct({
-  format: Schema.optional(Schema.Literal("content", "message")),
+  format: Schema.optional(Schema.Literals(["content", "message"])),
 });
 
 /**
@@ -62,7 +62,7 @@ export const createStdoutOutput = (
       config,
       "Stdout Output configuration",
     ).pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.fail(
           new StdoutOutputError(error.message, error.category, error),
         ),

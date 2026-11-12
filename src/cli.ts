@@ -2,7 +2,7 @@
 /**
  * CLI entry point for running pipelines
  */
-import { Effect, Logger, LogLevel } from "effect";
+import { Effect, Logger, References } from "effect";
 import { makeShutdownController, run } from "./core/pipeline.js";
 import {
   loadAndBuildPipeline,
@@ -102,10 +102,10 @@ const installPipelineSignalHandlers = (shutdown: {
     const effect =
       signalCount === 1
         ? Effect.log(`Received ${signal}; draining pipeline...`).pipe(
-            Effect.zipRight(shutdown.request),
+            Effect.andThen(shutdown.request),
           )
         : Effect.logError(`Received ${signal} again; forcing shutdown`).pipe(
-            Effect.zipRight(shutdown.requestForce),
+            Effect.andThen(shutdown.requestForce),
           );
     Effect.runFork(effect);
   };
@@ -277,7 +277,7 @@ const mainProgram = Effect.gen(function* () {
 });
 
 const main = mainProgram.pipe(
-  Effect.catchAll((error) =>
+  Effect.catch((error) =>
     Effect.gen(function* () {
       yield* Effect.logError(`Fatal error: ${formatCliFatalError(error)}`);
       return yield* Effect.fail(error);
@@ -291,10 +291,11 @@ const main = mainProgram.pipe(
 // exits before processed/failed summaries are written (HTTP input E2E).
 const debugMode = process.argv.includes("--debug");
 const program = main.pipe(
-  Logger.withMinimumLogLevel(debugMode ? LogLevel.Debug : LogLevel.Info),
-  Effect.provide(
-    Logger.replace(Logger.defaultLogger, Logger.prettyLoggerDefault),
+  Effect.provideService(
+    References.MinimumLogLevel,
+    debugMode ? "Debug" : "Info",
   ),
+  Effect.provide(Logger.layer([Logger.consolePretty(), Logger.tracerLogger])),
 );
 
 // Force process exit after the pipeline finishes. Component transports

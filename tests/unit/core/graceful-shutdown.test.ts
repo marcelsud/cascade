@@ -32,7 +32,7 @@ describe("graceful pipeline shutdown", () => {
             return message;
           }),
         ).pipe(Stream.concat(Stream.never));
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           run(
             {
               name: "finish-current-pull-test",
@@ -84,7 +84,7 @@ describe("graceful pipeline shutdown", () => {
             return createMessage("interruptible-pull");
           }),
         ).pipe(Stream.concat(Stream.never));
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           run(
             {
               name: "interrupt-pull-test",
@@ -147,7 +147,7 @@ describe("graceful pipeline shutdown", () => {
             }),
         };
 
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           run(
             {
               name: "drain-test",
@@ -265,7 +265,7 @@ describe("graceful pipeline shutdown", () => {
       Effect.gen(function* () {
         const outputStarted = yield* Deferred.make<void>();
         const shutdown = yield* makeShutdownController();
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           run(
             {
               name: "force-test",
@@ -275,7 +275,7 @@ describe("graceful pipeline shutdown", () => {
                 name: "blocked",
                 send: () =>
                   Deferred.succeed(outputStarted, undefined).pipe(
-                    Effect.zipRight(Effect.never),
+                    Effect.andThen(Effect.never),
                   ),
               },
             },
@@ -299,7 +299,7 @@ describe("graceful pipeline shutdown", () => {
       Effect.gen(function* () {
         const outputStarted = yield* Deferred.make<void>();
         const shutdown = yield* makeShutdownController();
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           run(
             {
               name: "force-only-test",
@@ -309,7 +309,7 @@ describe("graceful pipeline shutdown", () => {
                 name: "blocked",
                 send: () =>
                   Deferred.succeed(outputStarted, undefined).pipe(
-                    Effect.zipRight(Effect.never),
+                    Effect.andThen(Effect.never),
                   ),
               },
             },
@@ -329,7 +329,7 @@ describe("graceful pipeline shutdown", () => {
 
   it("validates and maps shutdown_timeout_ms", async () => {
     const config = await Effect.runPromise(
-      S.decodeUnknown(PipelineConfigSchema)({
+      S.decodeUnknownEffect(PipelineConfigSchema)({
         input: { generate: { count: 1, template: { value: "test" } } },
         output: { capture: {} },
         shutdown_timeout_ms: 2_500,
@@ -339,14 +339,14 @@ describe("graceful pipeline shutdown", () => {
     expect(pipeline.shutdownTimeoutMs).toBe(2_500);
 
     const invalid = await Effect.runPromise(
-      Effect.either(
-        S.decodeUnknown(PipelineConfigSchema)({
+      Effect.result(
+        S.decodeUnknownEffect(PipelineConfigSchema)({
           input: { generate: { count: 1, template: { value: "test" } } },
           output: { capture: {} },
           shutdown_timeout_ms: 0,
         }),
       ),
     );
-    expect(invalid._tag).toBe("Left");
+    expect(invalid._tag).toBe("Failure");
   });
 });

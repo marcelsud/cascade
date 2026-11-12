@@ -11,7 +11,7 @@ export const runProcessorChain = <E, R>(
 ): Effect.Effect<Message[], E, R> =>
   Effect.reduce(
     processors,
-    Array.isArray(initial) ? [...initial] : [initial],
+    () => (Array.isArray(initial) ? [...initial] : [initial]),
     (messages, processor) =>
       Effect.forEach(messages, (message) => processor.process(message), {
         concurrency: 1,

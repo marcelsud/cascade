@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import * as S from "effect/Schema";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -24,13 +24,15 @@ const baseConfig = {
 const tempDirs: string[] = [];
 
 const decode = (config: unknown) =>
-  Effect.runSync(Effect.either(S.decodeUnknown(PipelineConfigSchema)(config)));
+  Effect.runSync(
+    Effect.result(S.decodeUnknownEffect(PipelineConfigSchema)(config)),
+  );
 
 const expectInvalid = (config: unknown, message?: string) => {
   const result = decode(config);
-  expect(Either.isLeft(result)).toBe(true);
-  if (message && Either.isLeft(result)) {
-    expect(String(result.left)).toContain(message);
+  expect(Result.isFailure(result)).toBe(true);
+  if (message && Result.isFailure(result)) {
+    expect(String(result.failure)).toContain(message);
   }
 };
 
@@ -39,7 +41,7 @@ const loadYamlConfig = async (config: unknown) => {
   tempDirs.push(dir);
   const configPath = path.join(dir, "config.yaml");
   await fs.writeFile(configPath, yaml.stringify(config), "utf8");
-  return Effect.runPromise(Effect.either(loadConfig(configPath)));
+  return Effect.runPromise(Effect.result(loadConfig(configPath)));
 };
 
 afterEach(async () => {
@@ -55,9 +57,9 @@ describe("DLQ pipeline configuration", () => {
       dlq: { output: { capture: {} } },
     });
 
-    expect(Either.isRight(result)).toBe(true);
-    if (Either.isRight(result)) {
-      expect(result.right.dlq?.max_retries).toBeUndefined();
+    expect(Result.isSuccess(result)).toBe(true);
+    if (Result.isSuccess(result)) {
+      expect(result.success.dlq?.max_retries).toBeUndefined();
     }
   });
 
@@ -74,7 +76,7 @@ describe("DLQ pipeline configuration", () => {
       },
     });
 
-    expect(Either.isRight(result)).toBe(true);
+    expect(Result.isSuccess(result)).toBe(true);
   });
 
   it.each([
@@ -102,10 +104,10 @@ describe("DLQ pipeline configuration", () => {
           retry_interval_ms: 25,
         },
       });
-      expect(Either.isRight(result)).toBe(true);
-      if (Either.isRight(result)) {
-        expect(result.right.dlq?.retry_schedule).toBe(retrySchedule);
-        expect(result.right.dlq?.retry_interval_ms).toBe(25);
+      expect(Result.isSuccess(result)).toBe(true);
+      if (Result.isSuccess(result)) {
+        expect(result.success.dlq?.retry_schedule).toBe(retrySchedule);
+        expect(result.success.dlq?.retry_interval_ms).toBe(25);
       }
     },
   );
@@ -135,10 +137,10 @@ describe("DLQ pipeline configuration", () => {
       },
     });
 
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) {
-      expect(result.left.message).toContain("max_retrys");
-      expect(result.left.message).toContain("is unexpected");
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
+      expect(result.failure.message).toContain("max_retrys");
+      expect(result.failure.message).toContain("Expected no excess property");
     }
   });
 
@@ -151,10 +153,10 @@ describe("DLQ pipeline configuration", () => {
       },
     });
 
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) {
-      expect(result.left.message).toContain("retry_shedule");
-      expect(result.left.message).toContain("is unexpected");
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
+      expect(result.failure.message).toContain("retry_shedule");
+      expect(result.failure.message).toContain("Expected no excess property");
     }
   });
 
@@ -182,7 +184,7 @@ describe("DLQ pipeline configuration", () => {
 
   it("leaves the primary output unchanged without DLQ configuration", async () => {
     const config = await Effect.runPromise(
-      S.decodeUnknown(PipelineConfigSchema)(baseConfig),
+      S.decodeUnknownEffect(PipelineConfigSchema)(baseConfig),
     );
     const pipeline = await Effect.runPromise(buildPipeline(config));
 
@@ -191,7 +193,7 @@ describe("DLQ pipeline configuration", () => {
 
   it("wraps the primary output when DLQ configuration is present", async () => {
     const config = await Effect.runPromise(
-      S.decodeUnknown(PipelineConfigSchema)({
+      S.decodeUnknownEffect(PipelineConfigSchema)({
         ...baseConfig,
         dlq: {
           max_retries: 0,
@@ -209,7 +211,7 @@ describe("DLQ pipeline configuration", () => {
 
   it("runs a successful pipeline through the DLQ-wrapped output", async () => {
     const config = await Effect.runPromise(
-      S.decodeUnknown(PipelineConfigSchema)({
+      S.decodeUnknownEffect(PipelineConfigSchema)({
         input: {
           generate: {
             count: 3,
@@ -233,7 +235,7 @@ describe("DLQ pipeline configuration", () => {
 
   it("forwards a failed HTTP output to the configured DLQ", async () => {
     const config = await Effect.runPromise(
-      S.decodeUnknown(PipelineConfigSchema)({
+      S.decodeUnknownEffect(PipelineConfigSchema)({
         input: {
           generate: {
             count: 1,

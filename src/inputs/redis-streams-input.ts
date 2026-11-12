@@ -1,3 +1,4 @@
+import { stopBeforeNextPull } from "../core/intake-control.js";
 /**
  * Redis Streams Input - Consumes messages from Redis Streams
  */
@@ -77,10 +78,12 @@ export const RedisStreamsInputConfigSchema = Schema.Struct({
   ...redisHostEndpointSchemaFields,
   stream: NonEmptyString,
   ...redisAuthSchemaFields,
-  mode: Schema.optional(Schema.Literal("simple", "consumer-group")),
+  mode: Schema.optional(Schema.Literals(["simple", "consumer-group"])),
   consumerGroup: Schema.optional(NonEmptyString),
   consumerName: Schema.optional(NonEmptyString),
-  blockMs: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
+  blockMs: Schema.optional(
+    Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
+  ),
   count: Schema.optional(PositiveInt),
   startId: Schema.optional(NonEmptyString),
   ...redisClientSchemaFields,
@@ -184,7 +187,7 @@ const withStreamReconnect = <A, E extends { readonly message: string }>(
     },
     (error, attempt, delayMs) =>
       Effect.sync(() => metrics.recordError()).pipe(
-        Effect.zipRight(
+        Effect.andThen(
           Effect.logWarning(
             `Redis stream reconnect ${attempt} in ${delayMs}ms: ${error.message}`,
           ),
@@ -205,7 +208,7 @@ export const createRedisStreamsInput = (
       config,
       "Redis Streams Input configuration",
     ).pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.fail(
           new RedisStreamsInputError(error.message, error.category, error),
         ),
@@ -226,7 +229,7 @@ export const createRedisStreamsInput = (
    */
   if (mode === "simple") {
     // Use Ref for immutable state management
-    const lastIdRef = Ref.unsafeMake(startId);
+    const lastIdRef = Ref.makeUnsafe(startId);
     const metrics = new MetricsAccumulator("redis-streams-input");
     let messageCount = 0;
 
@@ -293,9 +296,9 @@ export const createRedisStreamsInput = (
       return messages;
     });
     const resilientRead = withStreamReconnect(readOnce, config, metrics);
-    const stream = Stream.repeatEffect(resilientRead).pipe(
-      Stream.flatMap(Stream.fromIterable),
-    );
+    const stream = Stream.fromEffectRepeat(
+      stopBeforeNextPull(resilientRead),
+    ).pipe(Stream.flatMap(Stream.fromIterable));
 
     return {
       name: "redis-streams-input",
@@ -467,9 +470,9 @@ export const createRedisStreamsInput = (
     config,
     metrics,
   );
-  const stream = Stream.repeatEffect(resilientGroupRead).pipe(
-    Stream.flatMap(Stream.fromIterable),
-  );
+  const stream = Stream.fromEffectRepeat(
+    stopBeforeNextPull(resilientGroupRead),
+  ).pipe(Stream.flatMap(Stream.fromIterable));
 
   return {
     name: "redis-streams-input",

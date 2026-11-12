@@ -1,5 +1,6 @@
+import { Result } from "effect";
 import { describe, expect, it } from "vitest";
-import { Chunk, Deferred, Effect, Fiber, Stream } from "effect";
+import { Deferred, Effect, Fiber, Stream } from "effect";
 import {
   ComponentError,
   type ErrorCategory,
@@ -197,7 +198,7 @@ describe("pipeline error categories", () => {
           ),
         );
 
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           run(
             {
               name: "finish-current-after-fatal",
@@ -264,7 +265,7 @@ describe("pipeline error categories", () => {
         const stuck = createMessage("stuck");
         const poison = createMessage("poison");
 
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           run(
             {
               name: "fatal-drain-timeout",
@@ -403,7 +404,7 @@ describe("pipeline error categories", () => {
         const dlqStarted = yield* Deferred.make<void>();
         const releaseDlq = yield* Deferred.make<void>();
 
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           run({
             name: "fatal-dlq-after-halt",
             input: {
@@ -524,7 +525,7 @@ describe("pipeline error categories", () => {
         const fatalSendStarted = yield* Deferred.make<void>();
         const shutdown = yield* makeShutdownController();
 
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           run(
             {
               name: "fatal-external-force-race",
@@ -541,13 +542,13 @@ describe("pipeline error categories", () => {
                 send: (message) =>
                   message.content === "stuck"
                     ? Deferred.succeed(stuckStarted, undefined).pipe(
-                        Effect.zipRight(Effect.never),
+                        Effect.andThen(Effect.never),
                       )
                     : Deferred.await(stuckStarted).pipe(
-                        Effect.zipRight(
+                        Effect.andThen(
                           Deferred.succeed(fatalSendStarted, undefined),
                         ),
-                        Effect.zipRight(Effect.fail(fatal)),
+                        Effect.andThen(Effect.fail(fatal)),
                       ),
               },
               backpressure: { maxConcurrentMessages: 2 },
@@ -894,7 +895,7 @@ describe("pipeline error categories", () => {
           shutdownMode: "finish-current",
           // Single chunk so haltWhenDeferred still drains every element after
           // the first fatal (mirrors the reviewer's finish-current probe).
-          stream: Stream.fromChunk(Chunk.fromIterable(inputMessages)),
+          stream: Stream.fromIterable(inputMessages),
         },
         processors: [
           {

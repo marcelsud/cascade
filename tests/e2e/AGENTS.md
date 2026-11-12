@@ -16,6 +16,7 @@
 - Use allocated resources and bounded waits; never assume immediate network readiness.
 - Stop spawned Cascade processes and infrastructure in cleanup paths, including failures.
 - Preserve at-least-once evidence such as Redis pending entries or SQS visibility until assertions complete.
+- Source execution requires Node.js 24+ for Effect 4 platform integrations.
 - E2E configs use the same YAML schema and CLI path as users.
 
 ## Work Guidance

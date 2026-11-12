@@ -20,10 +20,14 @@ export interface GenerateInputConfig {
  * Validation schema for Generate Input configuration
  */
 export const GenerateInputConfigSchema = Schema.Struct({
-  count: Schema.Int.pipe(Schema.positive()),
-  interval: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
-  template: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
-  startIndex: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
+  count: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0))),
+  interval: Schema.optional(
+    Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
+  ),
+  template: Schema.Record(Schema.String, Schema.Unknown),
+  startIndex: Schema.optional(
+    Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
+  ),
 });
 
 /**

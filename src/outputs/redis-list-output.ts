@@ -55,7 +55,7 @@ export const RedisListOutputConfigSchema = Schema.Struct({
   ...redisHostEndpointSchemaFields,
   key: NonEmptyString,
   ...redisAuthSchemaFields,
-  direction: Schema.optional(Schema.Literal("left", "right")),
+  direction: Schema.optional(Schema.Literals(["left", "right"])),
   maxLen: Schema.optional(PositiveInt),
   ...redisConnectionSchemaFields,
 });
@@ -73,7 +73,7 @@ export const createRedisListOutput = (
       config,
       "Redis List Output configuration",
     ).pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.fail(
           new RedisListOutputError(error.message, error.category, error),
         ),
@@ -154,7 +154,7 @@ export const createRedisListOutput = (
               ),
           }).pipe(
             Effect.retry(redisRetryPolicy(maxRetries)),
-            Effect.catchAll((error) =>
+            Effect.catch((error) =>
               Effect.logWarning(
                 `${error.message} (message ${msg.id} delivered once; list may exceed maxLen until the next trim)`,
               ).pipe(Effect.as(pushedLength)),

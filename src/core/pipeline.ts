@@ -1,3 +1,4 @@
+import { Semaphore } from "effect";
 /**
  * Pipeline orchestration using Effect.js
  */
@@ -18,6 +19,7 @@ import type {
   PipelineResult,
   PipelineStats,
 } from "./types.js";
+import { haltBeforeNextPull, IntakeStopRequested } from "./intake-control.js";
 import { runProcessorChain } from "./processor-chain.js";
 import { isFatalError } from "./errors.js";
 import { createDLQMessage, FatalDLQCopyTimeout } from "./dlq.js";
@@ -95,7 +97,7 @@ export const makeShutdownController =
         force,
         request: Deferred.succeed(stop, undefined).pipe(Effect.asVoid),
         requestForce: Deferred.succeed(force, undefined).pipe(
-          Effect.zipRight(Deferred.succeed(stop, undefined)),
+          Effect.andThen(Deferred.succeed(stop, undefined)),
           Effect.asVoid,
         ),
       };
@@ -111,9 +113,9 @@ const closePipeline = <E, R>(pipeline: Pipeline<E, R>, timeoutMs: number) =>
     if (pipeline.input.close) yield* pipeline.input.close();
     if (pipeline.output.close) yield* pipeline.output.close();
   }).pipe(
-    Effect.timeoutFail({
+    Effect.timeoutOrElse({
       duration: `${timeoutMs} millis`,
-      onTimeout: () => new PipelineShutdownError("timed-out"),
+      orElse: () => Effect.fail(new PipelineShutdownError("timed-out")),
     }),
   );
 
@@ -148,7 +150,7 @@ export const run = <E, R>(
     // Serialize concurrent force/timeout callers and replay the same Exit.
     const closedRef = yield* Ref.make(false);
     const closeExitRef = yield* Ref.make<Exit.Exit<void, unknown> | null>(null);
-    const closeLock = yield* Effect.makeSemaphore(1);
+    const closeLock = yield* Semaphore.make(1);
 
     const snapshotMetrics = () => {
       const input = pipeline.input.getMetrics?.();
@@ -258,7 +260,7 @@ export const run = <E, R>(
         Effect.gen(function* () {
           const prior = yield* Ref.get(closeExitRef);
           if (prior !== null) {
-            return yield* Exit.matchEffect(prior, {
+            return yield* Effect.matchCauseEffectEager(prior, {
               onSuccess: () => Effect.void,
               onFailure: Effect.failCause,
             });
@@ -269,11 +271,11 @@ export const run = <E, R>(
           const exit = yield* Effect.exit(
             restore(closePipeline(pipeline, shutdownTimeoutMs)),
           );
-          if (!Exit.isInterrupted(exit)) {
+          if (!Exit.hasInterrupts(exit)) {
             yield* Ref.set(closeExitRef, exit);
             yield* Ref.set(closedRef, true);
           }
-          return yield* Exit.matchEffect(exit, {
+          return yield* Effect.matchCauseEffectEager(exit, {
             onSuccess: () => Effect.void,
             onFailure: Effect.failCause,
           });
@@ -294,7 +296,7 @@ export const run = <E, R>(
       msg: Message,
       output: (typeof pipeline)["output"],
       wrapOuterPermit: boolean,
-      outputPermits: Effect.Semaphore,
+      outputPermits: Semaphore.Semaphore,
     ) => {
       const recordMessageFailure = (
         error: unknown,
@@ -321,7 +323,7 @@ export const run = <E, R>(
 
             const dlqMessage = createDLQMessage(msg, error, 1);
             yield* processorDlqOutput.send(dlqMessage).pipe(
-              Effect.catchAll((dlqError) =>
+              Effect.catch((dlqError) =>
                 Effect.gen(function* () {
                   yield* Effect.logError(
                     `Failed to send message ${msg.id} to DLQ: ${dlqError}`,
@@ -365,12 +367,12 @@ export const run = <E, R>(
             ),
             // Ack only after processors + primary output succeed.
             Effect.tap(() => (msg.ack ? msg.ack() : Effect.void)),
-            Effect.catchAll((error) =>
+            Effect.catch((error) =>
               recordMessageFailure(error, { routeToDlq: false }),
             ),
           ),
         ),
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           recordMessageFailure(error, { routeToDlq: true }),
         ),
         Effect.withSpan("process-message", {
@@ -383,8 +385,8 @@ export const run = <E, R>(
       Effect.gen(function* () {
         yield* Effect.log(`Starting pipeline: ${pipeline.name}`);
         const workers = yield* FiberSet.make<void, never>();
-        const permits = yield* Effect.makeSemaphore(maxConcurrentMessages);
-        const outputPermits = yield* Effect.makeSemaphore(maxConcurrentOutputs);
+        const permits = yield* Semaphore.make(maxConcurrentMessages);
+        const outputPermits = yield* Semaphore.make(maxConcurrentOutputs);
         // Bind once per run. Fallback outer wrap depends on the pre-bind hook,
         // not on whether the returned copy re-exposes bindPrimaryOutputPermits.
         const bindPrimary = pipeline.output.bindPrimaryOutputPermits;
@@ -397,21 +399,21 @@ export const run = <E, R>(
         const intakeStop = yield* Deferred.make<void>();
         yield* Effect.forkScoped(
           Deferred.await(shutdown.stop).pipe(
-            Effect.zipRight(Deferred.succeed(intakeStop, undefined)),
+            Effect.andThen(Deferred.succeed(intakeStop, undefined)),
             Effect.asVoid,
           ),
         );
         yield* Effect.forkScoped(
           Deferred.await(fatalHalt).pipe(
-            Effect.zipRight(Deferred.succeed(intakeStop, undefined)),
+            Effect.andThen(Deferred.succeed(intakeStop, undefined)),
             Effect.asVoid,
           ),
         );
 
         const stoppedInput = finishCurrentPull
-          ? pipeline.input.stream.pipe(Stream.haltWhenDeferred(intakeStop))
+          ? haltBeforeNextPull(pipeline.input.stream)
           : pipeline.input.stream.pipe(
-              Stream.interruptWhenDeferred(intakeStop),
+              Stream.interruptWhen(Deferred.await(intakeStop)),
             );
 
         yield* stoppedInput.pipe(
@@ -438,7 +440,7 @@ export const run = <E, R>(
               );
             }),
           ),
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.gen(function* () {
               yield* Effect.logError(`Pipeline stream error: ${error}`);
               yield* Ref.update(statsRef, (stats) => ({
@@ -455,12 +457,12 @@ export const run = <E, R>(
 
         yield* FiberSet.awaitEmpty(workers);
 
-        const closeResult = yield* Effect.either(ensureClose);
-        if (closeResult._tag === "Left") {
-          yield* recordTerminalError(closeResult.left);
+        const closeResult = yield* Effect.result(ensureClose);
+        if (closeResult._tag === "Failure") {
+          yield* recordTerminalError(closeResult.failure);
           if (!(yield* Deferred.isDone(fatalHalt))) {
             // Non-fatal path: preserve prior external close-failure behavior.
-            return yield* Effect.fail(closeResult.left);
+            return yield* Effect.fail(closeResult.failure);
           }
         }
 
@@ -504,19 +506,27 @@ export const run = <E, R>(
       }),
     );
 
-    const executionFiber = yield* Effect.forkDaemon(
+    const executionFiber = yield* Effect.forkDetach(
       execution.pipe(
         Effect.provideService(FatalDLQCopyTimeout, shutdownTimeoutMs),
+        Effect.provideService(
+          IntakeStopRequested,
+          Deferred.isDone(shutdown.stop).pipe(
+            Effect.flatMap((stopped) =>
+              stopped ? Effect.succeed(true) : Deferred.isDone(fatalHalt),
+            ),
+          ),
+        ),
       ),
     );
     const awaitExecution = Fiber.await(executionFiber).pipe(
       Effect.flatMap((exit) =>
-        Exit.matchEffect(exit, {
+        Effect.matchCauseEffectEager(exit, {
           onSuccess: Effect.succeed,
           // A controlled timeout/force path interrupts execution itself. Do
           // not let that interruption win the surrounding completion race.
           onFailure: (cause) =>
-            Cause.isInterruptedOnly(cause)
+            Cause.hasInterruptsOnly(cause)
               ? Effect.never
               : Effect.failCause(cause),
         }),
@@ -528,9 +538,9 @@ export const run = <E, R>(
       Effect.gen(function* () {
         // Await interruption so FiberSet/scope finalizers settle before close.
         yield* Fiber.interrupt(executionFiber);
-        const closeResult = yield* Effect.either(ensureClose);
-        if (closeResult._tag === "Left") {
-          yield* recordTerminalError(closeResult.left);
+        const closeResult = yield* Effect.result(ensureClose);
+        if (closeResult._tag === "Failure") {
+          yield* recordTerminalError(closeResult.failure);
         }
         return yield* failedResult(new PipelineShutdownError(reason), reason);
       });
@@ -544,11 +554,11 @@ export const run = <E, R>(
         // Interrupt stuck workers / blocked finish-current pulls, then close.
         // Await interruption so FiberSet/scope finalizers settle before close.
         yield* Fiber.interrupt(executionFiber);
-        const closeResult = yield* Effect.either(ensureClose);
+        const closeResult = yield* Effect.result(ensureClose);
         const drainTimeout = new PipelineFatalDrainTimeoutError();
         yield* recordTerminalError(drainTimeout);
-        if (closeResult._tag === "Left") {
-          yield* recordTerminalError(closeResult.left);
+        if (closeResult._tag === "Failure") {
+          yield* recordTerminalError(closeResult.failure);
         }
         fatalResultAssembled = true;
         return yield* fatalFailedResult();
@@ -587,7 +597,7 @@ export const run = <E, R>(
         ),
       ),
     ).pipe(
-      Effect.catchAll((error: unknown) =>
+      Effect.catch((error: unknown) =>
         Effect.gen(function* () {
           const fatalRequested = yield* Deferred.isDone(fatalHalt);
           if (fatalRequested || error instanceof PipelineFatalHaltError) {

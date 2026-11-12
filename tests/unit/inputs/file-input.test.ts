@@ -1,3 +1,4 @@
+import { Result } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Cause, Duration, Effect, Exit, Option, Stream } from "effect";
 import * as fs from "node:fs/promises";
@@ -1058,9 +1059,11 @@ describe("FileInput", () => {
 
     expect(Exit.isFailure(exit)).toBe(true);
     if (Exit.isFailure(exit)) {
-      expect(Option.isSome(Cause.failureOption(exit.cause))).toBe(true);
-      expect(Option.isNone(Cause.dieOption(exit.cause))).toBe(true);
-      const failure = Option.getOrThrow(Cause.failureOption(exit.cause));
+      expect(Option.isSome(Cause.findErrorOption(exit.cause))).toBe(true);
+      expect(
+        Option.isNone(Result.getSuccess(Cause.findDefect(exit.cause))),
+      ).toBe(true);
+      const failure = Option.getOrThrow(Cause.findErrorOption(exit.cause));
       expect(failure).toBeInstanceOf(FileInputError);
       expect(failure.message).toContain(filePath);
       expect(failure.message).toMatch(/ENOENT|no such file/i);
@@ -1135,9 +1138,11 @@ describe("FileInput", () => {
 
       expect(Exit.isFailure(exit)).toBe(true);
       if (Exit.isFailure(exit)) {
-        expect(Option.isSome(Cause.failureOption(exit.cause))).toBe(true);
-        expect(Option.isNone(Cause.dieOption(exit.cause))).toBe(true);
-        const failure = Option.getOrThrow(Cause.failureOption(exit.cause));
+        expect(Option.isSome(Cause.findErrorOption(exit.cause))).toBe(true);
+        expect(
+          Option.isNone(Result.getSuccess(Cause.findDefect(exit.cause))),
+        ).toBe(true);
+        const failure = Option.getOrThrow(Cause.findErrorOption(exit.cause));
         expect(failure).toBeInstanceOf(FileInputError);
         expect(failure.message).toContain("simulated mid-drain I/O failure");
       }

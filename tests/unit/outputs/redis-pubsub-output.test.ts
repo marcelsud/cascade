@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Effect, Logger, LogLevel } from "effect";
+import { Effect, Logger, References } from "effect";
 import Redis from "ioredis";
 import { createRedisPubSubOutput } from "../../../src/outputs/redis-pubsub-output.js";
 import type { Message } from "../../../src/core/types.js";
@@ -152,8 +152,8 @@ describe("RedisPubSubOutput", () => {
       });
       return Effect.runPromise(
         effect.pipe(
-          Logger.withMinimumLogLevel(LogLevel.Info),
-          Effect.provide(Logger.replace(Logger.defaultLogger, logger)),
+          Effect.provideService(References.MinimumLogLevel, "Info"),
+          Effect.provide(Logger.layer([logger])),
         ),
       ).then(() => messages);
     };

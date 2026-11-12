@@ -21,6 +21,7 @@ import { closeRedisClient } from "../core/redis-client.js";
 import { createConfiguredRedisClient } from "../core/redis-client-options.js";
 import {
   createInputQueue,
+  streamInputQueue,
   offerInputQueue,
   recordQueueDrop,
   type OverflowPolicy,
@@ -68,14 +69,14 @@ export const RedisPubSubInputConfigSchema = Schema.Struct({
   ...redisHostEndpointSchemaFields,
   ...redisAuthSchemaFields,
   channels: Schema.optional(
-    Schema.Array(NonEmptyString).pipe(Schema.minItems(1)),
+    Schema.Array(NonEmptyString).pipe(Schema.check(Schema.isMinLength(1))),
   ),
   patterns: Schema.optional(
-    Schema.Array(NonEmptyString).pipe(Schema.minItems(1)),
+    Schema.Array(NonEmptyString).pipe(Schema.check(Schema.isMinLength(1))),
   ),
   ...redisClientSchemaFields,
   queueSize: Schema.optional(PositiveInt),
-  overflow: Schema.optional(Schema.Literal("block", "drop_new", "drop_old")),
+  overflow: Schema.optional(Schema.Literals(["block", "drop_new", "drop_old"])),
 });
 
 /**
@@ -128,7 +129,7 @@ export const createRedisPubSubInput = (
       config,
       "Redis Pub/Sub Input configuration",
     ).pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.fail(
           new RedisPubSubInputError(error.message, error.category, error),
         ),
@@ -235,6 +236,47 @@ export const createRedisPubSubInput = (
         Effect.runPromise(effect);
       });
 
+      // Effect 4 can reach subscribe before ioredis finishes its INFO ready
+      // check. Entering subscriber mode first makes that check fail in Redis.
+      yield* Effect.callback<void, RedisPubSubInputError>((resume) => {
+        if (subscriber.status === "ready") {
+          resume(Effect.void);
+          return;
+        }
+        const cleanup = () => {
+          subscriber.removeListener("ready", onReady);
+          subscriber.removeListener("error", onError);
+          subscriber.removeListener("end", onEnd);
+        };
+        const onReady = () => {
+          cleanup();
+          resume(Effect.void);
+        };
+        const onError = (error: Error) => {
+          cleanup();
+          resume(
+            Effect.fail(
+              new RedisPubSubInputError(
+                `Redis Pub/Sub connection failed: ${error.message}`,
+                detectCategory(error),
+                error,
+              ),
+            ),
+          );
+        };
+        const onEnd = () =>
+          onError(new Error("Redis connection ended before ready"));
+        subscriber.once("ready", onReady);
+        subscriber.once("error", onError);
+        subscriber.once("end", onEnd);
+        if (subscriber.status === "wait") {
+          void subscriber.connect().catch(onError);
+        } else if (subscriber.status === "end") {
+          onEnd();
+        }
+        return Effect.sync(cleanup);
+      });
+
       // Subscribe to channels and patterns
       yield* Effect.tryPromise({
         try: async () => {
@@ -264,8 +306,8 @@ export const createRedisPubSubInput = (
       );
 
       // Return stream that takes from queue
-      return Stream.fromQueue(queue).pipe(
-        Stream.catchAll((error) =>
+      return streamInputQueue(queue).pipe(
+        Stream.catch((error) =>
           Stream.fromEffect(
             Effect.gen(function* () {
               metrics.recordError();
@@ -303,7 +345,7 @@ export const createRedisPubSubInput = (
               error,
             ),
         }).pipe(
-          Effect.catchAll((error) => {
+          Effect.catch((error) => {
             // Log but don't fail on close (best effort cleanup)
             console.error("Failed to close Redis Pub/Sub connection:", error);
             return Effect.void;

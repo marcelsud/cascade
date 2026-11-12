@@ -294,8 +294,8 @@ export const createDedupeProcessor = (
   const keyPath = config.key;
 
   // Effect-safe mutable state via Ref
-  const stateRef = Ref.unsafeMake<Map<string, DedupeEntry>>(new Map());
-  const countersRef = Ref.unsafeMake<DedupeCounters>({
+  const stateRef = Ref.makeUnsafe<Map<string, DedupeEntry>>(new Map());
+  const countersRef = Ref.makeUnsafe<DedupeCounters>({
     hits: 0,
     misses: 0,
     extractionFailures: 0,

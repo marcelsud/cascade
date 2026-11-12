@@ -49,11 +49,11 @@ export class FileInputError extends ComponentError {
 export const FileInputConfigSchema = Schema.Struct({
   path: NonEmptyString,
   follow: Schema.optional(Schema.Boolean),
-  startAt: Schema.optional(Schema.Literal("end", "beginning")),
+  startAt: Schema.optional(Schema.Literals(["end", "beginning"])),
   pollIntervalMs: Schema.optional(PositiveInt),
   encoding: Schema.optional(NonEmptyString),
   queueSize: Schema.optional(PositiveInt),
-  overflow: Schema.optional(Schema.Literal("block", "drop_new", "drop_old")),
+  overflow: Schema.optional(Schema.Literals(["block", "drop_new", "drop_old"])),
 });
 
 /** Upper bound for a single disk read / Buffer allocation. */
@@ -81,7 +81,7 @@ export const createFileInput = (
 ): Input<FileInputError> => {
   Effect.runSync(
     validate(FileInputConfigSchema, config, "File Input configuration").pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.fail(new FileInputError(error.message, error.category, error)),
       ),
     ),
@@ -151,7 +151,7 @@ export const createFileInput = (
     // between must find the flag already set, or it blocks forever.
     producerDone = true;
     const remaining = await Effect.runPromise(
-      Queue.size(queue).pipe(Effect.catchAllCause(() => Effect.succeed(0))),
+      Queue.size(queue).pipe(Effect.catchCause(() => Effect.succeed(0))),
     );
     if (remaining <= 0) {
       await shutdownQueue();
@@ -356,7 +356,7 @@ export const createFileInput = (
           timer = null;
         }
         yield* Effect.promise(() => shutdownQueue()).pipe(
-          Effect.catchAll(() => Effect.void),
+          Effect.catch(() => Effect.void),
         );
         yield* emitInputMetrics(metrics.getInputMetrics());
       }),

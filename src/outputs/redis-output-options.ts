@@ -159,6 +159,6 @@ export const closeRedisOutput = (
         return undefined;
       },
     }).pipe(
-      Effect.catchAll(() => Effect.void), // Never fail on close
+      Effect.catch(() => Effect.void), // Never fail on close
     );
   });

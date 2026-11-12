@@ -26,9 +26,11 @@ export class FilterError extends ComponentError {
 
 export const FilterProcessorConfigSchema = Schema.Struct({
   check: NonEmptyString.pipe(
-    Schema.filter((value) => value.trim().length > 0, {
-      message: () => "Filter processor check cannot be blank",
-    }),
+    Schema.check(
+      Schema.makeFilter((value) => value.trim().length > 0, {
+        message: "Filter processor check cannot be blank",
+      }),
+    ),
   ),
 });
 

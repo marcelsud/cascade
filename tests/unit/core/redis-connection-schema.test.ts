@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import * as Schema from "effect/Schema";
 import {
   redisAuthSchemaFields,
@@ -10,14 +10,16 @@ import {
 import { RedisListOutputConfigSchema } from "../../../src/outputs/redis-list-output.js";
 import { PipelineConfigSchema } from "../../../src/core/config-schema.js";
 
-const decode = <A, I>(schema: Schema.Schema<A, I>, value: unknown) =>
-  Effect.runSync(Effect.either(Schema.decodeUnknown(schema)(value)));
+const decode = <A, I>(schema: Schema.Codec<A, I>, value: unknown) =>
+  Effect.runSync(
+    Effect.result(Schema.decodeUnknownEffect(schema, { errors: "all" })(value)),
+  );
 
-const leftMessage = (result: Either.Either<unknown, unknown>): string => {
-  if (Either.isRight(result)) {
+const leftMessage = (result: Result.Result<unknown, unknown>): string => {
+  if (Result.isSuccess(result)) {
     throw new Error("expected decode failure");
   }
-  const left = result.left;
+  const left = result.failure;
   if (left && typeof left === "object" && "message" in left) {
     return String(left.message);
   }
@@ -28,23 +30,23 @@ describe("redis connection schema field groups", () => {
     const schema = Schema.Struct({ ...redisHostEndpointSchemaFields });
 
     expect(decode(schema, { host: "localhost", port: 6379 })).toEqual(
-      Either.right({ host: "localhost", port: 6379 }),
+      Result.succeed({ host: "localhost", port: 6379 }),
     );
 
     const invalid = decode(schema, { host: "", port: 0 });
-    expect(Either.isLeft(invalid)).toBe(true);
+    expect(Result.isFailure(invalid)).toBe(true);
   });
 
   it("decodes valid and invalid auth fields", () => {
     const schema = Schema.Struct({ ...redisAuthSchemaFields });
 
     expect(decode(schema, { password: "secret", db: 2 })).toEqual(
-      Either.right({ password: "secret", db: 2 }),
+      Result.succeed({ password: "secret", db: 2 }),
     );
-    expect(decode(schema, {})).toEqual(Either.right({}));
+    expect(decode(schema, {})).toEqual(Result.succeed({}));
 
     const invalid = decode(schema, { password: "", db: -1 });
-    expect(Either.isLeft(invalid)).toBe(true);
+    expect(Result.isFailure(invalid)).toBe(true);
   });
 
   it("decodes valid and invalid client connection knobs", () => {
@@ -60,7 +62,7 @@ describe("redis connection schema field groups", () => {
         enableOfflineQueue: false,
       }),
     ).toEqual(
-      Either.right({
+      Result.succeed({
         connectTimeout: 1000,
         commandTimeout: 2000,
         keepAlive: 3000,
@@ -74,7 +76,7 @@ describe("redis connection schema field groups", () => {
       connectTimeout: 0,
       maxRetriesPerRequest: -1,
     });
-    expect(Either.isLeft(invalid)).toBe(true);
+    expect(Result.isFailure(invalid)).toBe(true);
   });
 
   it("decodes valid and invalid reconnect knobs", () => {
@@ -86,7 +88,7 @@ describe("redis connection schema field groups", () => {
         reconnectBackoffMs: 250,
       }),
     ).toEqual(
-      Either.right({
+      Result.succeed({
         maxReconnectAttempts: 3,
         reconnectBackoffMs: 250,
       }),
@@ -96,50 +98,38 @@ describe("redis connection schema field groups", () => {
       maxReconnectAttempts: -1,
       reconnectBackoffMs: 0,
     });
-    expect(Either.isLeft(invalid)).toBe(true);
+    expect(Result.isFailure(invalid)).toBe(true);
   });
 
-  it("keeps Redis list output diagnostics in host; port; key; password?; db? order", () => {
-    const result = decode(RedisListOutputConfigSchema, {});
-    const message = leftMessage(result);
-
-    expect(message).toContain("readonly host: a string matching the pattern");
-    expect(message).toMatch(
-      /readonly host:.*readonly port:.*readonly key:.*readonly password\?:.*readonly db\?:/s,
+  it("keeps Redis list output diagnostic paths in host; port; key; password?; db? order", () => {
+    const message = leftMessage(
+      decode(RedisListOutputConfigSchema, {
+        host: "",
+        port: 0,
+        key: "",
+        password: "",
+        db: -1,
+      }),
     );
-    expect(message.indexOf("readonly key:")).toBeLessThan(
-      message.indexOf("readonly password?:"),
-    );
-    expect(message.indexOf("readonly password?:")).toBeLessThan(
-      message.indexOf("readonly db?:"),
-    );
+    const paths = ["host", "port", "key", "password", "db"];
+    for (const key of paths) expect(message).toContain('["' + key + '"]');
+    const positions = paths.map((key) => message.indexOf('["' + key + '"]'));
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
   });
 
-  it("keeps YAML redis_list diagnostics in url; key; password?; db? order", () => {
-    const result = decode(PipelineConfigSchema, {
-      input: { generate: { count: 1, template: {} } },
-      output: { redis_list: {} },
-    });
-    const message = leftMessage(result);
-    const sliceStart = message.indexOf("redis_list?:");
-    const slice = message.slice(sliceStart, sliceStart + 260);
-
-    // List/PubSub YAML now use canonical `url` (issue #72); shared auth group
-    // still lands after the resource key so diagnostics stay ordered.
-    expect(slice).toContain(
-      "readonly url: { string | filter }; readonly key: string",
+  it("keeps YAML redis_list diagnostic paths in url; key; password?; db? order", () => {
+    const message = leftMessage(
+      decode(PipelineConfigSchema, {
+        input: { generate: { count: 1, template: {} } },
+        output: {
+          redis_list: { url: "bad", key: undefined, password: 1, db: "bad" },
+        },
+      }),
     );
-    expect(slice).toMatch(
-      /readonly url: \{ string \| filter \}; readonly key: string(?: \| ReadonlyArray<string>)?; readonly password\?: string \| undefined; readonly db\?: number \| undefined/,
-    );
-    expect(slice.indexOf("readonly url:")).toBeLessThan(
-      slice.indexOf("readonly key:"),
-    );
-    expect(slice.indexOf("readonly key:")).toBeLessThan(
-      slice.indexOf("readonly password?:"),
-    );
-    expect(slice.indexOf("readonly password?:")).toBeLessThan(
-      slice.indexOf("readonly db?:"),
-    );
+    const paths = ["url", "key", "password", "db"];
+    for (const key of paths)
+      expect(message).toContain('["output"]["redis_list"]["' + key + '"]');
+    const positions = paths.map((key) => message.indexOf('["' + key + '"]'));
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
   });
 });

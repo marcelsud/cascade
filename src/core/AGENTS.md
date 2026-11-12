@@ -8,7 +8,7 @@
 
 - `config-schema.ts` owns configuration shape and validation; `config-loader.ts` owns reading, interpolation, parsing, and decode errors.
 - `component-registry.ts` owns scoped custom registration; `pipeline-builder.ts` resolves built-ins and registry entries.
-- `pipeline.ts` and `processor-chain.ts` own execution, cardinality, backpressure, acknowledgements, shutdown, and lifecycle ordering.
+- `pipeline.ts` and `processor-chain.ts` own execution, cardinality, backpressure, acknowledgements, shutdown, and lifecycle ordering; `intake-control.ts` shares a run-local direct stop check with destructive input polls.
 - `dlq.ts`, `errors.ts`, `metrics.ts`, and Redis helpers own cross-component operational behavior.
 
 ## Local Contracts
@@ -17,6 +17,7 @@
 - Registered factories may fail synchronously or in Effect; both paths surface as `BuildError`, never defects.
 - Source acknowledgement runs only after all processor and output work succeeds.
 - `pipeline.output` is the sole lifecycle owner for wrapped primary and DLQ outputs; observation handles are never closed separately.
+- Check finish-current stop signals directly before the next chunk and before broker polls that can produce empty batches. Effect 4 flattens empty batches internally; a watcher fiber alone cannot enforce that boundary.
 - Destructive inputs use `shutdownMode: "finish-current"`; other inputs default to interruptible intake.
 - Backpressure permits cover primary send attempts, not retry delay or DLQ routing.
 - A fatal primary-output DLQ copy is bounded by the run's effective shutdown timeout, then the original failure reaches normal accounting and fatal halt; nonfatal archival semantics remain unchanged.
