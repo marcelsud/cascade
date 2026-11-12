@@ -62,14 +62,22 @@ export class SqsOutputError extends ComponentError {
  */
 export const SqsOutputConfigSchema = Schema.Struct({
   queueUrl: NonEmptyString,
-  region: Schema.optional(Schema.Union(AwsRegion, NonEmptyString)),
-  endpoint: Schema.optional(Schema.Union(UrlString, NonEmptyString)),
+  region: Schema.optional(Schema.Union([AwsRegion, NonEmptyString])),
+  endpoint: Schema.optional(Schema.Union([UrlString, NonEmptyString])),
   maxBatchSize: Schema.optional(SqsBatchSize),
-  delaySeconds: Schema.optional(Schema.Int.pipe(Schema.between(0, 900))),
+  delaySeconds: Schema.optional(
+    Schema.Int.pipe(
+      Schema.check(Schema.isBetween({ minimum: 0, maximum: 900 })),
+    ),
+  ),
   maxRetries: Schema.optional(RetryCount),
-  batchTimeout: Schema.optional(Schema.Int.pipe(Schema.positive())),
+  batchTimeout: Schema.optional(
+    Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0))),
+  ),
   maxAttempts: Schema.optional(RetryCount),
-  requestTimeout: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
+  requestTimeout: Schema.optional(
+    Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
+  ),
   connectionTimeout: Schema.optional(TimeoutMs),
 });
 
@@ -149,7 +157,7 @@ export const createSqsOutput = (
   // Validate configuration synchronously at creation time
   Effect.runSync(
     validate(SqsOutputConfigSchema, config, "SQS Output configuration").pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.fail(new SqsOutputError(error.message, error.category, error)),
       ),
     ),
@@ -255,8 +263,8 @@ export const createSqsOutput = (
 
   // Batch mode. Every send waits on its own completion so the pipeline cannot
   // acknowledge the source message until SQS has accepted that batch entry.
-  const batchRef = Ref.unsafeMake<PendingBatchMessage[]>([]);
-  const batchTimerRef = Ref.unsafeMake<BatchTimer | null>(null);
+  const batchRef = Ref.makeUnsafe<PendingBatchMessage[]>([]);
+  const batchTimerRef = Ref.makeUnsafe<BatchTimer | null>(null);
   const metrics = new MetricsAccumulator("sqs-output");
   const batchTimeout = config.batchTimeout ?? DEFAULT_BATCH_TIMEOUT_MS;
   let connectionLogged = false;
@@ -323,7 +331,7 @@ export const createSqsOutput = (
           ),
       }).pipe(
         Effect.map((result) => ({ _tag: "Success" as const, result })),
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.succeed({ _tag: "Failure" as const, error }),
         ),
       );
@@ -431,7 +439,7 @@ export const createSqsOutput = (
         Ref.update(batchTimerRef, (current) =>
           current === timer ? null : current,
         ).pipe(
-          Effect.zipRight(
+          Effect.andThen(
             expired
               ? Effect.gen(function* () {
                   yield* Effect.logDebug(
@@ -440,10 +448,10 @@ export const createSqsOutput = (
                   const batch = yield* Ref.getAndSet(batchRef, []);
                   if (batch.length === 0) return;
 
-                  const result = yield* Effect.either(sendBatch(batch));
-                  if (result._tag === "Left") {
+                  const result = yield* Effect.result(sendBatch(batch));
+                  if (result._tag === "Failure") {
                     yield* Effect.logError(
-                      `Background SQS batch flush failed: ${result.left.message}`,
+                      `Background SQS batch flush failed: ${result.failure.message}`,
                     );
                   }
                 })
@@ -455,7 +463,7 @@ export const createSqsOutput = (
 
     // The fiber never leaks a send failure: sendBatch settles each per-message
     // completion, and the timer observes/logs the aggregate failure.
-    yield* Effect.forkDaemon(timerEffect);
+    yield* Effect.forkDetach(timerEffect);
   });
 
   const enqueue = (entry: PendingBatchMessage) =>
@@ -504,7 +512,7 @@ export const createSqsOutput = (
           // Every entry receives its own success/failure below. Observing the
           // aggregate result prevents the coordinating sender from inheriting
           // another entry's failure.
-          yield* Effect.either(sendBatch(batch));
+          yield* Effect.result(sendBatch(batch));
         } else if (shouldStartTimer) {
           yield* startBatchTimer;
         }

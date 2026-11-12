@@ -28,12 +28,13 @@ const awaitMetrics = (
       if (metrics && predicate(metrics)) {
         return metrics;
       }
-      yield* Effect.yieldNow();
+      yield* Effect.yieldNow;
     }
   }).pipe(
-    Effect.timeoutFail({
+    Effect.timeoutOrElse({
       duration: TEST_TIMEOUT,
-      onTimeout: () => new Error("timed out waiting for stdin input metrics"),
+      orElse: () =>
+        Effect.fail(new Error("timed out waiting for stdin input metrics")),
     }),
   );
 
@@ -147,9 +148,10 @@ describe("StdinInput", () => {
         const chunk = yield* Stream.runCollect(input.stream);
         return Array.from(chunk);
       }).pipe(
-        Effect.timeoutFail({
+        Effect.timeoutOrElse({
           duration: TEST_TIMEOUT,
-          onTimeout: () => new Error("delayed-collector line drain timed out"),
+          orElse: () =>
+            Effect.fail(new Error("delayed-collector line drain timed out")),
         }),
       ),
     );
@@ -181,10 +183,12 @@ describe("StdinInput", () => {
         const chunk = yield* Stream.runCollect(input.stream);
         return Array.from(chunk);
       }).pipe(
-        Effect.timeoutFail({
+        Effect.timeoutOrElse({
           duration: TEST_TIMEOUT,
-          onTimeout: () =>
-            new Error("delayed-collector unterminated line timed out"),
+          orElse: () =>
+            Effect.fail(
+              new Error("delayed-collector unterminated line timed out"),
+            ),
         }),
       ),
     );
@@ -211,10 +215,10 @@ describe("StdinInput", () => {
         const chunk = yield* Stream.runCollect(input.stream);
         return Array.from(chunk);
       }).pipe(
-        Effect.timeoutFail({
+        Effect.timeoutOrElse({
           duration: TEST_TIMEOUT,
-          onTimeout: () =>
-            new Error("delayed-collector whole payload timed out"),
+          orElse: () =>
+            Effect.fail(new Error("delayed-collector whole payload timed out")),
         }),
       ),
     );
@@ -241,9 +245,9 @@ describe("StdinInput", () => {
         );
         yield* flushProducer();
       }).pipe(
-        Effect.timeoutFail({
+        Effect.timeoutOrElse({
           duration: TEST_TIMEOUT,
-          onTimeout: () => new Error("pipeline prefill timed out"),
+          orElse: () => Effect.fail(new Error("pipeline prefill timed out")),
         }),
       ),
     );
@@ -255,9 +259,9 @@ describe("StdinInput", () => {
         processors: [],
         output,
       }).pipe(
-        Effect.timeoutFail({
+        Effect.timeoutOrElse({
           duration: TEST_TIMEOUT,
-          onTimeout: () => new Error("stdin EOF pipeline timed out"),
+          orElse: () => Effect.fail(new Error("stdin EOF pipeline timed out")),
         }),
       ),
     );
@@ -295,9 +299,10 @@ describe("StdinInput", () => {
         const chunk = yield* Stream.runCollect(input.stream);
         return Array.from(chunk);
       }).pipe(
-        Effect.timeoutFail({
+        Effect.timeoutOrElse({
           duration: TEST_TIMEOUT,
-          onTimeout: () => new Error("drop_new EOF semantics timed out"),
+          orElse: () =>
+            Effect.fail(new Error("drop_new EOF semantics timed out")),
         }),
       ),
     );
@@ -330,9 +335,10 @@ describe("StdinInput", () => {
         const chunk = yield* Stream.runCollect(input.stream);
         return Array.from(chunk);
       }).pipe(
-        Effect.timeoutFail({
+        Effect.timeoutOrElse({
           duration: TEST_TIMEOUT,
-          onTimeout: () => new Error("drop_old EOF semantics timed out"),
+          orElse: () =>
+            Effect.fail(new Error("drop_old EOF semantics timed out")),
         }),
       ),
     );
@@ -360,10 +366,12 @@ describe("StdinInput", () => {
 
         yield* input.close!();
       }).pipe(
-        Effect.timeoutFail({
+        Effect.timeoutOrElse({
           duration: TEST_TIMEOUT,
-          onTimeout: () =>
-            new Error("close while EOF admission waited timed out"),
+          orElse: () =>
+            Effect.fail(
+              new Error("close while EOF admission waited timed out"),
+            ),
         }),
       ),
     );
@@ -392,11 +400,13 @@ describe("StdinInput", () => {
           processors: [],
           output,
         }).pipe(
-          Effect.timeoutFail({
+          Effect.timeoutOrElse({
             duration: TEST_TIMEOUT,
-            onTimeout: () =>
-              new Error(
-                "stdin destroy path timed out waiting for stream settlement",
+            orElse: () =>
+              Effect.fail(
+                new Error(
+                  "stdin destroy path timed out waiting for stream settlement",
+                ),
               ),
           }),
         ),
@@ -444,12 +454,14 @@ describe("StdinInput", () => {
       const collectFiber = Effect.runPromise(
         Stream.runCollect(input.stream).pipe(
           Effect.map((chunk) => Array.from(chunk)),
-          Effect.either,
-          Effect.timeoutFail({
+          Effect.result,
+          Effect.timeoutOrElse({
             duration: TEST_TIMEOUT,
-            onTimeout: () =>
-              new Error(
-                "stdin stream collect timed out after readable.destroy",
+            orElse: () =>
+              Effect.fail(
+                new Error(
+                  "stdin stream collect timed out after readable.destroy",
+                ),
               ),
           }),
         ),
@@ -461,14 +473,14 @@ describe("StdinInput", () => {
 
       const collected = await collectFiber;
 
-      expect(collected._tag).toBe("Left");
-      if (collected._tag === "Left") {
-        expect(collected.left).toBeInstanceOf(StdinInputError);
-        expect(collected.left).toMatchObject({
+      expect(collected._tag).toBe("Failure");
+      if (collected._tag === "Failure") {
+        expect(collected.failure).toBeInstanceOf(StdinInputError);
+        expect(collected.failure).toMatchObject({
           _tag: "StdinInputError",
           cause: sentinelError,
         });
-        expect(collected.left.message).toContain("simulated EIO");
+        expect(collected.failure.message).toContain("simulated EIO");
       }
 
       // Metric path: complete line offered once; incomplete trailing not flushed.

@@ -12,6 +12,7 @@
 
 ## Local Contracts
 
+- Use Effect 4 APIs: `effect/Schema` codecs and `effect/http` modules; provide HTTP client layers around the full request/body lifecycle.
 - Keep ESM imports explicit with `.js` extensions.
 - Keep Effect failures in typed error channels; convert defects or synchronous constructor throws at trust boundaries.
 - Preserve immutable `Message` values and Effect-managed resource cleanup.

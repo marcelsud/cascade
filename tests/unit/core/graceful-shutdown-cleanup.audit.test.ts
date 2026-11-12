@@ -35,7 +35,7 @@ describe("graceful shutdown resource cleanup on force/timeout", () => {
         Effect.gen(function* () {
           const outputStarted = yield* Deferred.make<void>();
           const shutdown = yield* makeShutdownController();
-          const fiber = yield* Effect.fork(
+          const fiber = yield* Effect.forkChild(
             run(
               {
                 name: `shutdown-cleanup-${mode}`,
@@ -53,7 +53,7 @@ describe("graceful shutdown resource cleanup on force/timeout", () => {
                   name: "blocked",
                   send: () =>
                     Deferred.succeed(outputStarted, undefined).pipe(
-                      Effect.zipRight(Effect.never),
+                      Effect.andThen(Effect.never),
                     ),
                   close: () =>
                     Effect.sync(() => {
@@ -92,7 +92,7 @@ describe("graceful shutdown resource cleanup on force/timeout", () => {
       Effect.gen(function* () {
         const outputStarted = yield* Deferred.make<void>();
         const shutdown = yield* makeShutdownController();
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           run(
             {
               name: "shutdown-cleanup-force-timeout-race",
@@ -105,8 +105,8 @@ describe("graceful shutdown resource cleanup on force/timeout", () => {
                   Effect.sync(() => {
                     inputCloseEntries += 1;
                   }).pipe(
-                    Effect.zipRight(Effect.sleep("60 millis")),
-                    Effect.zipRight(
+                    Effect.andThen(Effect.sleep("60 millis")),
+                    Effect.andThen(
                       Effect.sync(() => {
                         inputClosed += 1;
                       }),
@@ -118,7 +118,7 @@ describe("graceful shutdown resource cleanup on force/timeout", () => {
                 name: "blocked",
                 send: () =>
                   Deferred.succeed(outputStarted, undefined).pipe(
-                    Effect.zipRight(Effect.never),
+                    Effect.andThen(Effect.never),
                   ),
                 close: () =>
                   Effect.sync(() => {

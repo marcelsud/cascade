@@ -276,9 +276,11 @@ dlq:
 
       const exit = await sendExit(output, undefined);
       expect(exit._tag).toBe("Failure");
-      if (exit._tag === "Failure" && exit.cause._tag === "Fail") {
-        expect(exit.cause.error).toBeInstanceOf(FileOutputError);
-        expect((exit.cause.error as FileOutputError).category).toBe("logical");
+      if (exit._tag === "Failure" && exit.cause.reasons[0]._tag === "Fail") {
+        expect(exit.cause.reasons[0].error).toBeInstanceOf(FileOutputError);
+        expect((exit.cause.reasons[0].error as FileOutputError).category).toBe(
+          "logical",
+        );
       }
       expect(output.getMetrics?.().sendErrors).toBe(1);
       // Serialization failed before any open: no file created.
@@ -296,9 +298,11 @@ dlq:
       const exit = await sendExit(output, "x");
 
       expect(exit._tag).toBe("Failure");
-      if (exit._tag === "Failure" && exit.cause._tag === "Fail") {
-        expect(exit.cause.error).toBeInstanceOf(FileOutputError);
-        expect((exit.cause.error as FileOutputError).category).toBe("fatal");
+      if (exit._tag === "Failure" && exit.cause.reasons[0]._tag === "Fail") {
+        expect(exit.cause.reasons[0].error).toBeInstanceOf(FileOutputError);
+        expect((exit.cause.reasons[0].error as FileOutputError).category).toBe(
+          "fatal",
+        );
       }
       // The directory is still a directory — nothing was written into it.
       expect((await fsp.stat(subdir)).isDirectory()).toBe(true);
@@ -314,11 +318,11 @@ dlq:
         const exit = await sendExit(output, "x");
 
         expect(exit._tag).toBe("Failure");
-        if (exit._tag === "Failure" && exit.cause._tag === "Fail") {
-          expect(exit.cause.error).toBeInstanceOf(FileOutputError);
-          expect((exit.cause.error as FileOutputError).category).toBe(
-            "intermittent",
-          );
+        if (exit._tag === "Failure" && exit.cause.reasons[0]._tag === "Fail") {
+          expect(exit.cause.reasons[0].error).toBeInstanceOf(FileOutputError);
+          expect(
+            (exit.cause.reasons[0].error as FileOutputError).category,
+          ).toBe("intermittent");
         }
       },
     );

@@ -64,6 +64,7 @@ Production-ready patterns and integrations:
 
 ## 🛠️ Development
 
+- **[Effect 4 Migration](effect-4.md)** - Runtime requirements and custom component API changes
 - **[Local Development Setup](local-development.md)** - Set up LocalStack and Docker Compose for local testing
 - **[Component Development Guide](COMPONENTS.md)** - Build custom inputs, processors, and outputs
 - **[Component Registry](component-registry.md)** - Load custom component schemas and factories from libraries or the CLI

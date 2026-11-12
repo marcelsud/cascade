@@ -17,9 +17,7 @@ const captureLogs = async (
     messages.push(message);
   });
 
-  await Effect.runPromise(
-    effect.pipe(Effect.provide(Logger.replace(Logger.defaultLogger, logger))),
-  );
+  await Effect.runPromise(effect.pipe(Effect.provide(Logger.layer([logger]))));
   return messages;
 };
 

@@ -1,3 +1,4 @@
+import { Semaphore } from "effect";
 /**
  * Core types and interfaces for the pipeline system
  */
@@ -68,7 +69,7 @@ export interface Output<E = never, R = never> {
    * Retry backoff and DLQ routing must not hold a primary permit.
    */
   readonly bindPrimaryOutputPermits?: (
-    permits: Effect.Semaphore,
+    permits: Semaphore.Semaphore,
   ) => Output<E, R>;
 }
 

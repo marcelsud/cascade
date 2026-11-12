@@ -13,9 +13,10 @@
 
 - Inputs return a stable name, stream, optional close, metrics, and correct shutdown mode.
 - Sources that remove or advance data before delivery attach an idempotent `ack` when supported and finish active destructive pulls during graceful shutdown.
+- Effect 4 queue shutdown interrupts consumers. Translate explicit input close into normal stream completion; producer EOF drains accepted records in chunks bounded by `Stream.DefaultChunkSize` before ending.
 - Queue size and `block`, `drop_new`, or `drop_old` behavior stay bounded and reflected in metrics.
 - HTTP request bodies are bounded by a configured byte limit enforced before buffering; oversized requests are rejected without becoming messages.
-- Acquisition and release remain cancellation-safe; close never leaks source handles.
+- Acquisition and release remain cancellation-safe; close never leaks source handles. Redis Pub/Sub waits for the ready check before SUBSCRIBE/PSUBSCRIBE and removes readiness listeners on cancellation or connection failure.
 - Redis Streams consumer groups first sweep the configured consumer's pending entries with a monotonic cursor, then read new entries. Replayed messages retain deferred acknowledgement; recovering another consumer's entries is outside this path.
 - HTTP input factory is Effect-returning: it fails with a typed fatal `HttpInputError` if bind is rejected, releases any queue/server resources on that path, and emits the listening log only after a confirmed bind.
 - Failures retain the project's fatal, intermittent, and logical categories.

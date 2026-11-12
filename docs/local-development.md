@@ -17,15 +17,15 @@ community release. Newer unified LocalStack images require an auth token.
 ## Prerequisites
 
 - Docker and Docker Compose installed
-- Node.js 18+ installed
-- npm or yarn
+- Node.js 24+ installed
+- npm and Bun (frozen dependency installs and binary builds)
 
 ## Quick Start
 
 ### 1. Install Dependencies
 
 ```bash
-npm install
+bun install --frozen-lockfile
 ```
 
 ### 2. Start Infrastructure

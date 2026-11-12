@@ -1,5 +1,6 @@
+import { Semaphore } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
-import { Deferred, Effect, Either, Exit, Schedule } from "effect";
+import { Deferred, Effect, Result, Exit, Schedule } from "effect";
 import * as S from "effect/Schema";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -47,7 +48,7 @@ const loadYamlConfig = async (config: unknown) => {
   tempDirs.push(dir);
   const configPath = path.join(dir, "config.yaml");
   await fs.writeFile(configPath, yaml.stringify(config), "utf8");
-  return Effect.runPromise(Effect.either(loadConfig(configPath)));
+  return Effect.runPromise(Effect.result(loadConfig(configPath)));
 };
 
 afterEach(async () => {
@@ -59,7 +60,7 @@ afterEach(async () => {
 describe("pipeline backpressure configuration", () => {
   it("maps YAML-style fields to the runtime pipeline", async () => {
     const config = await Effect.runPromise(
-      S.decodeUnknown(PipelineConfigSchema)({
+      S.decodeUnknownEffect(PipelineConfigSchema)({
         ...baseConfig,
         pipeline: {
           backpressure: {
@@ -80,7 +81,7 @@ describe("pipeline backpressure configuration", () => {
 
   it("leaves backpressure unset when it is not configured", async () => {
     const config = await Effect.runPromise(
-      S.decodeUnknown(PipelineConfigSchema)(baseConfig),
+      S.decodeUnknownEffect(PipelineConfigSchema)(baseConfig),
     );
 
     const pipeline = await Effect.runPromise(buildPipeline(config));
@@ -90,7 +91,7 @@ describe("pipeline backpressure configuration", () => {
 
   it("uses the runtime output concurrency default for partial config", async () => {
     const config = await Effect.runPromise(
-      S.decodeUnknown(PipelineConfigSchema)({
+      S.decodeUnknownEffect(PipelineConfigSchema)({
         ...baseConfig,
         pipeline: {
           backpressure: {
@@ -143,7 +144,7 @@ describe("pipeline backpressure configuration", () => {
 
   it("caps simultaneous primary sends across concurrent one-to-one workers", async () => {
     const config = await Effect.runPromise(
-      S.decodeUnknown(PipelineConfigSchema)({
+      S.decodeUnknownEffect(PipelineConfigSchema)({
         input: {
           generate: {
             count: 10,
@@ -189,7 +190,7 @@ describe("pipeline backpressure configuration", () => {
 
   it("caps aggregate fan-out sends across multiple source-message workers", async () => {
     const config = await Effect.runPromise(
-      S.decodeUnknown(PipelineConfigSchema)({
+      S.decodeUnknownEffect(PipelineConfigSchema)({
         input: {
           generate: {
             count: 2,
@@ -247,7 +248,7 @@ describe("pipeline backpressure configuration", () => {
 
   it("enforces the default output concurrency globally across source messages", async () => {
     const config = await Effect.runPromise(
-      S.decodeUnknown(PipelineConfigSchema)({
+      S.decodeUnknownEffect(PipelineConfigSchema)({
         input: {
           generate: {
             count: 10,
@@ -290,7 +291,7 @@ describe("pipeline backpressure configuration", () => {
 
   it("keeps max_concurrent_messages independent of the output cap", async () => {
     const config = await Effect.runPromise(
-      S.decodeUnknown(PipelineConfigSchema)({
+      S.decodeUnknownEffect(PipelineConfigSchema)({
         input: {
           generate: {
             count: 6,
@@ -357,7 +358,7 @@ describe("pipeline backpressure configuration", () => {
 
   it("releases primary output permits before DLQ routing", async () => {
     const config = await Effect.runPromise(
-      S.decodeUnknown(PipelineConfigSchema)({
+      S.decodeUnknownEffect(PipelineConfigSchema)({
         input: {
           generate: {
             count: 2,
@@ -434,7 +435,7 @@ describe("pipeline backpressure configuration", () => {
   it("does not hold a primary permit across withDLQ retry backoff", async () => {
     // Direct wrapper probe: with only one permit, a second primary send must
     // be able to start during the first message's retry Schedule delay.
-    const permits = await Effect.runPromise(Effect.makeSemaphore(1));
+    const permits = await Effect.runPromise(Semaphore.make(1));
     const startOrder: string[] = [];
     const attemptsByMessage = new Map<string, number>();
 
@@ -479,7 +480,7 @@ describe("pipeline backpressure configuration", () => {
       Effect.all(
         [
           bound.send(msgA),
-          Effect.sleep("20 millis").pipe(Effect.zipRight(bound.send(msgB))),
+          Effect.sleep("20 millis").pipe(Effect.andThen(bound.send(msgB))),
         ],
         { concurrency: "unbounded" },
       ).pipe(Effect.timeout("1 second"), Effect.exit),
@@ -494,7 +495,7 @@ describe("pipeline backpressure configuration", () => {
     // re-exposing bindPrimaryOutputPermits. The runner must decide outer
     // wrap from whether the original output had a binder, not the bound copy.
     const config = await Effect.runPromise(
-      S.decodeUnknown(PipelineConfigSchema)({
+      S.decodeUnknownEffect(PipelineConfigSchema)({
         input: {
           generate: {
             count: 1,
@@ -549,7 +550,7 @@ describe("pipeline backpressure configuration", () => {
     // receiver. A type-conforming method binder that reads `this.name` must
     // still complete one send; silent success with processed:0 is a hard failure.
     const config = await Effect.runPromise(
-      S.decodeUnknown(PipelineConfigSchema)({
+      S.decodeUnknownEffect(PipelineConfigSchema)({
         input: {
           generate: {
             count: 1,
@@ -612,7 +613,7 @@ describe("pipeline backpressure configuration", () => {
     // wrapper's own DLQ routing. Nested shape:
     //   withDLQ(withBackpressure(withDLQ(primary, dlq)))
     const config = await Effect.runPromise(
-      S.decodeUnknown(PipelineConfigSchema)({
+      S.decodeUnknownEffect(PipelineConfigSchema)({
         input: {
           generate: {
             count: 2,
@@ -696,7 +697,7 @@ describe("pipeline backpressure configuration", () => {
 
   it("collapses an empty backpressure object to undefined", async () => {
     const config = await Effect.runPromise(
-      S.decodeUnknown(PipelineConfigSchema)({
+      S.decodeUnknownEffect(PipelineConfigSchema)({
         ...baseConfig,
         pipeline: { backpressure: {} },
       }),
@@ -713,9 +714,9 @@ describe("pipeline backpressure configuration", () => {
       processors: [{ log: { level: "info" } }],
     });
 
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) {
-      expect(result.left.message).toContain('is unexpected, expected: "input"');
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
+      expect(result.failure.message).toContain("Expected no excess property");
     }
   });
 
@@ -727,10 +728,10 @@ describe("pipeline backpressure configuration", () => {
       },
     });
 
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) {
-      expect(result.left.message).toContain("max_concurent_messages");
-      expect(result.left.message).toContain("is unexpected");
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
+      expect(result.failure.message).toContain("max_concurent_messages");
+      expect(result.failure.message).toContain("Expected no excess property");
     }
   });
 
@@ -743,8 +744,8 @@ describe("pipeline backpressure configuration", () => {
     ["max_concurrent_outputs=1.5", "max_concurrent_outputs", 1.5],
   ])("rejects invalid %s", async (_, field, value) => {
     const result = await Effect.runPromise(
-      Effect.either(
-        S.decodeUnknown(PipelineConfigSchema)({
+      Effect.result(
+        S.decodeUnknownEffect(PipelineConfigSchema)({
           ...baseConfig,
           pipeline: {
             backpressure: {
@@ -755,6 +756,6 @@ describe("pipeline backpressure configuration", () => {
       ),
     );
 
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
   });
 });

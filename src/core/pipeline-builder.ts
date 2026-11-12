@@ -76,7 +76,7 @@ const closeIgnoringFailure = (
   close: (() => Effect.Effect<void, unknown>) | undefined,
 ): Effect.Effect<void> =>
   close
-    ? Effect.suspend(close).pipe(Effect.catchAllCause(() => Effect.void))
+    ? Effect.suspend(close).pipe(Effect.catchCause(() => Effect.void))
     : Effect.void;
 
 const buildRegisteredComponent = <T>(

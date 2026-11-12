@@ -66,7 +66,7 @@ export const createRedisStreamsOutput = (
       config,
       "Redis Streams Output configuration",
     ).pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.fail(new RedisOutputError(error.message, error.category, error)),
       ),
     ),

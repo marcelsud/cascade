@@ -1,7 +1,8 @@
+import { stopBeforeNextPull } from "../core/intake-control.js";
 /**
  * Redis List Input - Consumes messages from Redis Lists using blocking pop
  */
-import { Effect, Stream, Option } from "effect";
+import { Effect, Stream, Result } from "effect";
 import * as Schema from "effect/Schema";
 import type { Input, Message } from "../core/types.js";
 import { createMessage } from "../core/types.js";
@@ -68,12 +69,12 @@ export class RedisListInputError extends ComponentError {
  */
 export const RedisListInputConfigSchema = Schema.Struct({
   ...redisHostEndpointSchemaFields,
-  key: Schema.Union(
+  key: Schema.Union([
     NonEmptyString,
-    Schema.Array(NonEmptyString).pipe(Schema.minItems(1)),
-  ),
+    Schema.Array(NonEmptyString).pipe(Schema.check(Schema.isMinLength(1))),
+  ]),
   ...redisAuthSchemaFields,
-  direction: Schema.optional(Schema.Literal("left", "right")),
+  direction: Schema.optional(Schema.Literals(["left", "right"])),
   timeout: Schema.optional(PositiveInt),
   ...redisClientSchemaFields,
   ...redisReconnectSchemaFields,
@@ -123,7 +124,7 @@ export const createRedisListInput = (
       config,
       "Redis List Input configuration",
     ).pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.fail(
           new RedisListInputError(error.message, error.category, error),
         ),
@@ -205,7 +206,7 @@ export const createRedisListInput = (
     },
     (error, attempt, delayMs) =>
       Effect.sync(() => metrics.recordError()).pipe(
-        Effect.zipRight(
+        Effect.andThen(
           Effect.logWarning(
             `Redis list reconnect ${attempt} in ${delayMs}ms: ${error.message}`,
           ),
@@ -213,8 +214,8 @@ export const createRedisListInput = (
       ),
   );
 
-  const stream = Stream.repeatEffect(resilientPop).pipe(
-    Stream.filterMap((msg) => (msg ? Option.some(msg) : Option.none())), // Filter out nulls from timeout
+  const stream = Stream.fromEffectRepeat(stopBeforeNextPull(resilientPop)).pipe(
+    Stream.filterMap((msg) => (msg ? Result.succeed(msg) : Result.fail(msg))), // Filter out nulls from timeout
   );
 
   return {

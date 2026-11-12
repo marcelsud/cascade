@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import * as Schema from "effect/Schema";
 import {
   reconnectDelayMs,
@@ -24,7 +24,7 @@ describe("Redis reconnect policy", () => {
     });
 
     const result = await Effect.runPromise(
-      Effect.either(
+      Effect.result(
         withReconnect(operation, {
           maxReconnectAttempts: 2,
           reconnectBackoffMs: 1,
@@ -33,8 +33,8 @@ describe("Redis reconnect policy", () => {
     );
 
     expect(attempts).toBe(3);
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) expect(result.left).toBe(error);
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) expect(result.failure).toBe(error);
   });
 
   it("does not retry a fatal failure when the reconnect limit is omitted", async () => {
@@ -52,7 +52,7 @@ describe("Redis reconnect policy", () => {
     });
 
     const result = await Effect.runPromise(
-      Effect.either(
+      Effect.result(
         withReconnect(operation, {
           reconnectBackoffMs: 1,
         }),
@@ -60,8 +60,8 @@ describe("Redis reconnect policy", () => {
     );
 
     expect(attempts).toBe(1);
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) expect(result.left).toBe(fatal);
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) expect(result.failure).toBe(fatal);
   });
 
   it("does not retry a logical failure when the reconnect limit is omitted", async () => {
@@ -80,7 +80,7 @@ describe("Redis reconnect policy", () => {
     });
 
     const result = await Effect.runPromise(
-      Effect.either(
+      Effect.result(
         withReconnect(
           operation,
           {
@@ -96,8 +96,8 @@ describe("Redis reconnect policy", () => {
 
     expect(attempts).toBe(1);
     expect(retries).toBe(0);
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) expect(result.left).toBe(logical);
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) expect(result.failure).toBe(logical);
   });
 
   it("does not invoke onRetry or backoff for a fatal failure with a positive limit", async () => {
@@ -113,7 +113,7 @@ describe("Redis reconnect policy", () => {
     });
 
     const result = await Effect.runPromise(
-      Effect.either(
+      Effect.result(
         withReconnect(
           operation,
           {
@@ -130,8 +130,8 @@ describe("Redis reconnect policy", () => {
 
     expect(attempts).toBe(1);
     expect(retries).toBe(0);
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) expect(result.left).toBe(fatal);
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) expect(result.failure).toBe(fatal);
   });
 
   it("retries an intermittent failure until success when the limit is omitted", async () => {
@@ -150,7 +150,7 @@ describe("Redis reconnect policy", () => {
     });
 
     const result = await Effect.runPromise(
-      Effect.either(
+      Effect.result(
         withReconnect(
           operation,
           {
@@ -166,8 +166,8 @@ describe("Redis reconnect policy", () => {
 
     expect(attempts).toBe(2);
     expect(retries).toBe(1);
-    expect(Either.isRight(result)).toBe(true);
-    if (Either.isRight(result)) expect(result.right).toBe("recovered");
+    expect(Result.isSuccess(result)).toBe(true);
+    if (Result.isSuccess(result)) expect(result.success).toBe("recovered");
   });
 
   it.each([
@@ -189,20 +189,20 @@ describe("Redis reconnect policy", () => {
     },
   ])("accepts reconnect configuration", async (input) => {
     const result = await Effect.runPromise(
-      Effect.either(
-        Schema.decodeUnknown(PipelineConfigSchema)({
+      Effect.result(
+        Schema.decodeUnknownEffect(PipelineConfigSchema)({
           input,
           output: { capture: {} },
         }),
       ),
     );
-    expect(Either.isRight(result)).toBe(true);
+    expect(Result.isSuccess(result)).toBe(true);
   });
 
   it("rejects invalid reconnect configuration", async () => {
     const result = await Effect.runPromise(
-      Effect.either(
-        Schema.decodeUnknown(PipelineConfigSchema)({
+      Effect.result(
+        Schema.decodeUnknownEffect(PipelineConfigSchema)({
           input: {
             redis_list: {
               url: "redis://localhost:6379",
@@ -215,6 +215,6 @@ describe("Redis reconnect policy", () => {
         }),
       ),
     );
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
   });
 });

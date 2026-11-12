@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Effect, Logger, LogLevel } from "effect";
+import { Effect, Logger, References } from "effect";
 import {
   createFilterProcessor,
   FilterError,
@@ -88,13 +88,13 @@ describe("FilterProcessor", () => {
     const processor = createFilterProcessor({ check: '$error("boom")' });
 
     const result = await Effect.runPromise(
-      Effect.either(processor.process(message)),
+      Effect.result(processor.process(message)),
     );
 
-    expect(result._tag).toBe("Left");
-    if (result._tag === "Left") {
-      expect(result.left).toBeInstanceOf(FilterError);
-      expect(result.left.message).toContain(message.id);
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") {
+      expect(result.failure).toBeInstanceOf(FilterError);
+      expect(result.failure.message).toContain(message.id);
     }
   });
 
@@ -111,8 +111,8 @@ describe("FilterProcessor", () => {
       processor
         .process(message)
         .pipe(
-          Logger.withMinimumLogLevel(LogLevel.Debug),
-          Effect.provide(Logger.replace(Logger.defaultLogger, logger)),
+          Effect.provideService(References.MinimumLogLevel, "Debug"),
+          Effect.provide(Logger.layer([logger])),
         ),
     );
 

@@ -14,11 +14,13 @@ describe("bounded input queue policies", () => {
       Effect.gen(function* () {
         const queue = yield* createInputQueue<number>(1, "block");
         yield* offerInputQueue(queue, 1, "block", 1);
-        const producer = yield* Effect.fork(
+        const producer = yield* Effect.forkChild(
           offerInputQueue(queue, 2, "block", 1),
         );
         yield* Effect.sleep("10 millis");
-        const beforeTake = yield* Fiber.poll(producer);
+        const beforeTake = yield* Effect.sync(() =>
+          Option.fromUndefinedOr(producer.pollUnsafe()),
+        );
         const first = yield* Queue.take(queue);
         const offer = yield* Fiber.join(producer);
         const second = yield* Queue.take(queue);

@@ -45,11 +45,10 @@
   },
   "dependencies": {
     "@aws-sdk/client-sqs": "^3.705.0",
-    "@effect/platform": "^0.93.0",
-    "@effect/platform-node": "^0.100.0",
+    "@effect/platform-node": "4.1.4",
     "@jitl/quickjs-singlefile-cjs-release-sync": "0.32.0",
     "@smithy/node-http-handler": "^4.4.5",
-    "effect": "^3.19.3",
+    "effect": "4.1.4",
     "glob": "^10.5.0",
     "ioredis": "^5.4.2",
     "jsonata": "^2.2.2",
@@ -57,15 +56,15 @@
     "yaml": "^2.6.1"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
+    "@types/node": "^24.0.0",
     "@vitest/coverage-v8": "^2.1.8",
     "knip": "^6.29.0",
     "prettier": "^3.4.2",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2",
+    "typescript": "^5.9.3",
     "vitest": "^2.1.8"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=24.0.0"
   }
 }

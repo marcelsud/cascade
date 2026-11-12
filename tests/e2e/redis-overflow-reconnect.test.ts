@@ -52,7 +52,7 @@ describe("Redis overflow and reconnect behavior", () => {
     const slowOutput: Output = {
       name: "slow-capture-output",
       send: (message) =>
-        Effect.sleep("100 millis").pipe(Effect.zipRight(capture.send(message))),
+        Effect.sleep("100 millis").pipe(Effect.andThen(capture.send(message))),
       close: capture.close,
       getMetrics: capture.getMetrics,
     };

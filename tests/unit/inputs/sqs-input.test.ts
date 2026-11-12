@@ -1,6 +1,6 @@
+import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vitest";
-import { Effect, Fiber, Logger, Stream, TestClock } from "effect";
-import * as TestContext from "effect/TestContext";
+import { Effect, Fiber, Logger, Stream } from "effect";
 import {
   DeleteMessageCommand,
   ReceiveMessageCommand,
@@ -160,7 +160,7 @@ describe("SQS graceful shutdown", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const shutdown = yield* makeShutdownController();
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           run(
             {
               name: "sqs-graceful-shutdown-test",
@@ -478,7 +478,7 @@ describe("SQS polling recovery", () => {
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           run({
             name: "sqs-recovery-test",
             input: {
@@ -493,12 +493,12 @@ describe("SQS polling recovery", () => {
                   captured.push(message.content);
                 }),
             },
-          }).pipe(Effect.provide(Logger.replace(Logger.defaultLogger, logger))),
+          }).pipe(Effect.provide(Logger.layer([logger]))),
         );
 
         yield* TestClock.adjust("13 seconds");
         return yield* Fiber.join(fiber);
-      }).pipe(Effect.provide(TestContext.TestContext)),
+      }).pipe(Effect.provide(TestClock.layer())),
     );
 
     expect(
@@ -581,7 +581,9 @@ describe("SQS polling recovery", () => {
 });
 
 const extractMessageMetadataSection = (markdown: string): string => {
-  const match = markdown.match(/## Message Metadata\n([\s\S]*?)(?=\n## |\n*$)/);
+  const match = markdown.match(
+    /## Message Metadata\r?\n([\s\S]*?)(?=\r?\n## |\n*$)/,
+  );
   if (!match) {
     throw new Error("Message Metadata section not found");
   }

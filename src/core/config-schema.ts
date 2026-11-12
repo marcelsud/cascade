@@ -7,9 +7,11 @@ import type { ComponentKind, ComponentRegistry } from "./component-registry.js";
 import { tryParseRedisUrl } from "./redis-url.js";
 
 const RedisUrlSchema = S.String.pipe(
-  S.filter((url) => tryParseRedisUrl(url) !== undefined, {
-    message: () => "must be a valid redis:// URL",
-  }),
+  S.check(
+    S.makeFilter((url) => tryParseRedisUrl(url) !== undefined, {
+      message: "must be a valid redis:// URL",
+    }),
+  ),
 );
 
 const validateExactlyOneComponent = (
@@ -36,7 +38,7 @@ const customSchemaFields = (
   registry: ComponentRegistry | undefined,
   kind: ComponentKind,
   reservedNames: ReadonlySet<string>,
-): Record<string, S.optional<S.Schema.Any>> => {
+): Record<string, S.optional<S.Codec<unknown, unknown>>> => {
   if (!registry) return {};
   registry.assertNoConflicts(kind, reservedNames);
   return Object.fromEntries(
@@ -66,7 +68,7 @@ const redisYamlAuthFields = {
 /** Shared HTTP basic/bearer auth block. */
 const httpAuthSchema = S.optional(
   S.Struct({
-    type: S.Union(S.Literal("basic"), S.Literal("bearer")),
+    type: S.Union([S.Literal("basic"), S.Literal("bearer")]),
     username: S.optional(S.String),
     password: S.optional(S.String),
     token: S.optional(S.String),
@@ -75,8 +77,8 @@ const httpAuthSchema = S.optional(
 
 /** Shared queue backpressure knobs for stream inputs. */
 const queueBackpressureFields = {
-  queue_size: S.optional(S.Int.pipe(S.positive())),
-  overflow: S.optional(S.Literal("block", "drop_new", "drop_old")),
+  queue_size: S.optional(S.Int.pipe(S.check(S.isGreaterThan(0)))),
+  overflow: S.optional(S.Literals(["block", "drop_new", "drop_old"])),
 } as const;
 
 /**
@@ -99,14 +101,16 @@ const AwsSqsInputSchema = S.Struct({
 const RedisStreamsInputSchema = S.Struct({
   url: S.String, // redis://host:port format
   stream: S.String,
-  mode: S.optional(S.Union(S.Literal("simple"), S.Literal("consumer-group"))),
+  mode: S.optional(S.Union([S.Literal("simple"), S.Literal("consumer-group")])),
   consumer_group: S.optional(S.String),
   consumer_name: S.optional(S.String),
   block_ms: S.optional(S.Number),
   count: S.optional(S.Number),
   start_id: S.optional(S.String),
-  max_reconnect_attempts: S.optional(S.Int.pipe(S.nonNegative())),
-  reconnect_backoff_ms: S.optional(S.Int.pipe(S.positive())),
+  max_reconnect_attempts: S.optional(
+    S.Int.pipe(S.check(S.isGreaterThanOrEqualTo(0))),
+  ),
+  reconnect_backoff_ms: S.optional(S.Int.pipe(S.check(S.isGreaterThan(0)))),
   ...redisYamlConnectionFields,
 });
 
@@ -118,7 +122,7 @@ const HttpInputSchema = S.Struct({
   host: S.optional(S.String),
   path: S.optional(S.String),
   timeout: S.optional(S.Number),
-  max_body_bytes: S.optional(S.Int.pipe(S.positive())),
+  max_body_bytes: S.optional(S.Int.pipe(S.check(S.isGreaterThan(0)))),
   ...queueBackpressureFields,
 });
 
@@ -128,7 +132,7 @@ const HttpInputSchema = S.Struct({
 const FileInputSchema = S.Struct({
   path: S.String,
   follow: S.optional(S.Boolean),
-  start_at: S.optional(S.Union(S.Literal("end"), S.Literal("beginning"))),
+  start_at: S.optional(S.Union([S.Literal("end"), S.Literal("beginning")])),
   poll_interval_ms: S.optional(S.Number),
   encoding: S.optional(S.String),
   ...queueBackpressureFields,
@@ -138,7 +142,7 @@ const FileInputSchema = S.Struct({
  * Schema for Stdin Input configuration
  */
 const StdinInputSchema = S.Struct({
-  mode: S.optional(S.Union(S.Literal("lines"), S.Literal("whole"))),
+  mode: S.optional(S.Union([S.Literal("lines"), S.Literal("whole")])),
   encoding: S.optional(S.String),
   ...queueBackpressureFields,
 });
@@ -160,23 +164,25 @@ const RedisPubSubInputSchema = S.Struct({
  */
 const RedisListInputSchema = S.Struct({
   url: RedisUrlSchema,
-  key: S.Union(S.String, S.Array(S.String)),
+  key: S.Union([S.String, S.Array(S.String)]),
   ...redisYamlAuthFields,
-  direction: S.optional(S.Union(S.Literal("left"), S.Literal("right"))),
+  direction: S.optional(S.Union([S.Literal("left"), S.Literal("right")])),
   timeout: S.optional(S.Number),
   ...redisYamlConnectionFields,
-  max_reconnect_attempts: S.optional(S.Int.pipe(S.nonNegative())),
-  reconnect_backoff_ms: S.optional(S.Int.pipe(S.positive())),
+  max_reconnect_attempts: S.optional(
+    S.Int.pipe(S.check(S.isGreaterThanOrEqualTo(0))),
+  ),
+  reconnect_backoff_ms: S.optional(S.Int.pipe(S.check(S.isGreaterThan(0)))),
 });
 
 /**
  * Schema for Generate Input (testing utility)
  */
 const GenerateInputSchema = S.Struct({
-  count: S.Int.pipe(S.positive()),
-  interval: S.optional(S.Int.pipe(S.nonNegative())),
-  template: S.Record({ key: S.String, value: S.Unknown }),
-  start_index: S.optional(S.Int.pipe(S.nonNegative())),
+  count: S.Int.pipe(S.check(S.isGreaterThan(0))),
+  interval: S.optional(S.Int.pipe(S.check(S.isGreaterThanOrEqualTo(0)))),
+  template: S.Record(S.String, S.Unknown),
+  start_index: S.optional(S.Int.pipe(S.check(S.isGreaterThanOrEqualTo(0)))),
 });
 
 /**
@@ -201,7 +207,11 @@ const createInputConfigSchema = (registry?: ComponentRegistry) =>
       "input",
       new Set(Object.keys(InputConfigFields)),
     ),
-  }).pipe(S.filter((config) => validateExactlyOneComponent("Input", config)));
+  }).pipe(
+    S.check(
+      S.makeFilter((config) => validateExactlyOneComponent("Input", config)),
+    ),
+  );
 
 /**
  * Schema for Metadata Processor (Bento style)
@@ -223,12 +233,12 @@ const UppercaseProcessorSchema = S.Struct({
  */
 const LogProcessorSchema = S.Struct({
   level: S.optional(
-    S.Union(
+    S.Union([
       S.Literal("debug"),
       S.Literal("info"),
       S.Literal("warn"),
       S.Literal("error"),
-    ),
+    ]),
   ),
   include_content: S.optional(S.Boolean),
 });
@@ -247,9 +257,11 @@ const MappingProcessorSchema = S.Struct({
  */
 const FilterProcessorSchema = S.Struct({
   check: S.String.pipe(
-    S.filter((value) => value.trim().length > 0, {
-      message: () => "Filter processor 'check' must be a non-empty string",
-    }),
+    S.check(
+      S.makeFilter((value) => value.trim().length > 0, {
+        message: "Filter processor 'check' must be a non-empty string",
+      }),
+    ),
   ),
 });
 
@@ -259,14 +271,14 @@ const FilterProcessorSchema = S.Struct({
 const HttpProcessorSchema = S.Struct({
   url: S.String,
   method: S.optional(
-    S.Union(
+    S.Union([
       S.Literal("GET"),
       S.Literal("POST"),
       S.Literal("PUT"),
       S.Literal("PATCH"),
-    ),
+    ]),
   ),
-  headers: S.optional(S.Record({ key: S.String, value: S.String })),
+  headers: S.optional(S.Record(S.String, S.String)),
   body: S.optional(S.String),
   result_key: S.optional(S.String),
   result_mapping: S.optional(S.String),
@@ -280,27 +292,35 @@ const HttpProcessorSchema = S.Struct({
  */
 const DedupeProcessorSchema = S.Struct({
   key: S.String.pipe(
-    S.minLength(1, {
-      message: () =>
-        "Dedupe processor 'key' must be a non-empty string (e.g. 'messageId' or 'metadata.correlationId')",
-    }),
+    S.check(
+      S.isMinLength(1, {
+        message:
+          "Dedupe processor 'key' must be a non-empty string (e.g. 'messageId' or 'metadata.correlationId')",
+      }),
+    ),
   ),
   window_ms: S.optional(
     S.Number.pipe(
-      S.positive({
-        message: () =>
-          "Dedupe processor 'window_ms' must be a positive number (milliseconds)",
-      }),
+      S.check(
+        S.isGreaterThan(0, {
+          message:
+            "Dedupe processor 'window_ms' must be a positive number (milliseconds)",
+        }),
+      ),
     ),
   ),
   max_keys: S.optional(
     S.Number.pipe(
-      S.int({
-        message: () => "Dedupe processor 'max_keys' must be an integer",
-      }),
-      S.positive({
-        message: () => "Dedupe processor 'max_keys' must be a positive integer",
-      }),
+      S.check(
+        S.isInt({
+          message: "Dedupe processor 'max_keys' must be an integer",
+        }),
+      ),
+      S.check(
+        S.isGreaterThan(0, {
+          message: "Dedupe processor 'max_keys' must be a positive integer",
+        }),
+      ),
     ),
   ),
 });
@@ -323,10 +343,12 @@ const AssertProcessorSchema = S.Struct({
   error: S.optional(S.String),
   logPassing: S.optional(S.Boolean),
 }).pipe(
-  S.filter(hasEffectiveAssertCheck, {
-    message: () =>
-      "Assert Processor requires at least one effective check: a non-blank 'condition' or at least one non-blank 'hasFields' path.",
-  }),
+  S.check(
+    S.makeFilter(hasEffectiveAssertCheck, {
+      message:
+        "Assert Processor requires at least one effective check: a non-blank 'condition' or at least one non-blank 'hasFields' path.",
+    }),
+  ),
 );
 
 /**
@@ -334,7 +356,7 @@ const AssertProcessorSchema = S.Struct({
  * Uses S.suspend for recursive schema definition
  */
 const createProcessorConfigSchema = (registry?: ComponentRegistry) => {
-  let processorSchema: S.Schema<ProcessorConfig>;
+  let processorSchema: S.Codec<ProcessorConfig>;
   processorSchema = S.suspend(() =>
     S.Struct({
       metadata: S.optional(MetadataProcessorSchema),
@@ -380,9 +402,13 @@ const createProcessorConfigSchema = (registry?: ComponentRegistry) => {
         ]),
       ),
     }).pipe(
-      S.filter((config) => validateExactlyOneComponent("Processor", config)),
+      S.check(
+        S.makeFilter((config) =>
+          validateExactlyOneComponent("Processor", config),
+        ),
+      ),
     ),
-  ) as S.Schema<ProcessorConfig>;
+  ) as S.Codec<ProcessorConfig>;
   return processorSchema;
 };
 
@@ -419,9 +445,9 @@ const AwsSqsOutputSchema = S.Struct({
 const HttpOutputSchema = S.Struct({
   url: S.String,
   method: S.optional(
-    S.Union(S.Literal("POST"), S.Literal("PUT"), S.Literal("PATCH")),
+    S.Union([S.Literal("POST"), S.Literal("PUT"), S.Literal("PATCH")]),
   ),
-  headers: S.optional(S.Record({ key: S.String, value: S.String })),
+  headers: S.optional(S.Record(S.String, S.String)),
   timeout: S.optional(S.Number),
   max_retries: S.optional(S.Number),
   auth: httpAuthSchema,
@@ -445,7 +471,7 @@ const RedisListOutputSchema = S.Struct({
   url: RedisUrlSchema,
   key: S.String,
   ...redisYamlAuthFields,
-  direction: S.optional(S.Union(S.Literal("left"), S.Literal("right"))),
+  direction: S.optional(S.Union([S.Literal("left"), S.Literal("right")])),
   max_length: S.optional(S.Number),
   // Compatibility alias for the documented YAML key; canonical is max_length.
   max_len: S.optional(S.Number),
@@ -466,7 +492,7 @@ const CaptureOutputSchema = S.Struct({
  * @experimental Alpha component — shape may change before it stabilizes.
  */
 const StdoutOutputSchema = S.Struct({
-  format: S.optional(S.Union(S.Literal("content"), S.Literal("message"))),
+  format: S.optional(S.Union([S.Literal("content"), S.Literal("message")])),
 });
 
 /**
@@ -476,8 +502,8 @@ const StdoutOutputSchema = S.Struct({
  */
 const FileOutputSchema = S.Struct({
   path: S.String,
-  format: S.optional(S.Union(S.Literal("content"), S.Literal("message"))),
-  mode: S.optional(S.Union(S.Literal("append"), S.Literal("overwrite"))),
+  format: S.optional(S.Union([S.Literal("content"), S.Literal("message")])),
+  mode: S.optional(S.Union([S.Literal("append"), S.Literal("overwrite")])),
 });
 
 /**
@@ -502,7 +528,11 @@ const createOutputConfigSchema = (registry?: ComponentRegistry) =>
       "output",
       new Set(Object.keys(OutputConfigFields)),
     ),
-  }).pipe(S.filter((config) => validateExactlyOneComponent("Output", config)));
+  }).pipe(
+    S.check(
+      S.makeFilter((config) => validateExactlyOneComponent("Output", config)),
+    ),
+  );
 
 /**
  * Complete pipeline configuration schema (Bento style)
@@ -514,14 +544,18 @@ export const createPipelineConfigSchema = (registry?: ComponentRegistry) => {
 
   return S.Struct({
     input,
-    shutdown_timeout_ms: S.optional(S.Int.pipe(S.positive())),
+    shutdown_timeout_ms: S.optional(S.Int.pipe(S.check(S.isGreaterThan(0)))),
     pipeline: S.optional(
       S.Struct({
         processors: S.optional(S.Array(processor)),
         backpressure: S.optional(
           S.Struct({
-            max_concurrent_messages: S.optional(S.Int.pipe(S.positive())),
-            max_concurrent_outputs: S.optional(S.Int.pipe(S.positive())),
+            max_concurrent_messages: S.optional(
+              S.Int.pipe(S.check(S.isGreaterThan(0))),
+            ),
+            max_concurrent_outputs: S.optional(
+              S.Int.pipe(S.check(S.isGreaterThan(0))),
+            ),
           }),
         ),
       }),
@@ -530,9 +564,13 @@ export const createPipelineConfigSchema = (registry?: ComponentRegistry) => {
     dlq: S.optional(
       S.Struct({
         output,
-        max_retries: S.optional(S.Int.pipe(S.nonNegative())),
-        retry_schedule: S.optional(S.Literal("exponential", "fixed", "linear")),
-        retry_interval_ms: S.optional(S.Int.pipe(S.positive())),
+        max_retries: S.optional(
+          S.Int.pipe(S.check(S.isGreaterThanOrEqualTo(0))),
+        ),
+        retry_schedule: S.optional(
+          S.Literals(["exponential", "fixed", "linear"]),
+        ),
+        retry_interval_ms: S.optional(S.Int.pipe(S.check(S.isGreaterThan(0)))),
       }),
     ),
   });
@@ -572,13 +610,9 @@ export const PipelineConfigSchema = createPipelineConfigSchema();
 /**
  * TypeScript type inferred from schema
  */
-export type PipelineConfig = S.Schema.Type<typeof PipelineConfigSchema>;
-export type InputConfig = S.Schema.Type<
-  ReturnType<typeof createInputConfigSchema>
->;
-export type OutputConfig = S.Schema.Type<
-  ReturnType<typeof createOutputConfigSchema>
->;
+export type PipelineConfig = (typeof PipelineConfigSchema)["Type"];
+export type InputConfig = ReturnType<typeof createInputConfigSchema>["Type"];
+export type OutputConfig = ReturnType<typeof createOutputConfigSchema>["Type"];
 
 /**
  * ProcessorConfig type - manually defined as recursive

@@ -126,7 +126,7 @@ describe("fatal primary output with blocked DLQ", () => {
               name: "slow-dlq",
               send: (message) =>
                 Effect.sleep("40 millis").pipe(
-                  Effect.zipRight(
+                  Effect.andThen(
                     Effect.sync(() => {
                       archived.push(message);
                     }),

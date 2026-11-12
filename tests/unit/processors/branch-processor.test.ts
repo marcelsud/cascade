@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { Cause, Effect, Either, Exit, Option } from "effect";
+import { Cause, Effect, Result, Exit, Option } from "effect";
 import {
   BranchProcessorError,
   createBranchProcessor,
@@ -153,12 +153,12 @@ describe("BranchProcessor", () => {
     });
 
     const either = await Effect.runPromise(
-      Effect.either(branchProcessor.process(message)),
+      Effect.result(branchProcessor.process(message)),
     );
 
-    expect(Either.isRight(either)).toBe(true);
-    if (Either.isRight(either)) {
-      const result = either.right as any;
+    expect(Result.isSuccess(either)).toBe(true);
+    if (Result.isSuccess(either)) {
+      const result = either.success as any;
       expect(result.content).toBeUndefined();
       expect(result.metadata.branchResult.content).toBeUndefined();
     }
@@ -228,7 +228,7 @@ describe("BranchProcessor", () => {
 
     expect(Exit.isFailure(exit)).toBe(true);
     if (Exit.isFailure(exit)) {
-      const failure = Cause.failureOption(exit.cause);
+      const failure = Cause.findErrorOption(exit.cause);
       expect(Option.isSome(failure)).toBe(true);
       if (Option.isSome(failure)) {
         expect(failure.value).toBeInstanceOf(BranchProcessorError);
@@ -239,11 +239,11 @@ describe("BranchProcessor", () => {
     }
 
     const either = await Effect.runPromise(
-      Effect.either(branchProcessor.process(message)),
+      Effect.result(branchProcessor.process(message)),
     );
-    expect(Either.isLeft(either)).toBe(true);
-    if (Either.isLeft(either)) {
-      expect(either.left).toBeInstanceOf(BranchProcessorError);
+    expect(Result.isFailure(either)).toBe(true);
+    if (Result.isFailure(either)) {
+      expect(either.failure).toBeInstanceOf(BranchProcessorError);
     }
   });
 
@@ -294,7 +294,7 @@ describe("BranchProcessor", () => {
     // Typed failure (Some) is what pipeline/DLQ handling recovers; defects are not.
     expect(Exit.isFailure(exit)).toBe(true);
     if (Exit.isFailure(exit)) {
-      const failure = Cause.failureOption(exit.cause);
+      const failure = Cause.findErrorOption(exit.cause);
       expect(Option.isSome(failure)).toBe(true);
       if (Option.isSome(failure)) {
         expect(failure.value).toBeInstanceOf(BranchProcessorError);
@@ -303,7 +303,7 @@ describe("BranchProcessor", () => {
         );
       }
       // Confirm it is not only a defect/die without a typed failure
-      expect(Cause.isDie(exit.cause)).toBe(false);
+      expect(Cause.hasDies(exit.cause)).toBe(false);
     }
   });
 });

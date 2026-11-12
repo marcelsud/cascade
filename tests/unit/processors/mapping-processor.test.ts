@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import {
   createMappingProcessor,
   MappingError,
@@ -297,27 +297,23 @@ describe("GHSA-86vw-mfpg-wwv9 / CVE-2026-52746 regression", () => {
   // Vulnerable jsonata@2.1.0 took ~741 ms on this exact input size; the patched
   // 2.2.x path is sub-millisecond. 250 ms separates the two with a wide margin
   // and is not a flaky micro-benchmark.
-  it(
-    "evaluates $toMillis on crafted non-matching input within a bounded window",
-    async () => {
-      const crafted = "2020" + "-01".repeat(16_000) + "X";
-      const processor = createMappingProcessor({
-        expression: "$toMillis(date)",
-      });
-      const message = createMessage({ date: crafted });
+  it("evaluates $toMillis on crafted non-matching input within a bounded window", async () => {
+    const crafted = "2020" + "-01".repeat(16_000) + "X";
+    const processor = createMappingProcessor({
+      expression: "$toMillis(date)",
+    });
+    const message = createMessage({ date: crafted });
 
-      const started = Date.now();
-      const result = await Effect.runPromise(
-        Effect.either(processor.process(message)),
-      );
-      const elapsedMs = Date.now() - started;
+    const started = Date.now();
+    const result = await Effect.runPromise(
+      Effect.result(processor.process(message)),
+    );
+    const elapsedMs = Date.now() - started;
 
-      // Settled (success or typed failure) — only elapsed time is asserted.
-      expect(result._tag === "Left" || result._tag === "Right").toBe(true);
-      expect(elapsedMs).toBeLessThan(250);
-    },
-    10_000,
-  );
+    // Settled (success or typed failure) — only elapsed time is asserted.
+    expect(result._tag === "Failure" || result._tag === "Success").toBe(true);
+    expect(elapsedMs).toBeLessThan(250);
+  }, 10_000);
 
   it("preserves $toMillis for valid ISO-8601 epoch start", async () => {
     const processor = createMappingProcessor({
@@ -340,13 +336,13 @@ describe("GHSA-86vw-mfpg-wwv9 / CVE-2026-52746 regression", () => {
     const message = createMessage({ date: "not-a-timestamp" });
 
     const result = await Effect.runPromise(
-      Effect.either(processor.process(message)),
+      Effect.result(processor.process(message)),
     );
 
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) {
-      expect(result.left).toBeInstanceOf(MappingError);
-      expect(result.left.message).toContain("JSONata evaluation failed");
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
+      expect(result.failure).toBeInstanceOf(MappingError);
+      expect(result.failure.message).toContain("JSONata evaluation failed");
     }
   });
 });

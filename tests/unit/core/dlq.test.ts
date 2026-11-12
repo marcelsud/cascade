@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Chunk, Duration, Effect, Schedule, Stream } from "effect";
+import { Duration, Effect, Schedule, Stream } from "effect";
 import {
   createDLQRetrySchedule,
   withBackpressure,
@@ -9,7 +9,6 @@ import {
 import { create, run } from "../../../src/core/pipeline.js";
 import { createMessage } from "../../../src/core/types.js";
 import type { Output, Message } from "../../../src/core/types.js";
-
 
 import {
   ComponentError,
@@ -35,10 +34,17 @@ describe("Dead Letter Queue (DLQ)", () => {
     ["linear", [1000, 2000, 3000, 4000]],
   ] as const)("builds the %s retry schedule", async (type, expected) => {
     const outputs = await Effect.runPromise(
-      Schedule.run(createDLQRetrySchedule(type, 1_000), 0, [1, 2, 3, 4]),
+      Effect.gen(function* () {
+        const step = yield* Schedule.toStep(
+          createDLQRetrySchedule(type, 1_000),
+        );
+        return yield* Effect.forEach([1, 2, 3, 4], (input) =>
+          step(0, input).pipe(Effect.map(([output]) => output)),
+        );
+      }),
     );
     expect(
-      Chunk.toReadonlyArray(outputs).map((value) =>
+      Array.from(outputs).map((value) =>
         Duration.toMillis(value as Duration.Duration),
       ),
     ).toEqual(expected);
@@ -46,9 +52,16 @@ describe("Dead Letter Queue (DLQ)", () => {
 
   it("builds a fixed retry schedule", async () => {
     const outputs = await Effect.runPromise(
-      Schedule.run(createDLQRetrySchedule("fixed", 1_000), 0, [1, 2, 3, 4]),
+      Effect.gen(function* () {
+        const step = yield* Schedule.toStep(
+          createDLQRetrySchedule("fixed", 1_000),
+        );
+        return yield* Effect.forEach([1, 2, 3, 4], (input) =>
+          step(0, input).pipe(Effect.map(([output]) => output)),
+        );
+      }),
     );
-    expect(Chunk.toReadonlyArray(outputs)).toEqual([0, 1, 2, 3]);
+    expect(Array.from(outputs)).toEqual([0, 1, 2, 3]);
   });
 
   it("waits the fixed interval after a slow attempt completes", async () => {
@@ -56,12 +69,12 @@ describe("Dead Letter Queue (DLQ)", () => {
     const slowFailure = Effect.suspend(() => {
       attemptStarts.push(Date.now());
       return Effect.sleep("60 millis").pipe(
-        Effect.zipRight(Effect.fail(new Error("retry"))),
+        Effect.andThen(Effect.fail(new Error("retry"))),
       );
     });
 
     await Effect.runPromise(
-      Effect.either(
+      Effect.result(
         slowFailure.pipe(
           Effect.retry({
             times: 2,
@@ -413,10 +426,10 @@ describe("Dead Letter Queue (DLQ)", () => {
       expect(dlqOutput.send).toHaveBeenCalledTimes(1);
       expect(exit._tag).toBe("Failure");
       if (exit._tag === "Failure") {
-        expect(exit.cause._tag).toBe("Fail");
-        if (exit.cause._tag === "Fail") {
-          expect(exit.cause.error).toBe(dlqFatal);
-          expect(exit.cause.error).not.toBe(primary);
+        expect(exit.cause.reasons[0]._tag).toBe("Fail");
+        if (exit.cause.reasons[0]._tag === "Fail") {
+          expect(exit.cause.reasons[0].error).toBe(dlqFatal);
+          expect(exit.cause.reasons[0].error).not.toBe(primary);
         }
       }
     });
@@ -453,10 +466,10 @@ describe("Dead Letter Queue (DLQ)", () => {
       expect(dlqOutput.send).toHaveBeenCalledTimes(1);
       expect(exit._tag).toBe("Failure");
       if (exit._tag === "Failure") {
-        expect(exit.cause._tag).toBe("Fail");
-        if (exit.cause._tag === "Fail") {
-          expect(exit.cause.error).toBe(primary);
-          expect(exit.cause.error).not.toBe(dlqLogical);
+        expect(exit.cause.reasons[0]._tag).toBe("Fail");
+        if (exit.cause.reasons[0]._tag === "Fail") {
+          expect(exit.cause.reasons[0].error).toBe(primary);
+          expect(exit.cause.reasons[0].error).not.toBe(dlqLogical);
         }
       }
     });
@@ -579,7 +592,10 @@ describe("Dead Letter Queue (DLQ)", () => {
       };
 
       const inputMessage: Message = {
-        ...createMessage({ orderId: "order-1" }, { source: "programmatic-dlq" }),
+        ...createMessage(
+          { orderId: "order-1" },
+          { source: "programmatic-dlq" },
+        ),
         ack: () =>
           Effect.sync(() => {
             acked = true;

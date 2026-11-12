@@ -1,3 +1,4 @@
+import { Result } from "effect";
 import { describe, expect, it } from "vitest";
 import { Cause, Effect, Exit, Option, Stream } from "effect";
 import * as Schema from "effect/Schema";
@@ -19,8 +20,10 @@ const expectBuildError = async (
 
   expect(Exit.isFailure(exit)).toBe(true);
   if (Exit.isFailure(exit)) {
-    expect(Option.isNone(Cause.dieOption(exit.cause))).toBe(true);
-    const failure = Option.getOrThrow(Cause.failureOption(exit.cause));
+    expect(Option.isNone(Result.getSuccess(Cause.findDefect(exit.cause)))).toBe(
+      true,
+    );
+    const failure = Option.getOrThrow(Cause.findErrorOption(exit.cause));
     expect(failure).toBeInstanceOf(BuildError);
     expect(failure.message).toContain(message);
   }

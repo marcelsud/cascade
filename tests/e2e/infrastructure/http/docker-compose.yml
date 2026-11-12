@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   http-observer:
-    image: node:22-alpine
+    image: node:24-alpine
     container_name: e2e-http-observer
     command: ["node", "/app/http-test-server.mjs"]
     volumes:

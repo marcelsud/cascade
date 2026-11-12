@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Effect, Either, Stream } from "effect";
+import { Effect, Result, Stream } from "effect";
 import Redis from "ioredis";
 import { createRedisListInput } from "../../../src/inputs/redis-list-input.js";
 import { RedisListInputError } from "../../../src/inputs/redis-list-input.js";
@@ -238,12 +238,12 @@ describe("RedisListInput", () => {
     });
 
     const result = await Effect.runPromise(
-      Effect.either(Stream.runHead(input.stream)),
+      Effect.result(Stream.runHead(input.stream)),
     );
 
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) {
-      expect(result.left).toBeInstanceOf(RedisListInputError);
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
+      expect(result.failure).toBeInstanceOf(RedisListInputError);
     }
 
     const pipelineResult = await Effect.runPromise(
@@ -285,14 +285,14 @@ describe("RedisListInput", () => {
     });
 
     const result = await Effect.runPromise(
-      Effect.either(Stream.runHead(input.stream)),
+      Effect.result(Stream.runHead(input.stream)),
     );
 
     expect(blpop).toHaveBeenCalledTimes(1);
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) {
-      expect(result.left).toBeInstanceOf(RedisListInputError);
-      expect((result.left as RedisListInputError).category).toBe("fatal");
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
+      expect(result.failure).toBeInstanceOf(RedisListInputError);
+      expect((result.failure as RedisListInputError).category).toBe("fatal");
     }
   });
 });

@@ -1,7 +1,7 @@
 /**
  * Stdin Input - Reads messages from standard input
  */
-import { Effect, Option, Queue, Stream } from "effect";
+import { Effect, Result, Queue, Stream } from "effect";
 import * as Schema from "effect/Schema";
 import type { Readable } from "node:stream";
 import type { Input, Message } from "../core/types.js";
@@ -15,6 +15,7 @@ import { validate, NonEmptyString, PositiveInt } from "../core/validation.js";
 import { createTextMessage, splitCompleteLines } from "./text-input-utils.js";
 import {
   createInputQueue,
+  streamInputQueue,
   offerInputQueue,
   recordQueueDrop,
   type OverflowPolicy,
@@ -40,10 +41,10 @@ export class StdinInputError extends ComponentError {
 }
 
 export const StdinInputConfigSchema = Schema.Struct({
-  mode: Schema.optional(Schema.Literal("lines", "whole")),
+  mode: Schema.optional(Schema.Literals(["lines", "whole"])),
   encoding: Schema.optional(NonEmptyString),
   queueSize: Schema.optional(PositiveInt),
-  overflow: Schema.optional(Schema.Literal("block", "drop_new", "drop_old")),
+  overflow: Schema.optional(Schema.Literals(["block", "drop_new", "drop_old"])),
 });
 
 /** In-memory terminal marker; never emitted on the public Message stream. */
@@ -54,7 +55,7 @@ export const createStdinInput = (
 ): Input<StdinInputError> => {
   Effect.runSync(
     validate(StdinInputConfigSchema, config, "Stdin Input configuration").pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.fail(new StdinInputError(error.message, error.category, error)),
       ),
     ),
@@ -104,15 +105,15 @@ export const createStdinInput = (
 
         // drop_new / drop_old: never reject or evict a message to admit EOF.
         // Wait for capacity, then offer the marker.
-        while (!(yield* Queue.isShutdown(queue))) {
+        while (queue.state._tag !== "Done") {
           if ((yield* Queue.size(queue)) < queueSize) {
             if (yield* Queue.offer(queue, STDIN_EOF)) {
               return;
             }
           }
-          yield* Effect.yieldNow();
+          yield* Effect.yieldNow;
         }
-      }).pipe(Effect.catchAllCause(() => Effect.void)),
+      }).pipe(Effect.catchCause(() => Effect.void)),
     );
   };
 
@@ -136,7 +137,7 @@ export const createStdinInput = (
       ).pipe(
         // Forced close shuts the queue down under a blocked offer; treat that
         // as rejection rather than a producer error.
-        Effect.catchAllCause(() =>
+        Effect.catchCause(() =>
           Effect.succeed({ accepted: false, dropped: 0 }),
         ),
       ),
@@ -237,9 +238,9 @@ export const createStdinInput = (
   return {
     name: "stdin-input",
     getMetrics: () => metrics.getInputMetrics(),
-    stream: Stream.fromQueue(queue).pipe(
-      Stream.filterMapWhile((element) =>
-        element === STDIN_EOF ? Option.none() : Option.some(element),
+    stream: streamInputQueue(queue).pipe(
+      Stream.takeWhileFilter((element) =>
+        element === STDIN_EOF ? Result.fail(element) : Result.succeed(element),
       ),
       // After complete pre-error records drain, fail the stream when the
       // readable ended via error rather than clean EOF.
@@ -268,11 +269,9 @@ export const createStdinInput = (
         // Shut down first so blocked offers / EOF admission unblock, then
         // wait for the producer chain and emit final metrics.
         yield* Effect.promise(() => shutdownQueue()).pipe(
-          Effect.catchAll(() => Effect.void),
+          Effect.catch(() => Effect.void),
         );
-        yield* Effect.promise(() => work).pipe(
-          Effect.catchAll(() => Effect.void),
-        );
+        yield* Effect.promise(() => work).pipe(Effect.catch(() => Effect.void));
         yield* emitInputMetrics(metrics.getInputMetrics());
       }),
   };

@@ -59,8 +59,8 @@ export class FileOutputError extends ComponentError {
  */
 export const FileOutputConfigSchema = Schema.Struct({
   path: NonEmptyString,
-  format: Schema.optional(Schema.Literal("content", "message")),
-  mode: Schema.optional(Schema.Literal("append", "overwrite")),
+  format: Schema.optional(Schema.Literals(["content", "message"])),
+  mode: Schema.optional(Schema.Literals(["append", "overwrite"])),
 });
 
 /** Map a coordinator failure phase onto this output's error category. */
@@ -84,7 +84,7 @@ export const createFileOutput = (
 ): Output<FileOutputError> => {
   Effect.runSync(
     validate(FileOutputConfigSchema, config, "File Output configuration").pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.fail(new FileOutputError(error.message, error.category, error)),
       ),
     ),

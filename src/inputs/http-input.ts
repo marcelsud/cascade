@@ -1,7 +1,7 @@
 /**
  * HTTP Input - Webhook server that receives HTTP POST requests
  */
-import { Effect, Queue, Stream } from "effect";
+import { Effect, Queue } from "effect";
 import * as Schema from "effect/Schema";
 import {
   createServer,
@@ -26,6 +26,7 @@ import {
 } from "../core/validation.js";
 import {
   createInputQueue,
+  streamInputQueue,
   offerInputQueue,
   recordQueueDrop,
   type OverflowPolicy,
@@ -63,7 +64,7 @@ export const HttpInputConfigSchema = Schema.Struct({
   timeout: Schema.optional(TimeoutMs),
   maxBodyBytes: Schema.optional(PositiveInt),
   queueSize: Schema.optional(PositiveInt),
-  overflow: Schema.optional(Schema.Literal("block", "drop_new", "drop_old")),
+  overflow: Schema.optional(Schema.Literals(["block", "drop_new", "drop_old"])),
 });
 
 export const validateHttpInputConfig = (
@@ -242,7 +243,7 @@ export const createHttpInput = (
     // Separate from async double-resume protection (`settled`): the server is
     // released on interrupt until the caller actually receives the Input.
     let ownershipTransferred = false;
-    // Visible outside Effect.async so an interrupt after resume (and after the
+    // Visible outside Effect.callback so an interrupt after resume (and after the
     // async effect completes) can still release a bound server.
     let boundServer: Server | null = null;
     // Idempotent release guard (independent of `settled` and ownership).
@@ -387,7 +388,7 @@ export const createHttpInput = (
       // Interruption while listen is pending — or after resume before ownership
       // transfers — must release the server and queue (same resource contract as
       // the failure path).
-      const server: Server = yield* Effect.async<Server, HttpInputError>(
+      const server: Server = yield* Effect.callback<Server, HttpInputError>(
         (resume) => {
           const candidate = createServer(handleRequest);
           // Double-resume protection only; not ownership / cleanup.
@@ -450,11 +451,14 @@ export const createHttpInput = (
         Effect.onError(() => shutdownQueueOnce()),
       );
 
+      // Callback resume is synchronous in Effect 4. Leave ownership unclaimed
+      // until the listening event finishes, so same-turn cancellation releases it.
+      yield* Effect.yieldNow;
       yield* Effect.log(
         `HTTP Input listening on ${host}:${config.port}${path}`,
       );
 
-      const stream = Stream.fromQueue(messageQueue);
+      const stream = streamInputQueue(messageQueue);
 
       // Ownership transfers only when the Input is about to be returned. Any
       // interrupt up to this point must still release the bound server.
@@ -468,7 +472,7 @@ export const createHttpInput = (
           Effect.gen(function* () {
             yield* Effect.log("HTTP Input closing");
 
-            yield* Effect.async<void>((resume) => {
+            yield* Effect.callback<void>((resume) => {
               server.close((error) => {
                 if (error) {
                   resume(
@@ -489,7 +493,7 @@ export const createHttpInput = (
       // async cancellation finalizer and bind-path queue shutdown.
       Effect.onInterrupt(() =>
         Effect.sync(releaseUnownedServer).pipe(
-          Effect.zipRight(shutdownQueueOnce()),
+          Effect.andThen(shutdownQueueOnce()),
         ),
       ),
     );

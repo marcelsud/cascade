@@ -10,14 +10,16 @@ import { Hostname, NonEmptyString, Port, PositiveInt } from "./validation.js";
 
 /** Host/port endpoint fields shared by Redis host-form configs. */
 export const redisHostEndpointSchemaFields = {
-  host: Schema.Union(Hostname, NonEmptyString),
+  host: Schema.Union([Hostname, NonEmptyString]),
   port: Port,
 } as const;
 
 /** Optional password/db auth fields shared by Redis host-form configs. */
 export const redisAuthSchemaFields = {
   password: Schema.optional(NonEmptyString),
-  db: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
+  db: Schema.optional(
+    Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
+  ),
 } as const;
 
 /** ioredis connection knobs shared by Redis inputs and outputs. */
@@ -26,12 +28,16 @@ export const redisClientSchemaFields = {
   commandTimeout: Schema.optional(PositiveInt),
   keepAlive: Schema.optional(PositiveInt),
   lazyConnect: Schema.optional(Schema.Boolean),
-  maxRetriesPerRequest: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
+  maxRetriesPerRequest: Schema.optional(
+    Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
+  ),
   enableOfflineQueue: Schema.optional(Schema.Boolean),
 } as const;
 
 /** Reconnect knobs shared by blocking Redis inputs. */
 export const redisReconnectSchemaFields = {
-  maxReconnectAttempts: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
+  maxReconnectAttempts: Schema.optional(
+    Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
+  ),
   reconnectBackoffMs: Schema.optional(PositiveInt),
 } as const;

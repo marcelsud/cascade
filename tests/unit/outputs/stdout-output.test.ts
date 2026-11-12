@@ -281,11 +281,11 @@ output:
       );
 
       expect(exit._tag).toBe("Failure");
-      if (exit._tag === "Failure" && exit.cause._tag === "Fail") {
-        expect(exit.cause.error).toBeInstanceOf(StdoutOutputError);
-        expect((exit.cause.error as StdoutOutputError).category).toBe(
-          "logical",
-        );
+      if (exit._tag === "Failure" && exit.cause.reasons[0]._tag === "Fail") {
+        expect(exit.cause.reasons[0].error).toBeInstanceOf(StdoutOutputError);
+        expect(
+          (exit.cause.reasons[0].error as StdoutOutputError).category,
+        ).toBe("logical");
       }
       // Content must never be silently dropped: no line is written at all.
       expect(chunks).toEqual([]);
@@ -338,12 +338,12 @@ output:
 
       expect(exit._tag).toBe("Failure");
       if (exit._tag === "Failure") {
-        expect(exit.cause._tag).toBe("Fail");
-        if (exit.cause._tag === "Fail") {
-          expect(exit.cause.error).toBeInstanceOf(StdoutOutputError);
-          expect((exit.cause.error as StdoutOutputError).category).toBe(
-            "logical",
-          );
+        expect(exit.cause.reasons[0]._tag).toBe("Fail");
+        if (exit.cause.reasons[0]._tag === "Fail") {
+          expect(exit.cause.reasons[0].error).toBeInstanceOf(StdoutOutputError);
+          expect(
+            (exit.cause.reasons[0].error as StdoutOutputError).category,
+          ).toBe("logical");
         }
       }
       expect(chunks).toEqual([]);
@@ -367,7 +367,7 @@ output:
       await Effect.runPromise(
         output
           .send(createMessage(undefined))
-          .pipe(Effect.catchAll(() => Effect.void)),
+          .pipe(Effect.catch(() => Effect.void)),
       );
 
       expect(output.getMetrics?.().sendErrors).toBe(1);
@@ -380,7 +380,7 @@ output:
       await Effect.runPromise(
         output
           .send(createMessage(undefined))
-          .pipe(Effect.catchAll(() => Effect.void)),
+          .pipe(Effect.catch(() => Effect.void)),
       );
       await Effect.runPromise(output.send(createMessage("recovered")));
 
@@ -396,11 +396,11 @@ output:
       );
 
       expect(exit._tag).toBe("Failure");
-      if (exit._tag === "Failure" && exit.cause._tag === "Fail") {
-        expect(exit.cause.error).toBeInstanceOf(StdoutOutputError);
-        expect((exit.cause.error as StdoutOutputError).category).toBe(
-          "logical",
-        );
+      if (exit._tag === "Failure" && exit.cause.reasons[0]._tag === "Fail") {
+        expect(exit.cause.reasons[0].error).toBeInstanceOf(StdoutOutputError);
+        expect(
+          (exit.cause.reasons[0].error as StdoutOutputError).category,
+        ).toBe("logical");
       }
       expect(chunks).toEqual([]);
     });
@@ -483,7 +483,7 @@ output:
       await Effect.runPromise(
         output
           .send(createMessage("boom"))
-          .pipe(Effect.catchAll(() => Effect.void)),
+          .pipe(Effect.catch(() => Effect.void)),
       );
       await Effect.runPromise(output.send(createMessage("recovered")));
 
@@ -498,7 +498,7 @@ output:
       await Effect.runPromise(
         output
           .send(createMessage("boom"))
-          .pipe(Effect.catchAll(() => Effect.void)),
+          .pipe(Effect.catch(() => Effect.void)),
       );
 
       expect(output.getMetrics?.().sendErrors).toBe(1);
@@ -515,7 +515,7 @@ output:
         await Effect.runPromise(
           output
             .send(createMessage("boom"))
-            .pipe(Effect.catchAll(() => Effect.void)),
+            .pipe(Effect.catch(() => Effect.void)),
         );
       });
 
@@ -543,11 +543,16 @@ output:
           output.send(createMessage("also fails cleanly")),
         );
         expect(second._tag).toBe("Failure");
-        if (second._tag === "Failure" && second.cause._tag === "Fail") {
-          expect(second.cause.error).toBeInstanceOf(StdoutOutputError);
-          expect((second.cause.error as StdoutOutputError).category).toBe(
-            "intermittent",
+        if (
+          second._tag === "Failure" &&
+          second.cause.reasons[0]._tag === "Fail"
+        ) {
+          expect(second.cause.reasons[0].error).toBeInstanceOf(
+            StdoutOutputError,
           );
+          expect(
+            (second.cause.reasons[0].error as StdoutOutputError).category,
+          ).toBe("intermittent");
         }
       });
 
@@ -599,9 +604,7 @@ output:
 
       const { uncaught } = await withUncaughtExceptionGuard(async () => {
         const sendPromise = Effect.runPromise(
-          output
-            .send(createMessage("x"))
-            .pipe(Effect.catchAll(() => Effect.void)),
+          output.send(createMessage("x")).pipe(Effect.catch(() => Effect.void)),
         );
         await Effect.runPromise(output.close!());
         await sendPromise;
@@ -664,8 +667,10 @@ output:
 
       expect(exit._tag).toBe("Failure");
       if (exit._tag === "Failure") {
-        const error = exit.cause as any;
-        const failure = error.error ?? error;
+        const failure =
+          exit.cause.reasons[0]._tag === "Fail"
+            ? exit.cause.reasons[0].error
+            : undefined;
         expect(failure).toBeInstanceOf(StdoutOutputError);
         expect(failure.category).toBe("intermittent");
       }

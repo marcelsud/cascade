@@ -12,6 +12,7 @@
 ## Local Contracts
 
 - Vitest uses Node, global APIs, ten-second test/hook timeouts, and excludes `tests/e2e`.
+- Effect 4 tests use `Result`, flattened `Cause.reasons`, `Logger.layer`, and `effect/testing/TestClock`; retain failure, lifecycle, and metrics assertions when migrating APIs.
 - Mock only the external boundary needed to expose behavior; use real shared helpers and Effect execution paths.
 - Lifecycle tests prove cleanup and failure propagation, not only happy-path values.
 - `cli-binary.test.ts` requires Bun to compile once into a temporary directory, then proves the executable runs with no Node/Bun in its PATH or external WASM payload. Its build hook has a bounded 60-second timeout and cleans its temporary files.

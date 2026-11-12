@@ -1,6 +1,6 @@
+import { TestClock } from "effect/testing";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { Effect, Either, Fiber, Logger, LogLevel, TestClock } from "effect";
-import * as TestContext from "effect/TestContext";
+import { Effect, Result, Fiber, Logger, References } from "effect";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -535,10 +535,10 @@ describe("RedisListOutput", () => {
     const runWithRetryGap = <A, E>(effect: Effect.Effect<A, E>) =>
       Effect.runPromise(
         Effect.gen(function* () {
-          const fiber = yield* Effect.fork(effect);
+          const fiber = yield* Effect.forkChild(effect);
           yield* TestClock.adjust("1 second");
           return yield* Fiber.join(fiber);
-        }).pipe(Effect.provide(TestContext.TestContext)),
+        }).pipe(Effect.provide(TestClock.layer())),
       );
 
     it("right RPUSH retries only the trim, leaving one copy of the message", async () => {
@@ -616,17 +616,17 @@ describe("RedisListOutput", () => {
       });
 
       const result = await Effect.runPromise(
-        Effect.either(
+        Effect.result(
           output
             .send(createMessage("once"))
             .pipe(
-              Logger.withMinimumLogLevel(LogLevel.Info),
-              Effect.provide(Logger.replace(Logger.defaultLogger, logger)),
+              Effect.provideService(References.MinimumLogLevel, "Info"),
+              Effect.provide(Logger.layer([logger])),
             ),
         ),
       );
 
-      expect(Either.isRight(result)).toBe(true);
+      expect(Result.isSuccess(result)).toBe(true);
       expect(client.rpush).toHaveBeenCalledTimes(1);
       expect(ltrimCalls()).toBe(1);
 
@@ -705,13 +705,11 @@ describe("RedisListOutput", () => {
       await Effect.runPromise(
         output
           .send(createMessage("m1"))
-          .pipe(Effect.provide(Logger.replace(Logger.defaultLogger, logger))),
+          .pipe(Effect.provide(Logger.layer([logger]))),
       );
 
       await Effect.runPromise(
-        closeEffect.pipe(
-          Effect.provide(Logger.replace(Logger.defaultLogger, logger)),
-        ),
+        closeEffect.pipe(Effect.provide(Logger.layer([logger]))),
       );
 
       const metricPayloads = logs
@@ -753,24 +751,22 @@ describe("RedisListOutput", () => {
       });
 
       const result = await Effect.runPromise(
-        Effect.either(
+        Effect.result(
           Effect.gen(function* () {
-            const fiber = yield* Effect.fork(
+            const fiber = yield* Effect.forkChild(
               output
                 .send(createMessage("m1"))
-                .pipe(
-                  Effect.provide(Logger.replace(Logger.defaultLogger, logger)),
-                ),
+                .pipe(Effect.provide(Logger.layer([logger]))),
             );
             // times=1 => 2 attempts with one 1s exponential gap.
             yield* TestClock.adjust("1 second");
             return yield* Fiber.join(fiber);
-          }).pipe(Effect.provide(TestContext.TestContext)),
+          }).pipe(Effect.provide(TestClock.layer())),
         ),
       );
 
       expect(attempts).toBe(2);
-      expect(Either.isLeft(result)).toBe(true);
+      expect(Result.isFailure(result)).toBe(true);
       expect(JSON.stringify(logMessages)).toContain(
         "Redis push failed after 1 retries:",
       );
@@ -787,8 +783,8 @@ describe("RedisListOutput", () => {
       });
       return Effect.runPromise(
         effect.pipe(
-          Logger.withMinimumLogLevel(LogLevel.Info),
-          Effect.provide(Logger.replace(Logger.defaultLogger, logger)),
+          Effect.provideService(References.MinimumLogLevel, "Info"),
+          Effect.provide(Logger.layer([logger])),
         ),
       ).then(() => messages);
     };

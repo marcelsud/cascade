@@ -144,7 +144,7 @@ export const loadConfig = (
     });
 
     yield* pipe(
-      Schema.decodeUnknown(PipelineConfigEnvelopeSchema, {
+      Schema.decodeUnknownEffect(PipelineConfigEnvelopeSchema, {
         onExcessProperty: "error",
       })(interpolated),
       Effect.mapError(validationError),
@@ -155,7 +155,7 @@ export const loadConfig = (
       catch: (error) => new ConfigValidationError(String(error)),
     });
     const config = yield* pipe(
-      Schema.decodeUnknown(schema)(interpolated),
+      Schema.decodeUnknownEffect(schema)(interpolated),
       Effect.mapError(validationError),
     );
     return config as PipelineConfig;

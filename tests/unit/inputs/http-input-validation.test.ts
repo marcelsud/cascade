@@ -1,15 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createServer, Server } from "node:http";
 import { createConnection, type Socket } from "node:net";
-import {
-  Cause,
-  Effect,
-  Either,
-  Exit,
-  Fiber,
-  FiberId,
-  Option,
-} from "effect";
+import { Cause, Effect, Result, Exit, Fiber, Option } from "effect";
 import type { Input } from "../../../src/core/types.js";
 import {
   createHttpInput,
@@ -69,25 +61,25 @@ const connectWithRetry = async (
 describe("HTTP input validation", () => {
   it("returns typed validation failures through the error channel", async () => {
     const result = await Effect.runPromise(
-      Effect.either(validateHttpInputConfig({ port: 0 })),
+      Effect.result(validateHttpInputConfig({ port: 0 })),
     );
 
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) {
-      expect(result.left).toBeInstanceOf(HttpInputError);
-      expect(result.left.category).toBe("logical");
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
+      expect(result.failure).toBeInstanceOf(HttpInputError);
+      expect(result.failure.category).toBe("logical");
     }
   });
 
   it("rejects non-positive maxBodyBytes as a logical validation error", async () => {
     const result = await Effect.runPromise(
-      Effect.either(validateHttpInputConfig({ port: 8080, maxBodyBytes: 0 })),
+      Effect.result(validateHttpInputConfig({ port: 8080, maxBodyBytes: 0 })),
     );
 
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) {
-      expect(result.left).toBeInstanceOf(HttpInputError);
-      expect(result.left.category).toBe("logical");
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
+      expect(result.failure).toBeInstanceOf(HttpInputError);
+      expect(result.failure.category).toBe("logical");
     }
   });
 });
@@ -104,7 +96,7 @@ describe("HTTP input bind lifecycle", () => {
 
     try {
       const either = await Effect.runPromise(
-        Effect.either(
+        Effect.result(
           createHttpInput({
             port,
             host: "127.0.0.1",
@@ -112,13 +104,15 @@ describe("HTTP input bind lifecycle", () => {
         ),
       );
 
-      expect(Either.isLeft(either)).toBe(true);
-      if (Either.isLeft(either)) {
-        expect(either.left).toBeInstanceOf(HttpInputError);
-        expect(either.left.category).toBe("fatal");
-        expect(either.left.message).toContain("127.0.0.1");
-        expect(either.left.message).toContain(String(port));
-        expect(either.left.message.toLowerCase()).toMatch(/eaddrinuse|in use/);
+      expect(Result.isFailure(either)).toBe(true);
+      if (Result.isFailure(either)) {
+        expect(either.failure).toBeInstanceOf(HttpInputError);
+        expect(either.failure.category).toBe("fatal");
+        expect(either.failure.message).toContain("127.0.0.1");
+        expect(either.failure.message).toContain(String(port));
+        expect(either.failure.message.toLowerCase()).toMatch(
+          /eaddrinuse|in use/,
+        );
       }
 
       // Typed failure channel, not a defect.
@@ -130,9 +124,11 @@ describe("HTTP input bind lifecycle", () => {
       );
       expect(Exit.isFailure(exit)).toBe(true);
       if (Exit.isFailure(exit)) {
-        expect(Option.isSome(Cause.failureOption(exit.cause))).toBe(true);
-        expect(Option.isNone(Cause.dieOption(exit.cause))).toBe(true);
-        const failure = Option.getOrThrow(Cause.failureOption(exit.cause));
+        expect(Option.isSome(Cause.findErrorOption(exit.cause))).toBe(true);
+        expect(
+          Option.isNone(Result.getSuccess(Cause.findDefect(exit.cause))),
+        ).toBe(true);
+        const failure = Option.getOrThrow(Cause.findErrorOption(exit.cause));
         expect(failure).toBeInstanceOf(HttpInputError);
       }
     } finally {
@@ -165,17 +161,17 @@ describe("HTTP input bind lifecycle", () => {
   it("releases the port when interrupted during bind so a rebind succeeds", async () => {
     const port = await reserveFreePort();
 
-    // Fork the bind, yield so the child reaches Effect.async (listen pending on
+    // Fork the bind, yield so the child reaches Effect.callback (listen pending on
     // the next event-loop tick), then interrupt — no wall-clock sleeps.
     await Effect.runPromise(
       Effect.gen(function* () {
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           createHttpInput({
             port,
             host: "127.0.0.1",
           }),
         );
-        yield* Effect.yieldNow();
+        yield* Effect.yieldNow;
         yield* Fiber.interrupt(fiber);
       }),
     );
@@ -209,7 +205,7 @@ describe("HTTP input bind lifecycle", () => {
     const port = await reserveFreePort();
     const originalListen = Server.prototype.listen;
     let targetFiber:
-      | Fiber.RuntimeFiber<Input<HttpInputError>, HttpInputError>
+      | Fiber.Fiber<Input<HttpInputError>, HttpInputError>
       | undefined;
 
     Server.prototype.listen = function (
@@ -219,7 +215,7 @@ describe("HTTP input bind lifecycle", () => {
       // Callers register `once("listening")` before listen(); this runs after.
       const result = originalListen.apply(this, args as never);
       this.on("listening", () => {
-        targetFiber?.unsafeInterruptAsFork(FiberId.none);
+        targetFiber?.interruptUnsafe();
       });
       return result;
     };
@@ -227,7 +223,7 @@ describe("HTTP input bind lifecycle", () => {
     try {
       await Effect.runPromise(
         Effect.gen(function* () {
-          const fiber = yield* Effect.fork(
+          const fiber = yield* Effect.forkChild(
             createHttpInput({
               port,
               host: "127.0.0.1",
@@ -239,7 +235,7 @@ describe("HTTP input bind lifecycle", () => {
           const exit = yield* Fiber.await(fiber);
           expect(Exit.isFailure(exit)).toBe(true);
           if (Exit.isFailure(exit)) {
-            expect(Cause.isInterruptedOnly(exit.cause)).toBe(true);
+            expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true);
           }
         }),
       );

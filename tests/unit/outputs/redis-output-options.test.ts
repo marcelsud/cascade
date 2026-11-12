@@ -1,6 +1,6 @@
+import { TestClock } from "effect/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Effect, Either, Fiber, TestClock } from "effect";
-import * as TestContext from "effect/TestContext";
+import { Effect, Result, Fiber } from "effect";
 import * as Schema from "effect/Schema";
 import {
   closeRedisOutput,
@@ -59,7 +59,7 @@ describe("redis-output-options helpers", () => {
     it("decodes maxRetries and shared client knobs", () => {
       const schema = Schema.Struct({ ...redisConnectionSchemaFields });
       const decoded = Effect.runSync(
-        Schema.decodeUnknown(schema)({
+        Schema.decodeUnknownEffect(schema)({
           maxRetries: 2,
           connectTimeout: 1500,
           lazyConnect: true,
@@ -75,9 +75,9 @@ describe("redis-output-options helpers", () => {
     it("rejects invalid maxRetries", () => {
       const schema = Schema.Struct({ ...redisConnectionSchemaFields });
       const result = Effect.runSync(
-        Effect.either(Schema.decodeUnknown(schema)({ maxRetries: 99 })),
+        Effect.result(Schema.decodeUnknownEffect(schema)({ maxRetries: 99 })),
       );
-      expect(Either.isLeft(result)).toBe(true);
+      expect(Result.isFailure(result)).toBe(true);
     });
   });
 
@@ -156,9 +156,9 @@ describe("redis-output-options helpers", () => {
       });
 
       const result = await Effect.runPromise(
-        Effect.either(
+        Effect.result(
           Effect.gen(function* () {
-            const fiber = yield* Effect.fork(
+            const fiber = yield* Effect.forkChild(
               runRedisSendWithRetry(
                 operation,
                 metrics,
@@ -170,14 +170,14 @@ describe("redis-output-options helpers", () => {
             yield* TestClock.adjust("1 second");
             yield* TestClock.adjust("2 seconds");
             return yield* Fiber.join(fiber);
-          }).pipe(Effect.provide(TestContext.TestContext)),
+          }).pipe(Effect.provide(TestClock.layer())),
         ),
       );
 
       expect(attempts).toBe(3);
-      expect(Either.isLeft(result)).toBe(true);
-      if (Either.isLeft(result)) {
-        const error = result.left;
+      expect(Result.isFailure(result)).toBe(true);
+      if (Result.isFailure(result)) {
+        const error = result.failure;
         expect(
           error && typeof error === "object" && "message" in error
             ? String(error.message)

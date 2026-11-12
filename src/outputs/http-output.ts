@@ -3,7 +3,7 @@
  */
 import { Effect, Schedule } from "effect";
 import * as Schema from "effect/Schema";
-import { HttpClient, HttpClientRequest } from "@effect/platform";
+import { HttpClient, HttpClientError, HttpClientRequest } from "effect/http";
 import { NodeHttpClient } from "@effect/platform-node";
 import type { Output, Message } from "../core/types.js";
 import {
@@ -53,19 +53,21 @@ export class HttpOutputError extends ComponentError {
 /**
  * HTTP Method schema
  */
-const HttpMethod = Schema.Union(
+const HttpMethod = Schema.Union([
   Schema.Literal("POST"),
   Schema.Literal("PUT"),
   Schema.Literal("PATCH"),
-);
+]);
 
 /**
  * HTTP URL schema
  */
 const HttpUrl = Schema.String.pipe(
-  Schema.pattern(/^https?:\/\/.+/, {
-    message: () => "Must be a valid HTTP or HTTPS URL",
-  }),
+  Schema.check(
+    Schema.isPattern(/^https?:\/\/.+/, {
+      message: "Must be a valid HTTP or HTTPS URL",
+    }),
+  ),
 );
 
 /**
@@ -74,14 +76,12 @@ const HttpUrl = Schema.String.pipe(
 export const HttpOutputConfigSchema = Schema.Struct({
   url: HttpUrl,
   method: Schema.optional(HttpMethod),
-  headers: Schema.optional(
-    Schema.Record({ key: Schema.String, value: Schema.String }),
-  ),
+  headers: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   timeout: Schema.optional(TimeoutMs),
   maxRetries: Schema.optional(RetryCount),
   auth: Schema.optional(
     Schema.Struct({
-      type: Schema.Union(Schema.Literal("basic"), Schema.Literal("bearer")),
+      type: Schema.Union([Schema.Literal("basic"), Schema.Literal("bearer")]),
       username: Schema.optional(NonEmptyString),
       password: Schema.optional(NonEmptyString),
       token: Schema.optional(NonEmptyString),
@@ -141,6 +141,19 @@ const buildAuthHeaders = (
  * Detect error category from HTTP response
  */
 const detectHttpErrorCategory = (error: unknown): ErrorCategory => {
+  if (HttpClientError.isHttpClientError(error)) {
+    const reason = error.reason;
+    switch (reason._tag) {
+      case "TransportError":
+        return "intermittent";
+      case "StatusCodeError":
+        return reason.response.status >= 500 ? "intermittent" : "logical";
+      case "InvalidUrlError":
+        return "fatal";
+      default:
+        return "logical";
+    }
+  }
   // Check if it's an HTTP client error
   if (error && typeof error === "object" && "_tag" in error) {
     const tag = (error as any)._tag;
@@ -189,7 +202,7 @@ export const createHttpOutput = (
   // Validate configuration synchronously
   Effect.runSync(
     validate(HttpOutputConfigSchema, config, "HTTP Output configuration").pipe(
-      Effect.catchAll((error) => Effect.die(error)),
+      Effect.catch((error) => Effect.die(error)),
     ),
   );
 
@@ -224,7 +237,7 @@ export const createHttpOutput = (
     });
 
   // Create HTTP client layer
-  const clientLayer = NodeHttpClient.layer;
+  const clientLayer = NodeHttpClient.layerNodeHttp;
 
   const toHttpOutputError = (error: unknown): HttpOutputError => {
     if (error instanceof HttpOutputError) {
@@ -260,10 +273,12 @@ export const createHttpOutput = (
         const sendOnce = Effect.gen(function* () {
           const client = yield* HttpClient.HttpClient;
 
-          const response = yield* client.execute(httpRequest).pipe(
-            Effect.timeout(`${timeout} millis`),
-            Effect.mapError(toHttpOutputError),
-          );
+          const response = yield* client
+            .execute(httpRequest)
+            .pipe(
+              Effect.timeout(`${timeout} millis`),
+              Effect.mapError(toHttpOutputError),
+            );
 
           if (response.status >= 400) {
             const category =

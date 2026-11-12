@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Effect } from "effect";
+import { Effect, Fiber, Stream } from "effect";
+import { EventEmitter } from "node:events";
 import Redis from "ioredis";
 import { createRedisPubSubInput } from "../../../src/inputs/redis-pubsub-input.js";
 
@@ -22,6 +23,35 @@ vi.mock("ioredis", () => {
 describe("RedisPubSubInput", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("waits for Redis readiness before entering subscriber mode", async () => {
+    const subscriber = Object.assign(new EventEmitter(), {
+      status: "connecting",
+      subscribe: vi.fn().mockResolvedValue(null),
+      unsubscribe: vi.fn().mockResolvedValue(null),
+      punsubscribe: vi.fn().mockResolvedValue(null),
+      quit: vi.fn().mockResolvedValue("OK"),
+      disconnect: vi.fn(),
+    });
+    vi.mocked(Redis).mockImplementationOnce(() => subscriber as never);
+    const input = createRedisPubSubInput({
+      host: "localhost",
+      port: 6379,
+      channels: ["events"],
+    });
+    const fiber = Effect.runFork(Stream.runDrain(input.stream));
+    try {
+      expect(subscriber.subscribe).not.toHaveBeenCalled();
+      subscriber.status = "ready";
+      subscriber.emit("ready");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(subscriber.subscribe).toHaveBeenCalledTimes(1);
+      expect(subscriber.subscribe).toHaveBeenCalledWith("events");
+    } finally {
+      await Effect.runPromise(Fiber.interrupt(fiber));
+      await Effect.runPromise(input.close!());
+    }
   });
 
   describe("Configuration", () => {

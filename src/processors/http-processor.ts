@@ -4,7 +4,7 @@
  */
 import { Effect, Schedule } from "effect";
 import * as Schema from "effect/Schema";
-import { HttpClient, HttpClientRequest } from "@effect/platform";
+import { HttpClient, HttpClientError, HttpClientRequest } from "effect/http";
 import { NodeHttpClient } from "@effect/platform-node";
 import jsonata from "jsonata";
 import type { Processor, Message } from "../core/types.js";
@@ -52,12 +52,12 @@ export class HttpProcessorError extends ComponentError {
 /**
  * HTTP Method schema
  */
-const HttpMethod = Schema.Union(
+const HttpMethod = Schema.Union([
   Schema.Literal("GET"),
   Schema.Literal("POST"),
   Schema.Literal("PUT"),
   Schema.Literal("PATCH"),
-);
+]);
 
 /**
  * Validation schema for HTTP Processor configuration
@@ -65,9 +65,7 @@ const HttpMethod = Schema.Union(
 export const HttpProcessorConfigSchema = Schema.Struct({
   url: NonEmptyString,
   method: Schema.optional(HttpMethod),
-  headers: Schema.optional(
-    Schema.Record({ key: Schema.String, value: Schema.String }),
-  ),
+  headers: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   body: Schema.optional(NonEmptyString),
   resultKey: Schema.optional(NonEmptyString),
   resultMapping: Schema.optional(NonEmptyString),
@@ -75,7 +73,7 @@ export const HttpProcessorConfigSchema = Schema.Struct({
   maxRetries: Schema.optional(RetryCount),
   auth: Schema.optional(
     Schema.Struct({
-      type: Schema.Union(Schema.Literal("basic"), Schema.Literal("bearer")),
+      type: Schema.Union([Schema.Literal("basic"), Schema.Literal("bearer")]),
       username: Schema.optional(NonEmptyString),
       password: Schema.optional(NonEmptyString),
       token: Schema.optional(NonEmptyString),
@@ -242,6 +240,21 @@ const categoryFromStatusTag = (status: unknown): ErrorCategory | undefined => {
  * Recognizes Effect platform ResponseError with reason "StatusCode".
  */
 const detectHttpErrorCategory = (error: unknown): ErrorCategory => {
+  if (HttpClientError.isHttpClientError(error)) {
+    const reason = error.reason;
+    switch (reason._tag) {
+      case "TransportError":
+        return "intermittent";
+      case "StatusCodeError":
+        return reason.response.status >= 500 || reason.response.status === 429
+          ? "intermittent"
+          : "logical";
+      case "InvalidUrlError":
+        return "fatal";
+      default:
+        return "logical";
+    }
+  }
   if (!error || typeof error !== "object" || !("_tag" in error)) {
     return detectCategory(error);
   }
@@ -311,7 +324,7 @@ export const createHttpProcessor = (
       config,
       "HTTP Processor configuration",
     ).pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.fail(
           new HttpProcessorError(error.message, error.category, error),
         ),
@@ -373,9 +386,7 @@ export const createHttpProcessor = (
         };
 
         // Build HTTP client with 2xx filter inside the retried attempt
-        const rawClient = yield* HttpClient.HttpClient.pipe(
-          Effect.provide(NodeHttpClient.layer),
-        );
+        const rawClient = yield* HttpClient.HttpClient;
         const client = HttpClient.filterStatusOk(rawClient);
 
         const baseRequest = HttpClientRequest.make(method)(url).pipe(
@@ -459,7 +470,7 @@ export const createHttpProcessor = (
             httpProcessorApplied: true,
           },
         };
-      });
+      }).pipe(Effect.provide(NodeHttpClient.layerNodeHttp));
     },
   };
 };

@@ -6,6 +6,7 @@
 
 ## Ownership
 
+- `effect-4.md` owns runtime requirements and Effect 4 migration guidance for library/registry consumers.
 - `README.md` is the docs landing page; `TESTING.md` owns testing strategy; `component-registry.md` owns extension guidance; `local-development.md` owns local setup.
 - `inputs`, `processors`, and `outputs` mirror public components.
 - `advanced` owns cross-cutting runtime behavior; `spec/COMPONENTS.md` owns component-development conventions.

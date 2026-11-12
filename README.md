@@ -294,6 +294,10 @@ cascade/
 
 ## Development
 
+Use Node.js 24+, TypeScript 5.9+, and Bun for lockfile installs and binary builds.
+Cascade uses Effect 4; see the [Effect 4 migration guide](docs/effect-4.md)
+for custom component and library integration changes.
+
 ### Testing
 
 Cascade uses a scalable testing strategy that avoids N×N test explosion:
@@ -337,7 +341,7 @@ expect(messages).toHaveLength(5)
 - ✅ Test components in isolation
 - ✅ No external dependencies needed
 - ✅ Linear test growth: N components = ~3N tests (not N²)
-- ✅ Fast execution: 228 tests in < 10 seconds
+- ✅ Run the unit suite with `npm run test:unit`
 
 #### YAML Testing
 

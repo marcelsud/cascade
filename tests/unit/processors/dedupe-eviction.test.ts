@@ -23,28 +23,28 @@ const makeMsg = (
 const runProcess = (
   processor: ReturnType<typeof createDedupeProcessor>,
   msg: Message,
-) => Effect.runPromise(Effect.either(processor.process(msg)));
+) => Effect.runPromise(Effect.result(processor.process(msg)));
 
 /**
  * Helper: assert that result is Right and the message passed through.
  */
 const expectPassThrough = (
-  result: { _tag: string; right?: unknown },
+  result: { _tag: string; success?: unknown },
   msgId: string,
 ) => {
-  expect(result._tag).toBe("Right");
-  if (result._tag === "Right") {
-    expect(result.right).toEqual(expect.objectContaining({ id: msgId }));
+  expect(result._tag).toBe("Success");
+  if (result._tag === "Success") {
+    expect(result.success).toEqual(expect.objectContaining({ id: msgId }));
   }
 };
 
 /**
  * Helper: assert that result is Right and the message was suppressed.
  */
-const expectSuppressed = (result: { _tag: string; right?: unknown }) => {
-  expect(result._tag).toBe("Right");
-  if (result._tag === "Right") {
-    expect(result.right).toEqual([]);
+const expectSuppressed = (result: { _tag: string; success?: unknown }) => {
+  expect(result._tag).toBe("Success");
+  if (result._tag === "Success") {
+    expect(result.success).toEqual([]);
   }
 };
 

@@ -13,10 +13,10 @@ import {
 } from "./errors.js";
 // Internal run-local budget. Standalone wrappers retain a bounded default;
 // run supplies its effective pipeline/RunOptions shutdown timeout.
-export class FatalDLQCopyTimeout extends Context.Reference<FatalDLQCopyTimeout>()(
+export const FatalDLQCopyTimeout = Context.Reference<number>(
   "cascade/FatalDLQCopyTimeout",
   { defaultValue: () => 10_000 },
-) {}
+);
 
 export class DLQError extends ComponentError {
   readonly _tag = "DLQError";
@@ -48,7 +48,12 @@ export const createDLQRetrySchedule = (
     case "fixed":
       return Schedule.spaced(interval);
     case "linear":
-      return Schedule.linear(interval);
+      return Schedule.forever.pipe(
+        Schedule.map(({ output }) =>
+          Duration.millis(intervalMs * (output + 1)),
+        ),
+        Schedule.modifyDelay(({ output }) => Effect.succeed(output)),
+      );
     case "exponential":
       return Schedule.exponential(interval);
   }
@@ -116,7 +121,7 @@ export const withDLQ = <E>(config: DLQConfig<E>): Output<E | DLQError> => {
         );
 
         yield* sendWithRetry.pipe(
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.gen(function* () {
               const category = getErrorCategory(error);
 
@@ -129,7 +134,7 @@ export const withDLQ = <E>(config: DLQConfig<E>): Output<E | DLQError> => {
 
                 // Send to DLQ (without retry to avoid infinite loops)
                 const copyToDLQ = config.dlq.send(dlqMessage).pipe(
-                  Effect.catchAll((dlqError) =>
+                  Effect.catch((dlqError) =>
                     Effect.gen(function* () {
                       yield* Effect.logError(
                         `Failed to send message ${msg.id} to DLQ: ${dlqError}`,
@@ -174,12 +179,14 @@ export const withDLQ = <E>(config: DLQConfig<E>): Output<E | DLQError> => {
             Effect.gen(function* () {
               // Closing one output must not interrupt cleanup of the other.
               const results = yield* Effect.all(
-                closeOutputs.map((close) => Effect.either(close())),
+                closeOutputs.map((close) => Effect.result(close())),
                 { concurrency: "unbounded" },
               );
-              const failure = results.find((result) => result._tag === "Left");
-              if (failure?._tag === "Left") {
-                return yield* Effect.fail(failure.left);
+              const failure = results.find(
+                (result) => result._tag === "Failure",
+              );
+              if (failure?._tag === "Failure") {
+                return yield* Effect.fail(failure.failure);
               }
             })
         : undefined,

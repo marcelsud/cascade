@@ -437,7 +437,7 @@ const sendWithRetry = (msg: Message) =>
       times: config.maxRetries ?? 3,
       schedule: Schedule.exponential("1 second")
     }),
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.gen(function* () {
         yield* Effect.logError(`Failed to send after retries: ${error.message}`)
         return Effect.fail(new ComponentOutputError("Max retries exceeded", error))
@@ -627,11 +627,11 @@ Stream.repeatEffect(
 )
 ```
 
-#### 5. Effect.catchAll for Error Recovery
+#### 5. Effect.catch for Error Recovery
 
 ```typescript
 operation.pipe(
-  Effect.catchAll((error) =>
+  Effect.catch((error) =>
     Effect.gen(function* () {
       yield* Effect.logError(`Error: ${error.message}`)
       yield* Effect.sleep("5 seconds")
@@ -659,7 +659,7 @@ const withConnection = Effect.acquireRelease(
 ### Adding to config-loader.ts
 
 ```typescript
-// 1. Define schema using @effect/schema
+// 1. Define schema using effect/Schema
 const ComponentInputSchema = S.Struct({
   url: S.String,
   region: S.optional(S.String),

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -48,9 +48,9 @@ describe("CLI config validation", () => {
     });
 
     const result = await Effect.runPromise(
-      Effect.either(validateConfig(configPath)),
+      Effect.result(validateConfig(configPath)),
     );
 
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
   });
 });

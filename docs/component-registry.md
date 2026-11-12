@@ -2,6 +2,10 @@
 
 Use a scoped component registry to add inputs, processors, and outputs without editing Cascade's built-in configuration schemas or pipeline builder.
 
+Custom modules must use the same Effect 4 version as Cascade. Definitions accept
+`Schema.Codec<Config, unknown>` without decoding services; see the
+[Effect 4 migration guide](effect-4.md) for API changes.
+
 ## Register a component
 
 Each definition provides its YAML key, Effect Schema configuration, and factory:
