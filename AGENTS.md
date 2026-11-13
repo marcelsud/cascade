@@ -77,6 +77,10 @@ Default section order:
 
 ## User Preferences
 
+- Keep the root README focused on Cascade's capabilities, CLI, and YAML usage.
+  Do not mention Effect there, including in prose, links, diagrams, imports,
+  code examples, or acknowledgments. Keep framework-specific guidance in the
+  dedicated developer documentation.
 - Use Codex for implementation and Antigravity Argon through `agy` for
   independent review. Apply the five-step delivery workflow below.
 
