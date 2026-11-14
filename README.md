@@ -9,18 +9,16 @@ Build type-safe data pipelines with YAML configuration for message processing.
 ## Cascade v0.8.0
 
 [v0.8.0 is available](https://github.com/marcelsud/cascade/releases/tag/v0.8.0)
-with **Effect 4.1.4** and **Node.js 24+** for source-based usage and development.
+with **Node.js 24+** support for source-based usage and development.
 The standalone Linux x86-64 executable includes its runtime and requires neither
 Node.js nor Bun.
 
-Pipeline YAML configuration is unchanged. Library consumers and custom components
-must use Effect 4; Effect 3 values are incompatible. See the
-[Effect 4 migration guide](docs/effect-4.md) for requirements and API changes.
+Pipeline YAML configuration is unchanged.
 
 ## Features
 
 - **Declarative YAML Configuration** - Define pipelines without code
-- **Type-Safe** - Built with TypeScript and Effect.js for compile-time safety
+- **Type-Safe** - Built with TypeScript for compile-time safety
 - **YAML Testing** - Declarative test runner with 10 assertion types
 - **Stream Processing** - Handle high-throughput message streams efficiently
 - **Backpressure Control** - Prevent overwhelming downstream systems
@@ -235,7 +233,7 @@ dlq:
 
 Each `input`, `output`, and processor list entry must configure exactly one component. The same rule applies to processors nested inside `branch` and `switch`. Empty or ambiguous entries are rejected during configuration loading with an error that names the configured component keys.
 
-Custom components can provide their own Effect Schema configuration and factory through a scoped [component registry](docs/component-registry.md), without modifying the built-in schemas or builder.
+Custom components can provide their own configuration schema and factory through a scoped [component registry](docs/component-registry.md), without modifying the built-in schemas or builder.
 
 ### 📥 Inputs
 
@@ -309,47 +307,14 @@ cascade/
 ## Development
 
 Use Node.js 24+, TypeScript 5.9+, and Bun for lockfile installs and binary builds.
-Cascade uses Effect 4; see the [Effect 4 migration guide](docs/effect-4.md)
-for custom component and library integration changes.
 
 ### Testing
 
 Cascade uses a scalable testing strategy that avoids N×N test explosion:
 
-```typescript
-import { Effect } from "effect"
-import {
-  createGenerateInput,
-  createCaptureOutput,
-  createPipeline,
-  runPipeline
-} from "cascade"
-
-// Generate test messages
-const input = createGenerateInput({
-  count: 5,
-  template: {
-    id: "msg-{{index}}",
-    value: "{{random}}"
-  }
-})
-
-// Capture output for assertions
-const output = await Effect.runPromise(createCaptureOutput())
-
-// Test your component
-const pipeline = createPipeline({
-  name: "test",
-  input,
-  processors: [yourProcessor],
-  output
-})
-
-await Effect.runPromise(runPipeline(pipeline))
-
-const messages = await Effect.runPromise(output.getMessages())
-expect(messages).toHaveLength(5)
-```
+Use the `generate` input, `capture` output, and assertions to test components
+in isolation. YAML tests exercise complete pipelines through the CLI, as shown
+below. See the [testing guide](docs/TESTING.md) for test utilities and patterns.
 
 **Key Benefits:**
 - ✅ Test components in isolation
@@ -432,16 +397,13 @@ npm run lint
 
 ## Architecture
 
-Cascade uses a functional, type-safe architecture powered by Effect.js:
+Cascade connects typed message sources, processors, and destinations:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Pipeline                                 │
 │                                                                   │
 │  Input Stream  →  Processor₁  →  Processor₂  →  Output          │
-│      ↓              ↓              ↓              ↓              │
-│   Effect.Stream   Effect      Effect         Effect             │
-│                                                                   │
 │  Backpressure ←──────────────────────────────────────           │
 │  DLQ          ←────────────────────────────────────────         │
 └─────────────────────────────────────────────────────────────────┘
@@ -449,45 +411,13 @@ Cascade uses a functional, type-safe architecture powered by Effect.js:
 
 ### Key Principles
 
-- **Effect.js Foundation**: All components use Effect monad for error handling
-- **Stream Processing**: Inputs produce `Stream<Message>`, processors transform via `Effect<Message>`
-- **Type Safety**: Full TypeScript types with Effect.js schema validation
-- **Resource Management**: Automatic cleanup with Effect's resource management
+- **Stream Processing**: Inputs produce messages, processors transform them, and outputs deliver them
+- **Type Safety**: TypeScript interfaces and configuration schema validation
+- **Error Handling**: Typed errors, retry policies, and dead letter queues
+- **Resource Management**: Managed connections and graceful shutdown
 - **Observability**: Built-in metrics, tracing, and correlation IDs
 
 For more details, see [Component Development Guide](docs/COMPONENTS.md).
-
-## Effect.js Integration
-
-Cascade is built on [Effect.js](https://effect.website/), a powerful library for functional programming in TypeScript:
-
-- **Error Handling**: Type-safe errors with automatic retry logic
-- **Resource Management**: Automatic cleanup of connections and resources
-- **Concurrency**: Built-in backpressure and concurrent processing
-- **Composability**: Pipeline components compose naturally with Effect operators
-- **Observability**: Automatic spans, traces, and metrics collection
-
-### Configuration Validation
-
-Configurations are validated using Effect Schema:
-
-```typescript
-import { Schema } from "effect/Schema"
-
-const SqsInputConfig = Schema.Struct({
-  url: Schema.String,
-  region: Schema.String,
-  endpoint: Schema.optional(Schema.String),
-  wait_time_seconds: Schema.optional(Schema.Number),
-  max_number_of_messages: Schema.optional(Schema.Number),
-})
-```
-
-This provides:
-- Type-safe configuration parsing
-- Helpful error messages for invalid configs
-- Auto-completion in IDEs
-- Compile-time validation
 
 ## Use Cases
 
@@ -504,10 +434,10 @@ This provides:
 | Feature | Cascade | Benthos | Apache Camel |
 |---------|---------|---------|--------------|
 | **Language** | TypeScript | Go | Java/Kotlin |
-| **Type Safety** | ✓ (Effect.js) | ✗ | ✓ (with Kotlin) |
+| **Type Safety** | ✓ (TypeScript) | ✗ | ✓ (with Kotlin) |
 | **Configuration** | YAML | YAML | Java/XML/YAML |
-| **Streaming** | Effect.js Streams | Native | Camel Streams |
-| **Error Handling** | Effect monad | Go errors | Exceptions |
+| **Streaming** | Message streams with backpressure | Native | Camel Streams |
+| **Error Handling** | Typed errors and retry policies | Go errors | Exceptions |
 | **Observability** | Built-in | ✓ | ✓ |
 | **Distribution** | Standalone binary | Standalone binary | JVM runtime |
 
@@ -550,5 +480,4 @@ MIT
 
 - Inspired by [Apache Camel](https://camel.apache.org/)
 - Inspired by [Benthos](https://www.benthos.dev/) / [Redpanda Connect](https://www.redpanda.com/connect)
-- Built with [Effect.js](https://effect.website/)
 - Powered by [JSONata](https://jsonata.org/) for transformations
